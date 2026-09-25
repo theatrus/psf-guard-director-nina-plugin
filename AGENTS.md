@@ -13,6 +13,10 @@
 - Never overwrite live catalogs or operate real equipment in tests. Use
   copied catalogs, an isolated PSF Guard registry, and N.I.N.A. simulated devices.
 - Each PR needs regression tests, code review, and exact validation evidence.
-  Full-stack validation requires the real plugin, bundled runtime, TS adapter,
+  Full-stack validation requires the real plugin, bundled runtime, native N.I.N.A. adapter,
   and an isolated PSF Guard build; console tests alone do not satisfy that gate.
+- Director must run without TS installed. Keep planning/feedback policy in
+  Rust and reuse supported N.I.N.A. operations rather than TS internals.
+- Preserve Chatstronomy's existing TS integration. Publish explicit Director
+  state and command context, not spoofed TS events or private TS container types.
 - Use the existing authenticated `gh` CLI for repository and PR operations.
