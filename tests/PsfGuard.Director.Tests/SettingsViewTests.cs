@@ -67,7 +67,7 @@ public sealed class SettingsViewTests
                 var buttons = Descendants(host).OfType<Button>().ToArray();
                 Assert.Equal(2, buttons.Length);
                 Assert.Equal(state != "Ready", buttons[0].IsEnabled);
-                Assert.Equal(state == "Ready", buttons[1].IsEnabled);
+                Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                 foreach (var button in buttons)
                 {
                     Assert.Same(resources["StandardButton"], button.Style);
@@ -116,7 +116,7 @@ public sealed class SettingsViewTests
         public string EngineVersion => "0.2.0";
         public string AcquisitionStatus => "Not armed";
         public ICommand StartRuntimeCommand { get; } = new StubCommand(state != "Ready");
-        public ICommand StopRuntimeCommand { get; } = new StubCommand(state == "Ready");
+        public ICommand StopRuntimeCommand { get; } = new StubCommand(state != "Stopped");
     }
 
     private sealed class StubCommand(bool enabled) : ICommand

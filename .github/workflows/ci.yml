@@ -10,8 +10,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - name: Fetch verified Rust runtime
@@ -26,12 +26,12 @@ jobs:
       - name: Build development bundle
         shell: pwsh
         run: ./build-package.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: director-development-bundle
           path: artifacts/PSFGuardDirector-0.1.0.0-dev.zip
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: director-test-results
