@@ -23,6 +23,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     private int disposed;
     internal bool IsReady => ready && Volatile.Read(ref disposed) == 0;
     internal int? ProcessId => process?.Id;
+    internal int? ExitCode => process is { HasExited: true } ? process.ExitCode : null;
 
     private RuntimeSession(Stream pipe, Process? process = null, RuntimeBundle? bundle = null)
     {
@@ -133,7 +134,15 @@ internal sealed class RuntimeSession : IAsyncDisposable
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             await ExchangeAsync(checked(nextId++), new JsonObject { ["type"] = command }, expected, deadline.Token).ConfigureAwait(false);
-            if (command == "shutdown") ready = false;
+            if (command == "shutdown")
+            {
+                ready = false;
+                if (process is not null)
+                {
+                    await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+                    if (process.ExitCode != 0) throw new IOException("Director runtime did not exit cleanly.");
+                }
+            }
         }
         catch { Abort(); throw; }
         finally { gate.Release(); }

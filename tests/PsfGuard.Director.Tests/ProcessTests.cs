@@ -28,8 +28,8 @@ public sealed class ProcessTests
             await session.PingAsync(default);
             await session.ShutdownAsync(default);
             Assert.False(session.IsReady);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
-            Assert.Equal(0, child.ExitCode);
+            Assert.True(child.HasExited);
+            Assert.Equal(0, session.ExitCode);
         }
         Assert.True(child.HasExited);
     }
