@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
+    <Project Path="src/PsfGuard.Director.Runtime/PsfGuard.Director.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PsfGuard.Director.Tests/PsfGuard.Director.Tests.csproj" />
+  </Folder>
+</Solution>

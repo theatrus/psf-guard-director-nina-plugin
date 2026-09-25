@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <InternalsVisibleTo Include="PsfGuard.Director.Tests" />
+    <EmbeddedResource Include="../../runtime.lock.json" LogicalName="Director.RuntimeLock" />
+  </ItemGroup>
+</Project>
