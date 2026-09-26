@@ -1,7 +1,7 @@
 {
   "Name": "PSF Guard Director",
   "Identifier": "03a1d13e-67eb-4e24-a407-82bce7e576a5",
-  "Version": { "Major": 0, "Minor": 1, "Patch": 0, "Build": 0 },
+  "Version": { "Major": 0, "Minor": 1, "Patch": 0, "Build": 1 },
   "Author": "Yann Ramin (@theatrus)",
   "Homepage": "https://psf-guard.com",
   "Repository": "https://github.com/theatrus/psf-guard-director-nina-plugin",
