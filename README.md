@@ -111,9 +111,11 @@ acceptance gate still need to be connected. The published preview is unchanged.
 The two dispatch-check APIs recheck an issued preparation command or reserved
 capture after native before-hooks. They preserve the original command, attempt
 budget and capture evidence; a successful check cannot authorize replay after
-recovery. The development pin uses the reviewed `codex/director-dispatch-ipc`
-integration build and must be refreshed to its merged runtime before this client
-merges. Native dispatch adoption and full-stack acceptance remain separate work.
+recovery. The runtime pin uses the reviewed head of PSF Guard PR #487, built by
+the three-platform Director CI after rebasing onto main. This client must not
+merge until that exact runtime change has merged; a changed runtime head requires
+a reviewed pin update. Native dispatch adoption and full-stack acceptance remain
+separate work.
 
 ## Preview releases
 
