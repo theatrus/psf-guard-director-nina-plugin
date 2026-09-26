@@ -332,11 +332,20 @@ simulator gate remain required. The published 0.1.0.0 preview remains unchanged.
 
 ## Native preparation lifecycle
 
-`NinaPreparationItems` creates internal, transient native filter and readout
+`NinaPreparationItems` creates internal, transient native unpark, filter, and readout
 items from a newly issued Rust `PreparationNext.Run`. It rejects recovered
 in-flight operations, mismatched recipe bindings, cloning, and native retries.
 Resetting a NINA item cannot reset its one-use dispatch fence. Fixed-filter
 configurations use a checked no-op rather than moving a wheel.
+
+Unpark requires an explicit local telescope binding and a connected matching
+native mediator. The configuration fingerprint includes the bound mount identity,
+driver version, and public capabilities, but not changing park/tracking/position
+observations. Legacy camera-only fingerprints remain unchanged. Refresh rejects
+changed profile selection or disconnection. The native `UnparkScope` item retains
+NINA's dome/shutter gate and unpark events. Success requires the requested mount
+to report unparked and idle; false returns or contradictory post-state remain
+uncertain and cannot advance the ledger. No mount is inferred from its name.
 
 The native container still owns condition checks and inherited before/after
 triggers. Inside `Execute`, after before-triggers have run, the item calls the
