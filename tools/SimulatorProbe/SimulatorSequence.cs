@@ -49,11 +49,12 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
     private readonly IImageDataFactory imageFactory;
+    private readonly NINA.Astrometry.Interfaces.INighttimeCalculator nighttime;
 
     [ImportingConstructor]
     public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-        IImageDataFactory imageFactory)
+        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -63,11 +64,12 @@ public sealed class SimulatorSequence : SequenceItem
         this.saves = saves;
         this.history = history;
         this.imageFactory = imageFactory;
+        this.nighttime = nighttime;
     }
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, imaging, saves, history, imageFactory);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, imaging, saves, history, imageFactory, nighttime);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -216,9 +218,14 @@ public sealed class SimulatorSequence : SequenceItem
                     if (next is not PreparationNext.Run issued || count >= 3)
                         throw new InvalidOperationException("Fixture preparation was not a new bounded operation.");
                     var operation = issued.Command;
-                    var issuedItem = nativeItems.Create(next, program, equipmentBinding, ValidateBoundary);
+                    var block = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
+                    var issuedItem = nativeItems.Create(next, program, equipmentBinding, async cancellation =>
+                    {
+                        block.ValidateContext();
+                        await ValidateBoundary(cancellation);
+                        block.ValidateContext();
+                    });
                     var item = issuedItem.Item;
-                    var block = new NINA.Sequencer.Container.SequentialContainer();
                     block.AttachNewParent(Parent);
                     block.Add(item);
                     Step($"Executing native {operation.Operation.GetType().Name}");
@@ -236,9 +243,12 @@ public sealed class SimulatorSequence : SequenceItem
                 var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding
                     ?? throw new InvalidDataException("New capture binding is missing.");
                 Step($"Capturing simulator exposure {captures.Count + 1}/3");
+                var hookBlock = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
                 var exposureItem = new NinaExposureItem(boundCapture, reservation, binding, equipmentBinding, async cancellation =>
                 {
+                    hookBlock.ValidateContext();
                     await ValidateBoundary(cancellation);
+                    hookBlock.ValidateContext();
                     if (exposureHooks.LastOrDefault() != $"before:{captureId}")
                         throw new InvalidOperationException("Exposure did not inherit its native before-trigger.");
                     if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
@@ -248,11 +258,10 @@ public sealed class SimulatorSequence : SequenceItem
                         throw new InvalidOperationException("Simulator reservation changed before dispatch.");
                 });
                 var exposureBlock = new NINA.Sequencer.Container.SequentialContainer();
-                var hookBlock = new NINA.Sequencer.Container.SequentialContainer();
                 hookBlock.AttachNewParent(Parent);
                 hookBlock.Add(exposureBlock);
                 exposureBlock.Add(exposureItem);
-                var hook = new ExposureHook(exposureItem, after => exposureHooks.Add($"{(after ? "after" : "before")}:{captureId}"));
+                var hook = new ExposureHook(exposureItem, programTarget, after => exposureHooks.Add($"{(after ? "after" : "before")}:{captureId}"));
                 hookBlock.Add(hook);
                 try { await hookBlock.Run(progress, lifetime.Token); }
                 finally
@@ -362,7 +371,7 @@ public sealed class SimulatorSequence : SequenceItem
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
 
-    private sealed class ExposureHook(NinaExposureItem exposure, Action<bool> observe) : NINA.Sequencer.Trigger.SequenceTrigger
+    private sealed class ExposureHook(NinaExposureItem exposure, DirectorTarget expected, Action<bool> observe) : NINA.Sequencer.Trigger.SequenceTrigger
     {
         private int calls;
         public override object Clone() => throw new NotSupportedException("Test-only transient hook.");
@@ -372,6 +381,12 @@ public sealed class SimulatorSequence : SequenceItem
         public override Task Execute(NINA.Sequencer.Container.ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            var native = NINA.Sequencer.Utility.ItemUtility.RetrieveContextCoordinates(context);
+            if (native is null || native.Coordinates.Epoch != Epoch.J2000
+                || native.Coordinates.RADegrees != expected.IcrsRaMas / 3600000.0
+                || native.Coordinates.Dec != expected.IcrsDecMas / 3600000.0
+                || !native.PositionAngle.Equals(expected.PositionAngleMas is { } angle ? angle / 3600000.0 : double.NaN))
+                throw new InvalidOperationException("Native hook did not receive the immutable target context.");
             var after = calls++ != 0;
             if (after && exposure.Evidence is not { Phase: CapturePhase.Saved })
                 throw new InvalidOperationException("After-exposure hook ran before the correlated save.");

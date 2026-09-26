@@ -35,6 +35,7 @@ Use .NET SDK 10 and the existing authenticated `gh` CLI:
 
 ```powershell
 ./fetch-runtime.ps1
+./tools/fetch-nina-test-dependencies.ps1
 dotnet restore --locked-mode
 dotnet build --configuration Release --no-restore
 dotnet test --configuration Release --no-build

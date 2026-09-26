@@ -20,6 +20,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./fetch-runtime.ps1
       - run: dotnet restore --locked-mode
+      - name: Fetch pinned NINA native test dependency
+        shell: pwsh
+        run: ./tools/fetch-nina-test-dependencies.ps1
       - run: dotnet format --verify-no-changes --no-restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"

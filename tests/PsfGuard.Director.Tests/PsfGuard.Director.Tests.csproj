@@ -17,6 +17,9 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.1" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="../../artifacts/nina-test/x64/SOFA/SOFA_2023_10_11.dll" Link="External/x64/SOFA/SOFA_2023_10_11.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../artifacts/nina-test/x64/NOVAS/NOVAS31lib.dll" Link="External/x64/NOVAS/NOVAS31lib.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../artifacts/nina-test/JPLEPH" Link="External/JPLEPH" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tools/SimulatorProbe/ascom.profile.xml" Link="ascom.profile.xml" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tools/SimulatorProbe/smoke.sequence.json" Link="smoke.sequence.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
