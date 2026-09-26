@@ -11,6 +11,7 @@ public sealed class RuntimeController : IAsyncDisposable
     private readonly TimeSpan heartbeatInterval;
     private CancellationTokenSource? runCancellation;
     private Task? run;
+    private RuntimeSession? activeSession;
     private RuntimeStatus status = new(RuntimeState.Stopped, "Stopped");
     private bool disposed;
     public RuntimeStatus Status => Volatile.Read(ref status);
@@ -41,6 +42,7 @@ public sealed class RuntimeController : IAsyncDisposable
             try
             {
                 var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token).ConfigureAwait(false);
+                activeSession = session;
                 SetStatus(new(RuntimeState.Ready, "Ready", rigId));
                 run = SuperviseAsync(session, rigId, cancellation.Token);
             }
@@ -70,6 +72,39 @@ public sealed class RuntimeController : IAsyncDisposable
             SetStatus(new(RuntimeState.Stopping, "Stopping runtime", Status.RigId));
             await EndRunAsync().ConfigureAwait(false);
             SetStatus(new(RuntimeState.Stopped, "Stopped"));
+        }
+        finally { lifecycle.Release(); }
+    }
+
+    public async Task<PlannerEvaluation> EvaluateAsync(PlannerRequest request, CancellationToken token = default)
+    {
+        await lifecycle.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var session = activeSession;
+            if (Status.State != RuntimeState.Ready || session is null || !session.IsReady)
+                throw new IOException("Director runtime is not ready for evaluation.");
+            CancellationToken runToken;
+            lock (cancellationLock) runToken = runCancellation!.Token;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, runToken);
+            try
+            {
+                var result = await session.EvaluateAsync(request, linked.Token).ConfigureAwait(false);
+                linked.Token.ThrowIfCancellationRequested();
+                if (!session.IsReady || Status.State != RuntimeState.Ready)
+                    throw new IOException("Director runtime ended during evaluation.");
+                return result;
+            }
+            catch (Exception error)
+            {
+                if (!session.IsReady)
+                {
+                    SetStatus(new(RuntimeState.Faulted, Describe(error), Status.RigId, error));
+                    CancelRun();
+                }
+                throw;
+            }
         }
         finally { lifecycle.Release(); }
     }
@@ -118,6 +153,7 @@ public sealed class RuntimeController : IAsyncDisposable
         CancelRun();
         if (run is not null) await run.ConfigureAwait(false);
         run = null;
+        activeSession = null;
         lock (cancellationLock)
         {
             runCancellation?.Dispose();

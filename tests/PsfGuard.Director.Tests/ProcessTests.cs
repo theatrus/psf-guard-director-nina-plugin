@@ -6,7 +6,7 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class ProcessTests
 {
-    private static string BundleDirectory
+    internal static string BundleDirectory
     {
         get
         {

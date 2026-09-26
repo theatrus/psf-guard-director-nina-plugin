@@ -79,6 +79,37 @@ Exposure and download are not separately timed yet because `CaptureImage`
 returns them as one operation. No timing estimator or second C# scheduler is
 introduced here.
 
+## Planner evaluation
+
+`RuntimeController.EvaluateAsync` sends an immutable `PlannerRequest` through
+the bundled Rust sidecar. Its nested records and immutable arrays represent the
+shared core's assignment, goals, eligibility intervals, transit coverage, and
+local state. C# does not select priorities or implement window policy.
+
+Requests use contract 2 with exact unsigned integers, including revision and
+Unix-millisecond fields. Serialization and the 256 KiB core request limit are
+checked before entering the session queue. The assignment rig must match the
+negotiated runtime rig. Evaluations and heartbeats share one serialized pipe and
+strictly increasing request IDs. Each admitted exchange has a five-second
+deadline; shutdown and profile/runtime replacement cancel in-flight evaluation.
+
+Replies must match the IPC session/request, engine/contract versions, and
+assignment identity/revision. The decoder rejects unknown, duplicate, missing,
+or incorrectly typed response fields, unknown actions/errors, and acquisition
+of a goal absent from or ambiguous in the supplied snapshot. A valid core error
+has no decision and leaves the session usable. Malformed transport/replies,
+timeout, or cancellation after admission invalidate the session; no old decision
+is replayed. Bad caller input and cancellation before queue admission do not
+tear down another request.
+
+A `PlannerEvaluation` is a recommendation for its snapshot, not a durable or
+reusable authorization token. Production dispatch still needs a session-owned
+state generation, durable attempt/event accounting, recovery, and independent
+local safety enforcement at the actual equipment boundary. The simulator probe
+asks Rust again after filter preparation and immediately before the adapter's
+capture call, and rejects a changed recommendation. This does not solve the
+imaging mediator's possible internal queue delay.
+
 ## Recovery and validation limits
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
@@ -100,8 +131,8 @@ failures, duplicate IDs, and FITS/XISF capture-ID preservation. The separate
 adapter inside the real nightly host with simulator camera, mount, and filter
 wheel. Neither suite proves the full-stack planning/server acceptance gate.
 
-Before exporting a Director sequencer item, wire core evaluation and a durable
-event handoff to the sidecar, implement recovery, and run the simulated-equipment
+Before exporting a production Director sequencer item, connect the evaluation
+bridge to durable session state and an event handoff, implement recovery, and run the simulated-equipment
 gate with an isolated PSF Guard server. Verify native save-event consumers,
 including Sync, across profile changes. Keep Chatstronomy's TS integration intact
 and add explicit Director context rather than impersonating TS events.
