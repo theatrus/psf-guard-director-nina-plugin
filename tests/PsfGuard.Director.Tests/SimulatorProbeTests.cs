@@ -13,6 +13,9 @@ public sealed class SimulatorProbeTests
     {
         using var f = new Fixture();
         Assert.Equal(f.Root, f.Validate());
+        Assert.Equal(35, f.Profile.AstrometrySettings.Latitude);
+        Assert.Equal(-120, f.Profile.AstrometrySettings.Longitude);
+        Assert.Equal(1000, f.Profile.AstrometrySettings.Elevation);
         Assert.Throws<InvalidOperationException>(() => SimulatorSequence.ValidateEnvironment(null, f.Token, f.Root, f.Profile));
         Assert.Throws<InvalidOperationException>(() => SimulatorSequence.ValidateEnvironment(f.Root, Guid.NewGuid().ToString("N"), f.Root, f.Profile));
         Assert.Throws<InvalidOperationException>(() => SimulatorSequence.ValidateEnvironment(f.Root, f.Token, Path.GetTempPath(), f.Profile));

@@ -482,7 +482,23 @@ These APIs return feasibility, not dispatch authority. An `Acquire` reply must
 match the exact original goal, and it cannot authorize an `InFlight` command or
 `Existing` reservation discovered during recovery. The caller must retain its
 original-session, one-shot authority and repeat native validation at dispatch.
-The production native adapter has not adopted these calls yet.
+`NinaGeometryDispatch` supplies the one-use callbacks used by the isolated
+simulator's native items. Construct it once after opening a ledger, before
+issuing any work, and retain it for that runtime session. It rejects recovered
+`InFlight` commands and `Existing` reservations. Native context checks surround
+the asynchronous Rust check; each command/capture identity can create only one
+callback within the session, including when an earlier callback fails. After
+the check it rereads configuration, full constraints
+and conditions. A changed snapshot, canceled lifetime or restarted sidecar
+refuses dispatch even when the new session's displayed status is also Ready.
+The controller's liveness check includes cancellation, not just UI status.
+
+The callbacks do not dispatch hardware themselves. Native items still validate
+equipment and recipe settings immediately before calling NINA. This is sampled
+boundary validation, not a real-time hardware interlock or an execution lease:
+the planner's estimates must include dispatch/IPC overhead, and later changes
+still require native safety handling. A production session owner, server-issued
+assignments and the full-stack acceptance gate remain required.
 
 A post-reservation refusal can produce a `Captured` preparation with `Halted`
 set: here `Captured` means linked to a durable capture reservation, not proof

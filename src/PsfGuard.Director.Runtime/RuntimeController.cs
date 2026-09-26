@@ -18,6 +18,14 @@ public sealed class RuntimeController : IAsyncDisposable
     public RuntimeStatus Status => Volatile.Read(ref status);
     public event EventHandler? StateChanged;
 
+    /// <summary>Instantaneous liveness check, not equipment authority. A restart never revives an earlier Ready status.</summary>
+    public bool IsCurrentReadySession(RuntimeStatus expected)
+    {
+        lock (cancellationLock)
+            return expected.State == RuntimeState.Ready && ReferenceEquals(Status, expected)
+                && activeSession is { IsReady: true } && runCancellation is { IsCancellationRequested: false };
+    }
+
     public RuntimeController(string pluginDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5)) { }
     public RuntimeController(string pluginDirectory, string storageDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory) { }
     internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null)

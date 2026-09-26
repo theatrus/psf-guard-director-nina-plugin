@@ -1,4 +1,9 @@
 <Profile xmlns="http://schemas.datacontract.org/2004/07/NINA.Profile" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <AstrometrySettings i:type="AstrometrySettings">
+    <Elevation>1000</Elevation>
+    <Latitude>35</Latitude>
+    <Longitude>-120</Longitude>
+  </AstrometrySettings>
   <CameraSettings i:type="CameraSettings">
     <Id>ASCOM.OmniSim.Camera</Id>
   </CameraSettings>

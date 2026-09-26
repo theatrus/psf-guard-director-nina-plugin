@@ -92,6 +92,7 @@ public sealed class SimulatorSequence : SequenceItem
         DirectorConfiguration? equipment = null;
         NinaConstraints? constraints = null;
         NinaConstraints? editedConstraints = null;
+        DirectorConstraints? geometryConstraints = null;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -180,17 +181,27 @@ public sealed class SimulatorSequence : SequenceItem
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
             PlannerState State() => new("ascom-smoke", equipment.Id, NowMs(), started + 180000,
                 PlannerSafety.Safe, true, false, new(0, 0));
-            async Task ValidateBoundary(CancellationToken cancellation)
+            var geometryReader = new NinaGeometrySnapshot(constraintReader, equipmentReader);
+            // Explicit synthetic EOP values for this isolated simulator fixture,
+            // not a production orientation source or a zero-valued fallback.
+            var geometryInputs = new NinaGeometryInputs(1, 89, new(0, 0, 0, started, started + 180001),
+                assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, 20, 89, 0)).ToImmutableArray());
+            NinaDispatchSnapshot DispatchSnapshot()
             {
-                await Revalidate(cancellation);
-                if (constraintReader.Refresh(constraintBinding).Revision != constraints.Revision || NowMs() >= assignment.ExpiresAtMs)
+                CheckProfile();
+                if (NowMs() >= assignment.ExpiresAtMs)
                     throw new InvalidOperationException("Simulator fixture constraints or deadline changed.");
+                var snapshot = geometryReader.Read(constraintBinding, equipmentBinding, geometryInputs);
+                return new(snapshot.Configuration, snapshot.Constraints, State());
             }
-            ledger = Require(await runtime.OpenProgramAsync(program, State(), lifetime.Token));
+            geometryConstraints = DispatchSnapshot().Constraints;
+            ledger = Require(await runtime.OpenGeometryAsync(program, geometryConstraints, State(), lifetime.Token));
+            var nativeDispatch = new NinaGeometryDispatch(runtime, DispatchSnapshot, CheckProfile);
             async Task<PlannerDecision> Evaluate()
             {
                 await Revalidate(lifetime.Token);
-                var result = Require(await runtime.EvaluateLedgerAsync(State(), lifetime.Token));
+                var snapshot = DispatchSnapshot();
+                var result = Require(await runtime.EvaluateGeometryAsync(snapshot.Constraints, snapshot.State, lifetime.Token));
                 evaluations.Add(result);
                 Step($"Rust ledger planner: {result.Action} {result.GoalId}");
                 return result;
@@ -207,24 +218,20 @@ public sealed class SimulatorSequence : SequenceItem
                     throw new InvalidOperationException("Unexpected simulator planner outcome.");
                 var preparationId = Guid.NewGuid().ToString("D");
                 var local = new ProgramLocalState(equipment, new(equipment.Id, programTarget), telescope.GetInfo().AtPark, false, 0);
-                var began = Require(await runtime.BeginProgramPreparationAsync(preparationId, selected.GoalId, local,
-                    new(5000, 0, 0, 0, 5000, 1000, 5000), State(), lifetime.Token));
+                var began = Require(await runtime.BeginGeometryPreparationAsync(preparationId, selected.GoalId, local,
+                    new(5000, 0, 0, 0, 5000, 1000, 5000), DispatchSnapshot().Constraints, State(), lifetime.Token));
                 if (!began.Created) throw new InvalidOperationException("Fixture preparation was not newly created.");
                 for (var count = 0; ; count++)
                 {
                     await Revalidate(lifetime.Token);
-                    var next = Require(await runtime.AdvanceProgramPreparationAsync(preparationId, equipmentReader.Read(equipmentBinding), State(), lifetime.Token));
+                    var snapshot = DispatchSnapshot();
+                    var next = Require(await runtime.AdvanceGeometryPreparationAsync(preparationId, snapshot.Configuration, snapshot.Constraints, snapshot.State, lifetime.Token));
                     if (next is PreparationNext.ReadyToReserve ready && ready.GoalId == selected.GoalId) break;
                     if (next is not PreparationNext.Run issued || count >= 3)
                         throw new InvalidOperationException("Fixture preparation was not a new bounded operation.");
                     var operation = issued.Command;
                     var block = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
-                    var issuedItem = nativeItems.Create(next, program, equipmentBinding, async cancellation =>
-                    {
-                        block.ValidateContext();
-                        await ValidateBoundary(cancellation);
-                        block.ValidateContext();
-                    });
+                    var issuedItem = nativeItems.Create(next, program, equipmentBinding, nativeDispatch.Pending(next, block.ValidateContext));
                     var item = issuedItem.Item;
                     block.AttachNewParent(Parent);
                     block.Add(item);
@@ -238,25 +245,24 @@ public sealed class SimulatorSequence : SequenceItem
                     operations.Add(completion);
                 }
                 var captureId = Guid.NewGuid().ToString("D");
-                var reservation = Require(await runtime.ReserveProgramPreparedAsync(preparationId, captureId,
-                    equipmentReader.Read(equipmentBinding), State(), lifetime.Token));
+                var captureSnapshot = DispatchSnapshot();
+                var reservation = Require(await runtime.ReserveGeometryPreparedAsync(preparationId, captureId,
+                    captureSnapshot.Configuration, captureSnapshot.Constraints, captureSnapshot.State, lifetime.Token));
                 var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding
                     ?? throw new InvalidDataException("New capture binding is missing.");
                 Step($"Capturing simulator exposure {captures.Count + 1}/3");
                 var hookBlock = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
-                var exposureItem = new NinaExposureItem(boundCapture, reservation, binding, equipmentBinding, async cancellation =>
+                var checkCapture = nativeDispatch.Capture(preparationId, reservation, () =>
                 {
                     hookBlock.ValidateContext();
-                    await ValidateBoundary(cancellation);
-                    hookBlock.ValidateContext();
+                    CheckProfile();
                     if (exposureHooks.LastOrDefault() != $"before:{captureId}")
                         throw new InvalidOperationException("Exposure did not inherit its native before-trigger.");
                     if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
                         throw new InvalidOperationException("Simulator mount is parked or moving before capture.");
-                    var currentBinding = Require(await runtime.FindCaptureBindingAsync(captureId, cancellation)).Binding;
-                    if (currentBinding?.Attempt != binding.Attempt || currentBinding.Attempt.Evidence is not LedgerEvidence.Reserved)
-                        throw new InvalidOperationException("Simulator reservation changed before dispatch.");
                 });
+                var exposureItem = new NinaExposureItem(boundCapture, reservation, binding, equipmentBinding,
+                    checkCapture);
                 var exposureBlock = new NINA.Sequencer.Container.SequentialContainer();
                 hookBlock.AttachNewParent(Parent);
                 hookBlock.Add(exposureBlock);
@@ -295,7 +301,7 @@ public sealed class SimulatorSequence : SequenceItem
                 throw new InvalidDataException("The Rust ledger does not contain three saved captures.");
             await runtime.StopAsync();
             await runtime.StartAsync("ascom-smoke", lifetime.Token);
-            if (Require(await runtime.OpenProgramAsync(program, State(), lifetime.Token)) != ledger
+            if (Require(await runtime.OpenGeometryAsync(program, DispatchSnapshot().Constraints, State(), lifetime.Token)) != ledger
                 || (await Evaluate()) is not { Action: PlannerAction.Wait, Reason: "pending_assessment" })
                 throw new InvalidDataException("Restarted ledger lost identity or pending progress.");
             await Revalidate(lifetime.Token);
@@ -343,7 +349,7 @@ public sealed class SimulatorSequence : SequenceItem
             {
                 passed = errors.Count == 0 && captures.Count == 3,
                 nina = "3.3.0.1058",
-                scope = "durable-rust-program-native-capture-fixture-not-production-container-or-server",
+                scope = "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
                 steps,
                 evaluations,
                 operations,
@@ -352,6 +358,7 @@ public sealed class SimulatorSequence : SequenceItem
                 equipment,
                 constraints,
                 editedConstraints,
+                geometryConstraints,
                 captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
                 errors = errors.Select(e => e.ToString())
             };
