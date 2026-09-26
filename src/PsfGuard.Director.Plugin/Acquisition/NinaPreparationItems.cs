@@ -6,6 +6,7 @@ using NINA.Profile.Interfaces;
 using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.SequenceItem.Camera;
 using NINA.Sequencer.SequenceItem.FilterWheel;
+using NINA.Sequencer.SequenceItem.Telescope;
 using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.Plugin.Acquisition;
@@ -14,7 +15,7 @@ internal sealed record NinaIssuedItem(SequenceItem Item, NinaOperationFence Fenc
 
 // Transient native items only: no MEF export, serialization or cloned authority.
 internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMediator camera, IFilterWheelMediator wheel,
-    NinaEquipmentSnapshot equipment, TimeProvider clock)
+    NinaEquipmentSnapshot equipment, TimeProvider clock, ITelescopeMediator? telescope = null)
 {
     internal NinaIssuedItem Create(PreparationNext next, DirectorProgram program, NinaEquipmentBinding local,
         Func<CancellationToken, Task> revalidateAtDispatch)
@@ -35,6 +36,12 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
             token.ThrowIfCancellationRequested();
             if (JsonSerializer.Serialize(equipment.Read(local)) != JsonSerializer.Serialize(program.Configuration))
                 throw new InvalidOperationException("Native equipment changed before operation dispatch.");
+            if (command.Operation is PreparationOperation.Unpark)
+            {
+                var mount = telescope!.GetInfo();
+                if (!mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.Slewing)
+                    throw new InvalidOperationException("The bound telescope is unavailable or already moving.");
+            }
             if (item is SetReadoutMode mode && mode.Mode != recipe.ReadoutMode)
                 throw new InvalidOperationException("Native readout settings changed after issue.");
             if (item is SwitchFilter filter)
@@ -50,6 +57,12 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
                 throw new InvalidOperationException("Native equipment changed while the operation ran.");
             if (command.Operation is PreparationOperation.SetReadoutMode && camera.GetInfo().ReadoutModeForNormalImages != recipe.ReadoutMode)
                 throw new InvalidOperationException("NINA did not report the requested normal-image readout mode.");
+            if (command.Operation is PreparationOperation.Unpark)
+            {
+                var mount = telescope!.GetInfo();
+                if (!mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.AtPark || mount.Slewing)
+                    throw new InvalidOperationException("NINA did not report the bound telescope unparked and idle.");
+            }
             if (command.Operation is PreparationOperation.SwitchFilter && local.FilterWheelDeviceId is not null)
             {
                 var expected = local.Filters.Single(f => f.Id == recipe.FilterId);
@@ -60,6 +73,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         });
         item = command.Operation switch
         {
+            PreparationOperation.Unpark when telescope is not null && local.TelescopeDeviceId is not null =>
+                new IssuedUnpark(telescope, fence) { Name = "Director unpark" },
             PreparationOperation.SwitchFilter filter when filter.FilterId == recipe.FilterId =>
                 CreateFilter(fence, local.Filters.Single(f => f.Id == filter.FilterId)),
             PreparationOperation.SetReadoutMode readout when readout.Mode == recipe.ReadoutMode && program.Configuration.ReadoutModes.Contains(readout.Mode) =>
@@ -82,6 +97,14 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
     }
 
     private sealed class IssuedReadout(ICameraMediator camera, NinaOperationFence fence) : SetReadoutMode(camera)
+    {
+        public override int Attempts { get => 1; set => RequireSingleAttempt(value); }
+        public override object Clone() => throw new NotSupportedException("Issued Director operations cannot be cloned.");
+        public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) =>
+            fence.ExecuteAsync(() => base.Execute(progress, token), token);
+    }
+
+    private sealed class IssuedUnpark(ITelescopeMediator telescope, NinaOperationFence fence) : UnparkScope(telescope)
     {
         public override int Attempts { get => 1; set => RequireSingleAttempt(value); }
         public override object Clone() => throw new NotSupportedException("Issued Director operations cannot be cloned.");

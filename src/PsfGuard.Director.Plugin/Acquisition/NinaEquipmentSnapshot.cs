@@ -12,9 +12,10 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 internal sealed record NinaFilterBinding(string Id, short? Position, string? ExpectedName);
 internal sealed record NinaEquipmentBinding(Guid ProfileId, string RigId, string ConstraintRevision,
     string CameraDeviceId, string? FilterWheelDeviceId, ImmutableArray<NinaFilterBinding> Filters,
-    bool EnableSlewCenter, uint DitherEvery);
+    bool EnableSlewCenter, uint DitherEvery, string? TelescopeDeviceId = null);
 
-internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMediator camera, IFilterWheelMediator wheel)
+internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMediator camera, IFilterWheelMediator wheel,
+    ITelescopeMediator? telescope = null)
 {
     internal DirectorConfiguration Read(NinaEquipmentBinding binding)
     {
@@ -117,6 +118,27 @@ internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMed
             Readouts = readouts,
             Filters = binding.Filters.OrderBy(f => f.Position).ThenBy(f => f.Id, StringComparer.Ordinal)
         });
+        if (binding.TelescopeDeviceId is { } expectedMount)
+        {
+            var info = telescope?.GetInfo();
+            if (string.IsNullOrWhiteSpace(expectedMount) || expectedMount == "No_Device"
+                || profile.TelescopeSettings?.Id != expectedMount || info is null || !info.Connected || info.DeviceId != expectedMount)
+                throw new InvalidOperationException("The bound telescope is not connected in the active profile.");
+            // Park/tracking/position are changing observations, not configuration.
+            // Keep legacy camera-only fingerprints unchanged when no mount is bound.
+            fingerprint = Hash(new
+            {
+                Base = fingerprint,
+                TelescopeId = DeviceId(binding.ProfileId, expectedMount),
+                info.DriverVersion,
+                info.CanPark,
+                info.CanSetPark,
+                info.CanSetTrackingEnabled,
+                info.CanSlew,
+                info.CanSlewAltAz,
+                info.CanSetPierSide
+            });
+        }
         return configuration with { Id = "nina-" + fingerprint };
     }
 

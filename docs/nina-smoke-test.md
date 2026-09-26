@@ -97,13 +97,13 @@ It refuses non-OmniSim camera/mount/filter selections, other configured devices,
 an unconfirmed isolation root, or an image destination outside the test root.
 Do not interact with equipment/profile controls while the probe is running.
 
-The sequence starts the verified sidecar, connects the three simulators,
-unparks, and slews a small offset from the simulated position. It supplies an
+The sequence starts the verified sidecar, connects the three simulators, and
+parks the mount to establish the unpark test precondition. It supplies an
 immutable fixture program with three prioritized one-exposure filter goals to
-Rust's durable ledger. Rust selects goals and issues filter/readout preparation
+Rust's durable ledger. Rust selects goals and issues unpark and filter/readout preparation
 commands. The probe runs matching native NINA items inside a transient native
 sequential container. Each item allows one dispatch, revalidates after inherited
-before-triggers, and verifies the resulting readout or settled filter state.
+before-triggers, and verifies the resulting unparked mount, readout, or settled filter state.
 The probe requires both a finished item and a successful completion receipt.
 Reported monotonic durations cover dispatch validation and the operation, not
 the preceding inherited triggers.
@@ -123,7 +123,8 @@ Inspect `<test-root>/probe/<run-id>/result.json` for `passed: true`, three
 captures, and no errors. Images live under `<test-root>/images`; journals are
 under the run's `journal` directory. The launcher returns after startup, not
 after completion: an absent result is **not** a pass. The N.I.N.A. log records
-each probe step. The result records ledger decisions, six preparation receipts,
+each probe step. The result requires seven preparation receipts (one unpark and
+six filter/readout operations) and records ledger decisions,
 the ledger identity, equipment/constraint snapshots, and saved captures. The
 Rust ledger is in the run's `state` directory. Close the isolated app after
 inspecting the result.
@@ -140,7 +141,8 @@ context, unchanged horizon/configuration, the fixture deadline, and the reserved
 attempt. A binding lookup is not production dispatch authorization. There is no
 PSF Guard assignment or automatic crash/resume path. The fixture hard-codes
 simulated-safe conditions and unrestricted eligibility, so it cannot validate
-physical sky visibility or hardware safety. No TS, Sync, or Chatstronomy plugin
+physical sky visibility or hardware safety. The fixture uses the simulator's
+initial pointing; it does not slew or validate plate solving. No TS, Sync, or Chatstronomy plugin
 is installed in this profile. Native preparation items run through NINA's normal
 container strategy. Automated tests exercise inherited triggers and conditions;
 this desktop fixture has no custom inherited hooks and is not a production

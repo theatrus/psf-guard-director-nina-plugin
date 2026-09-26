@@ -146,22 +146,22 @@ public sealed class SimulatorSequence : SequenceItem
             var equipmentBinding = new NinaEquipmentBinding(profileId, "ascom-smoke", constraints.Revision,
                 "ASCOM.OmniSim.Camera", "ASCOM.OmniSim.FilterWheel",
                 profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Select(f =>
-                    new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), false, 0);
-            var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters);
+                    new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), false, 0,
+                "ASCOM.OmniSim.Telescope");
+            var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
             equipment = equipmentReader.Read(equipmentBinding);
-            Step("Unparking simulator");
-            if (!await telescope.UnparkTelescope(progress, lifetime.Token)) throw new IOException("Unpark failed.");
-            // A small move near the simulator's current position avoids any dependence
-            // on a real site's coordinates, sky visibility, or plate-solver catalogs.
+            Step("Parking simulator for Rust-issued unpark");
+            if (!await telescope.ParkTelescope(progress, lifetime.Token) || !telescope.GetInfo().AtPark)
+                throw new IOException("Fixture could not establish parked simulator state.");
+            // This fixture tests program dispatch, not pointing/plate-solving. Use
+            // the simulator's current coordinates without requesting a slew.
             var current = telescope.GetCurrentPosition();
-            var target = new Coordinates((current.RA + 0.02) % 24, current.Dec, current.Epoch, Coordinates.RAType.Hours);
+            var target = new Coordinates(current.RA, current.Dec, current.Epoch, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
-            Step("Slewing simulator");
-            if (!await telescope.SlewToCoordinatesAsync(target, lifetime.Token)) throw new IOException("Slew failed.");
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
             var boundCapture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
-            var nativeItems = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System);
+            var nativeItems = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             if (equipment.Gain is not CameraControl.Unsupported || equipment.Offset is not CameraControl.Unsupported)
                 throw new InvalidOperationException("This fixture requires OmniSim's unsupported gain and offset controls.");
             static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -195,20 +195,24 @@ public sealed class SimulatorSequence : SequenceItem
             while (true)
             {
                 var selected = await Evaluate();
-                if (selected.Action == PlannerAction.Wait && selected.Reason == "pending_assessment" && captures.Count == 3) break;
+                if (selected.Action == PlannerAction.Wait && selected.Reason == "pending_assessment" && captures.Count == 3)
+                {
+                    if (operations.Count != 7) throw new InvalidOperationException("Expected one unpark and six filter/readout receipts.");
+                    break;
+                }
                 if (selected.Action != PlannerAction.Acquire || selected.GoalId is null || captures.Count >= 3)
                     throw new InvalidOperationException("Unexpected simulator planner outcome.");
                 var preparationId = Guid.NewGuid().ToString("D");
-                var local = new ProgramLocalState(equipment, new(equipment.Id, programTarget), false, false, 0);
+                var local = new ProgramLocalState(equipment, new(equipment.Id, programTarget), telescope.GetInfo().AtPark, false, 0);
                 var began = Require(await runtime.BeginProgramPreparationAsync(preparationId, selected.GoalId, local,
-                    new(0, 0, 0, 0, 5000, 1000, 5000), State(), lifetime.Token));
+                    new(5000, 0, 0, 0, 5000, 1000, 5000), State(), lifetime.Token));
                 if (!began.Created) throw new InvalidOperationException("Fixture preparation was not newly created.");
                 for (var count = 0; ; count++)
                 {
                     await Revalidate(lifetime.Token);
                     var next = Require(await runtime.AdvanceProgramPreparationAsync(preparationId, equipmentReader.Read(equipmentBinding), State(), lifetime.Token));
                     if (next is PreparationNext.ReadyToReserve ready && ready.GoalId == selected.GoalId) break;
-                    if (next is not PreparationNext.Run issued || count >= 2)
+                    if (next is not PreparationNext.Run issued || count >= 3)
                         throw new InvalidOperationException("Fixture preparation was not a new bounded operation.");
                     var operation = issued.Command;
                     var issuedItem = nativeItems.Create(next, program, equipmentBinding, ValidateBoundary);
@@ -234,6 +238,8 @@ public sealed class SimulatorSequence : SequenceItem
                 var evidence = await boundCapture.CaptureAsync(reservation, binding, equipmentBinding, async cancellation =>
                 {
                     await ValidateBoundary(cancellation);
+                    if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
+                        throw new InvalidOperationException("Simulator mount is parked or moving before capture.");
                     var currentBinding = Require(await runtime.FindCaptureBindingAsync(captureId, cancellation)).Binding;
                     if (currentBinding?.Attempt != binding.Attempt || currentBinding.Attempt.Evidence is not LedgerEvidence.Reserved)
                         throw new InvalidOperationException("Simulator reservation changed before dispatch.");
