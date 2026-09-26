@@ -11,28 +11,31 @@ internal sealed class TestPeer : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new(TimeSpan.FromSeconds(15));
     private readonly string fault;
     private readonly Func<JsonElement, JsonObject>? evaluation;
+    private readonly Func<JsonElement, JsonObject>? ledger;
     private Task? worker;
     internal TaskCompletionSource PingSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReservationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal RuntimeSession Session { get; private set; } = null!;
 
-    private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation)
+    private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation, Func<JsonElement, JsonObject>? ledger)
     {
         this.server = server;
         this.fault = fault;
         this.evaluation = evaluation;
+        this.ledger = ledger;
     }
 
-    internal static async Task<TestPeer> CreateAsync(string fault, Func<JsonElement, JsonObject>? evaluation = null)
+    internal static async Task<TestPeer> CreateAsync(string fault, Func<JsonElement, JsonObject>? evaluation = null, Func<JsonElement, JsonObject>? ledger = null)
     {
         var name = "director-test-" + Guid.NewGuid().ToString("N");
         var peer = new TestPeer(new NamedPipeServerStream(name, PipeDirection.InOut, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault, evaluation);
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault, evaluation, ledger);
         var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
             peer.worker = peer.ServeAsync();
             await client.ConnectAsync(peer.lifetime.Token);
-            peer.Session = await RuntimeSession.ConnectTestStreamAsync(client, "rig-test", peer.lifetime.Token);
+            peer.Session = await RuntimeSession.ConnectTestStreamAsync(client, "rig-test", peer.lifetime.Token, ledger is not null);
             return peer;
         }
         catch
@@ -53,7 +56,8 @@ internal sealed class TestPeer : IAsyncDisposable
             ["runtime_version"] = RuntimeContract.RuntimeVersion,
             ["engine_version"] = fault == "handshake" ? "0.0.0" : RuntimeContract.EngineVersion,
             ["contract_version"] = RuntimeContract.ContractVersion,
-            ["rig_id"] = "rig-test"
+            ["rig_id"] = "rig-test",
+            ["storage_enabled"] = fault == "storage" ? ledger is null : ledger is not null
         };
         await PipeProtocol.WriteAsync(server, Reply(hello, ready), lifetime.Token);
         while (!lifetime.IsCancellationRequested)
@@ -67,9 +71,17 @@ internal sealed class TestPeer : IAsyncDisposable
             PingSeen.TrySetResult();
             if (fault == "stall") { await Task.Delay(Timeout.Infinite, lifetime.Token); return; }
             var payload = request.GetProperty("payload");
-            var reply = Reply(request, payload.GetProperty("type").GetString() == "evaluate" && evaluation is not null
+            var type = payload.GetProperty("type").GetString();
+            if (type == "ledger" && payload.GetProperty("operation").GetProperty("action").GetString() == "reserve")
+            {
+                ReservationSeen.TrySetResult();
+                if (fault == "stall-ledger") { await Task.Delay(Timeout.Infinite, lifetime.Token); return; }
+            }
+            var reply = Reply(request, type == "evaluate" && evaluation is not null
                 ? new JsonObject { ["type"] = "decision", ["response"] = evaluation(payload.GetProperty("request")) }
-                : new JsonObject { ["type"] = "pong" });
+                : type == "ledger" && ledger is not null
+                    ? new JsonObject { ["type"] = "ledger", ["response"] = ledger(payload.GetProperty("operation")) }
+                    : new JsonObject { ["type"] = "pong" });
             switch (fault)
             {
                 case "session": reply["session_id"] = "old-session"; break;

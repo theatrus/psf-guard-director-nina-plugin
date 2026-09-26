@@ -6,6 +6,7 @@ public sealed record RuntimeStatus(RuntimeState State, string Message, string? R
 public sealed class RuntimeController : IAsyncDisposable
 {
     private readonly string pluginDirectory;
+    private readonly string? storageDirectory;
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly object cancellationLock = new();
     private readonly TimeSpan heartbeatInterval;
@@ -18,10 +19,12 @@ public sealed class RuntimeController : IAsyncDisposable
     public event EventHandler? StateChanged;
 
     public RuntimeController(string pluginDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5)) { }
-    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval)
+    public RuntimeController(string pluginDirectory, string storageDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory) { }
+    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null)
     {
         this.pluginDirectory = pluginDirectory;
         this.heartbeatInterval = heartbeatInterval;
+        this.storageDirectory = RuntimeSession.NormalizeStorageDirectory(storageDirectory);
     }
 
     public async Task StartAsync(string rigId, CancellationToken token = default)
@@ -41,7 +44,7 @@ public sealed class RuntimeController : IAsyncDisposable
             SetStatus(new(RuntimeState.Starting, "Starting runtime", rigId));
             try
             {
-                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token).ConfigureAwait(false);
+                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token, storageDirectory).ConfigureAwait(false);
                 activeSession = session;
                 SetStatus(new(RuntimeState.Ready, "Ready", rigId));
                 run = SuperviseAsync(session, rigId, cancellation.Token);
@@ -76,7 +79,20 @@ public sealed class RuntimeController : IAsyncDisposable
         finally { lifecycle.Release(); }
     }
 
-    public async Task<PlannerEvaluation> EvaluateAsync(PlannerRequest request, CancellationToken token = default)
+    public Task<PlannerEvaluation> EvaluateAsync(PlannerRequest request, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.EvaluateAsync(request, linked), token);
+    public Task<LedgerResult<LedgerIdentity>> OpenLedgerAsync(PlannerRequest request, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.OpenLedgerAsync(request, linked), token);
+    public Task<LedgerResult<LedgerReservation>> ReserveAsync(string captureId, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReserveAsync(captureId, state, linked), token);
+    public Task<LedgerResult<LedgerAttempt>> RecordAsync(string captureId, LedgerEvidence evidence, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.RecordAsync(captureId, evidence, linked), token);
+    public Task<LedgerResult<LedgerLookup>> FindAttemptAsync(string captureId, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.FindAttemptAsync(captureId, linked), token);
+    public Task<LedgerResult<LedgerEventPage>> ReadEventsAsync(ulong after, int limit = 64, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReadEventsAsync(after, limit, linked), token);
+
+    private async Task<T> RunRequestAsync<T>(Func<RuntimeSession, CancellationToken, Task<T>> request, CancellationToken token)
     {
         await lifecycle.WaitAsync(token).ConfigureAwait(false);
         try
@@ -84,16 +100,16 @@ public sealed class RuntimeController : IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             var session = activeSession;
             if (Status.State != RuntimeState.Ready || session is null || !session.IsReady)
-                throw new IOException("Director runtime is not ready for evaluation.");
+                throw new IOException("Director runtime is not ready for requests.");
             CancellationToken runToken;
             lock (cancellationLock) runToken = runCancellation!.Token;
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, runToken);
             try
             {
-                var result = await session.EvaluateAsync(request, linked.Token).ConfigureAwait(false);
+                var result = await request(session, linked.Token).ConfigureAwait(false);
                 linked.Token.ThrowIfCancellationRequested();
                 if (!session.IsReady || Status.State != RuntimeState.Ready)
-                    throw new IOException("Director runtime ended during evaluation.");
+                    throw new IOException("Director runtime ended during the request.");
                 return result;
             }
             catch (Exception error)

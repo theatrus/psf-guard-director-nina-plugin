@@ -110,6 +110,51 @@ asks Rust again after filter preparation and immediately before the adapter's
 capture call, and rejects a changed recommendation. This does not solve the
 imaging mediator's possible internal queue delay.
 
+## Durable ledger host
+
+Runtime 0.2 / IPC 2 adds opt-in persistence through
+`RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
+an existing absolute, private, local Director-owned directory, scoped to its
+rig/profile and allocation. Do not accept this path from a server assignment.
+The sidecar exclusively owns the directory and its SQLite ledger until exit.
+The ordinary settings preview remains stateless.
+
+`OpenLedgerAsync` binds an immutable allocation to that ledger. `ReserveAsync`
+asks Rust to project durable progress and select work atomically. Results
+distinguish a new reservation, an existing attempt, recovery of another unresolved
+attempt, and a non-acquisition planner decision. No result is a hardware permit.
+An existing or recovery result must never cause an automatic capture retry.
+Stateless `EvaluateAsync` is refused once a ledger is open.
+
+`RecordAsync` accepts saved, failed, or uncertain observations. Saved means an
+image exists, not that grading accepted it. `FindAttemptAsync` recovers evidence
+by capture ID; `ReadEventsAsync` returns up to 64 events with a stable ledger
+identity and next cursor. The host validates allocation/rig/configuration,
+versions, capture/goal identity, strict fields, and contiguous event sequences.
+It preserves unsigned 64-bit revisions and durations exactly. A returned storage
+error is typed and carries no successful value. The host does not change retry,
+credit, or recovery policy in C#.
+
+All ledger calls share the heartbeat queue and five-second exchange deadline.
+Malformed replies, disconnect, timeout, or cancellation after admission invalidate
+the session. A lost reply may follow a committed write: reconnect and inspect
+the same ledger/capture identity; do not replay equipment work or create a new
+capture ID to bypass uncertainty. Caller errors and cancellation before admission
+do not invalidate another request.
+
+Tests exercise real Rust sidecars with isolated ledgers, abrupt process exit,
+exclusive ownership, uncertain-to-saved recovery, duplicate observations,
+pending credit, allocation mismatch, event pagination, and adversarial replies.
+This is a host API, not a completed native acquisition integration. The adapter
+still uses its separate host journal. Before connecting it, the shared core
+needs reservation-aware operation/dispatch revalidation and session fencing;
+opening a ledger and then using stateless evaluation is not a valid substitute.
+
+N.I.N.A. remains the only execution backend in scope. The production Director
+container must preserve TS-style options and normal sequence triggers, conditions,
+and cancellation while the shared core owns operation policy. These host tests
+do not establish native container or TS behavioral parity.
+
 ## Recovery and validation limits
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
