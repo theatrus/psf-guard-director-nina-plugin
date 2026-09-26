@@ -224,7 +224,7 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
             ["state"] = JsonSerializer.SerializeToNode(state, PlannerContract.Options)
         };
         return SendLedgerAsync(operation, false, response => LedgerContract.Decode(response, "reserved", "outcome",
-            value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token);
+            value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token, geometryBound: false);
     }
 
     internal Task<LedgerResult<LedgerAttempt>> RecordAsync(string captureId, LedgerEvidence evidence, CancellationToken token)
@@ -258,7 +258,7 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
     }
 
     private async Task<LedgerResult<T>> SendLedgerAsync<T>(JsonObject operation, bool opening,
-        Func<JsonElement, LedgerResult<T>> decode, CancellationToken token, bool? programBound = null) where T : class
+        Func<JsonElement, LedgerResult<T>> decode, CancellationToken token, bool? programBound = null, bool? geometryBound = null) where T : class
     {
         LedgerContract.Encode(operation);
         await gate.WaitAsync(token).ConfigureAwait(false);
@@ -270,6 +270,8 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
                 throw new InvalidOperationException(opening ? "A ledger is already open." : "Open the ledger first.");
             if (programBound is not null && programBound.Value != (ledgerProgram is not null))
                 throw new InvalidOperationException("Ledger program mode does not match this operation.");
+            if (geometryBound is not null && geometryBound.Value != geometryLedger)
+                throw new InvalidOperationException("Ledger geometry mode does not match this operation.");
             try
             {
                 if (!IsReady) throw new IOException("Director runtime session is unavailable.");

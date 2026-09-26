@@ -80,7 +80,7 @@ the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. It still uses a local fixture assignment, not server authorization.
 
 The runtime host also exposes the sidecar's durable capture and preparation
-ledgers through IPC 5 (runtime 0.4.0). It can request read-only, ledger-backed
+ledgers through IPC 6 (runtime 0.5.0). It can request read-only, ledger-backed
 planning, discover interrupted work, report native-operation receipts, and
 reserve a prepared capture after a fresh shared-core boundary check.
 Graceful shutdown reads the final reply and closes the pipe before waiting for
@@ -97,15 +97,20 @@ preparation settings while keeping selection policy in Rust. These APIs are
 development groundwork, not an acquisition-ready NINA container or an update
 to the published runtime preview.
 
-The development sidecar includes the shared core's observed-coordinate and
-full-horizon primitives from PSF Guard #475. This pin does not expose them as
-new IPC methods or authorize acquisition. Whole-exposure visibility and its
-production dispatch connection remain separate work.
+The typed geometry API opens a separate geometry-bound ledger with the complete
+site, Earth-orientation validity, horizon, altitude limits, and meridian policy.
+Each evaluation, preparation boundary, and final reservation requires fresh
+constraints. The shared Rust core computes whole-operation visibility and
+preserves its original binding across restarts; the C# client never computes
+replacement windows. Old program-only calls cannot bypass geometry mode.
+This development pin depends on PSF Guard #483 and must not merge before that
+runtime change. NINA horizon export, production dispatch, and the full server
+acceptance gate still need to be connected. The published preview is unchanged.
 
 ## Preview releases
 
 Run `./build-release.ps1` after the full test suite passes. It builds the same
-five-file bundle, checks its assembly version against the registry template,
+seven-file bundle, checks its assembly version against the registry template,
 and writes a versioned ZIP and manifest with the ZIP's exact SHA-256 under
 `artifacts/`. It does not publish or install anything.
 

@@ -49,7 +49,7 @@ internal sealed partial class RuntimeSession
                 || record.Pending is not null || record.Halted is not null || !record.Observations.IsEmpty)))
                 throw new InvalidDataException("New bound preparation contains inconsistent evidence.");
             return new PreparationStarted(created, record);
-        }), token, programBound: true);
+        }), token, programBound: true, geometryBound: false);
     }
 
     internal Task<LedgerResult<PreparationNext>> AdvanceProgramPreparationAsync(string id, DirectorConfiguration configuration,
@@ -68,7 +68,7 @@ internal sealed partial class RuntimeSession
             var next = PreparationContract.ReadNext(value.GetProperty("next"), ledgerAssignment!, id);
             ProgramContract.CheckNext(next, ledgerProgram!);
             return next;
-        }), token, programBound: true);
+        }), token, programBound: true, geometryBound: false);
     }
 
     internal Task<LedgerResult<LedgerReservation>> ReserveProgramPreparedAsync(string id, string captureId, DirectorConfiguration configuration,
@@ -85,7 +85,7 @@ internal sealed partial class RuntimeSession
             ["configuration"] = ProgramContract.Encode(configuration),
             ["state"] = EncodeState(state)
         }, false, response => LedgerContract.Decode(response, "reserved", "outcome",
-            value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token, programBound: true);
+            value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token, programBound: true, geometryBound: false);
     }
 
     internal Task<LedgerResult<CaptureBindingLookup>> FindCaptureBindingAsync(string captureId, CancellationToken token)

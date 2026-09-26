@@ -125,6 +125,20 @@ public sealed class RuntimeController : IAsyncDisposable
     public Task<LedgerResult<CaptureBindingLookup>> FindCaptureBindingAsync(string captureId, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.FindCaptureBindingAsync(captureId, linked), token);
 
+    public Task<LedgerResult<LedgerIdentity>> OpenGeometryAsync(DirectorProgram program, DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.OpenGeometryAsync(program, constraints, state, linked), token);
+    public Task<LedgerResult<PlannerDecision>> EvaluateGeometryAsync(DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.EvaluateGeometryAsync(constraints, state, linked), token);
+    public Task<LedgerResult<PreparationStarted>> BeginGeometryPreparationAsync(string id, string goalId, ProgramLocalState local,
+        PreparationEstimates estimates, DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.BeginGeometryPreparationAsync(id, goalId, local, estimates, constraints, state, linked), token);
+    public Task<LedgerResult<PreparationNext>> AdvanceGeometryPreparationAsync(string id, DirectorConfiguration configuration,
+        DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.AdvanceGeometryPreparationAsync(id, configuration, constraints, state, linked), token);
+    public Task<LedgerResult<LedgerReservation>> ReserveGeometryPreparedAsync(string id, string captureId, DirectorConfiguration configuration,
+        DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReserveGeometryPreparedAsync(id, captureId, configuration, constraints, state, linked), token);
+
     private async Task<T> RunRequestAsync<T>(Func<RuntimeSession, CancellationToken, Task<T>> request, CancellationToken token)
     {
         await lifecycle.WaitAsync(token).ConfigureAwait(false);

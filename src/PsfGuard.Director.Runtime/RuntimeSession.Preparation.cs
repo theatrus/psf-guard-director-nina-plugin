@@ -15,7 +15,7 @@ internal sealed partial class RuntimeSession
     internal Task<LedgerResult<PlannerDecision>> EvaluateLedgerAsync(PlannerState state, CancellationToken token) =>
         SendLedgerAsync(new JsonObject { ["action"] = "evaluate", ["state"] = EncodeState(state) }, false,
             response => LedgerContract.Decode(response, "evaluated", "decision",
-                value => PreparationContract.ReadDecision(value.GetProperty("decision"), ledgerAssignment!, true)), token);
+                value => PreparationContract.ReadDecision(value.GetProperty("decision"), ledgerAssignment!, true)), token, geometryBound: false);
 
     internal Task<LedgerResult<LedgerLookup>> FindUnresolvedAttemptAsync(CancellationToken token) =>
         SendLedgerAsync(new JsonObject { ["action"] = "unresolved_attempt" }, false,
@@ -52,7 +52,7 @@ internal sealed partial class RuntimeSession
                 || record.Pending is not null || record.Halted is not null || !record.Observations.IsEmpty)))
                 throw new InvalidDataException("New preparation contains inconsistent recovery evidence.");
             return new PreparationStarted(created, record);
-        }), token);
+        }), token, geometryBound: false);
     }
 
     internal Task<LedgerResult<PreparationNext>> AdvancePreparationAsync(string id, PlannerState state, CancellationToken token)
@@ -60,7 +60,7 @@ internal sealed partial class RuntimeSession
         LedgerContract.CheckId(id);
         return SendLedgerAsync(new JsonObject { ["action"] = "advance_preparation", ["preparation_id"] = id, ["state"] = EncodeState(state) }, false,
             response => LedgerContract.Decode(response, "preparation_advanced", "next",
-                value => PreparationContract.ReadNext(value.GetProperty("next"), ledgerAssignment!, id)), token);
+                value => PreparationContract.ReadNext(value.GetProperty("next"), ledgerAssignment!, id)), token, geometryBound: false);
     }
 
     internal Task<LedgerResult<PreparationRecord>> CompletePreparationAsync(PreparationCompletion completion, CancellationToken token) =>
@@ -111,7 +111,7 @@ internal sealed partial class RuntimeSession
         LedgerContract.CheckId(captureId);
         return SendLedgerAsync(new JsonObject { ["action"] = "reserve_prepared", ["preparation_id"] = id, ["capture_id"] = captureId, ["state"] = EncodeState(state) }, false,
             response => LedgerContract.Decode(response, "reserved", "outcome",
-                value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token);
+                value => LedgerContract.ReadReservation(value.GetProperty("outcome"), ledgerAssignment!, captureId, state)), token, geometryBound: false);
     }
 
     internal Task<LedgerResult<PreparationEventPage>> ReadPreparationEventsAsync(ulong after, int limit, CancellationToken token)
