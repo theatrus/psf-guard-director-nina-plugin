@@ -155,6 +155,15 @@ Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
 
+On 2026-09-26, plugin commit `5e79f86` passed the same nightly #58/OmniSim
+fixture with one-use native preparation items inside transient sequential
+containers. Six operation receipts and all three RGB FITS captures passed;
+the restarted ledger remained pending assessment. Cleanup completed without
+errors. Evidence is in
+`artifacts/nina-smoke-049cae0efc384c7bba1746c9e972265f/probe/3062a6f2a75646fa845a80678a458c2a/result.json`.
+All 331 automated plugin tests also passed. The isolated NINA process was closed
+after inspecting its completed image view and disconnected equipment state.
+
 On 2026-09-26, nightly #58 with the same OmniSim devices passed the durable
 program probe at plugin commit `2abde35`. Rust issued six filter/readout
 operations and three GUID capture reservations. All three RGB FITS files passed
