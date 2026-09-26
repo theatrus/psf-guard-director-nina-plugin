@@ -45,7 +45,7 @@ public sealed class SettingsViewTests
         });
         var dictionary = new Options();
         var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
-        foreach (var width in new[] { 360, 640 })
+        foreach (var width in new[] { 240, 280, 360, 640 })
             foreach (var state in new[] { "Stopped", "Ready", "Runtime verification or protocol failed. Reinstall the matching Director bundle." })
             {
                 var model = new ViewModel(state);

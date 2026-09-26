@@ -62,7 +62,7 @@ requires N.I.N.A. with simulated equipment, Director's native execution adapter,
 and an isolated PSF Guard instance built from the corresponding changes.
 
 The WPF render test loads the compiled settings template and N.I.N.A.'s button
-style, checks command enablement/contrast/bounds at 360 and 640 pixels, and
+style, checks command enablement/contrast/bounds at 240, 280, 360 and 640 pixels, and
 writes stopped/ready/fault screenshots into `artifacts/`. This validates the
 settings view in isolation, not plugin discovery or a real N.I.N.A. session.
 

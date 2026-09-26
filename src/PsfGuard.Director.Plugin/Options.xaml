@@ -27,8 +27,8 @@
             <TextBlock Grid.Row="2" Text="Runtime" Margin="0,4,16,8" />
             <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RuntimeStatus}" TextWrapping="Wrap" Margin="0,4,0,8" />
             <TextBlock Grid.Row="3" Text="Acquisition" Margin="0,4,16,8" />
-            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AcquisitionStatus}" Margin="0,4,0,8" />
-            <WrapPanel Grid.Row="4" Grid.Column="1" Margin="0,8,0,0">
+            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AcquisitionStatus}" TextWrapping="Wrap" Margin="0,4,0,8" />
+            <WrapPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,8,0,0">
                 <Button Command="{Binding StartRuntimeCommand}" Style="{DynamicResource StandardButton}" MinWidth="112" Margin="0,0,8,8" Padding="12,6">
                     <TextBlock Text="Start runtime" Style="{StaticResource ActionLabel}" />
                 </Button>
