@@ -162,6 +162,16 @@ Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
 
+On 2026-09-26, commit `1177c3b` repeated the nightly #58/OmniSim probe with
+the merged PSF Guard #475 runtime (`b7c2f89`) and its pinned license notices.
+Seven preparation operations, three RGB FITS captures, six target-aware hooks,
+ledger restart, and horizon edit checks passed without errors. The completed
+image view was inspected and the isolated host closed. All 376 automated tests,
+runtime-fetch corruption/missing-file regressions, and package allowlist checks
+passed. Evidence is in
+`artifacts/nina-smoke-ad028f9749284a2fb66328c5276b2c50/probe/c5ecaad5fe2e4e45a69c9c1a50875360/result.json`.
+This checks runtime adoption, not whole-exposure sky visibility or a server loop.
+
 On 2026-09-26, commit `be633bc` passed nightly #58/OmniSim with native target
 containers around all preparation and exposure items. The six inherited exposure
 hooks resolved the exact J2000 coordinates and absent position angle through
