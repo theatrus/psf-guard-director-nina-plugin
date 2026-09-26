@@ -15,6 +15,7 @@ internal sealed class TestPeer : IAsyncDisposable
     private Task? worker;
     internal TaskCompletionSource PingSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReservationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ShutdownDisconnected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal RuntimeSession Session { get; private set; } = null!;
 
     private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation, Func<JsonElement, JsonObject>? ledger)
@@ -66,6 +67,9 @@ internal sealed class TestPeer : IAsyncDisposable
             if (request.GetProperty("payload").GetProperty("type").GetString() == "shutdown")
             {
                 await PipeProtocol.WriteAsync(server, Reply(request, new JsonObject { ["type"] = "stopped" }), lifetime.Token);
+                if (await server.ReadAsync(new byte[1], lifetime.Token) != 0)
+                    throw new InvalidDataException("Host sent data after shutdown.");
+                ShutdownDisconnected.TrySetResult();
                 return;
             }
             PingSeen.TrySetResult();
