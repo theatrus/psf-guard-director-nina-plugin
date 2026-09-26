@@ -91,6 +91,27 @@ public sealed class RuntimeController : IAsyncDisposable
         RunRequestAsync((session, linked) => session.FindAttemptAsync(captureId, linked), token);
     public Task<LedgerResult<LedgerEventPage>> ReadEventsAsync(ulong after, int limit = 64, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ReadEventsAsync(after, limit, linked), token);
+    public Task<LedgerResult<PlannerDecision>> EvaluateLedgerAsync(PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.EvaluateLedgerAsync(state, linked), token);
+    public Task<LedgerResult<LedgerLookup>> FindUnresolvedAttemptAsync(CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.FindUnresolvedAttemptAsync(linked), token);
+    public Task<LedgerResult<PreparationStarted>> BeginPreparationAsync(string id, PreparationContext context,
+        PreparationEstimates estimates, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.BeginPreparationAsync(id, context, estimates, state, linked), token);
+    public Task<LedgerResult<PreparationNext>> AdvancePreparationAsync(string id, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.AdvancePreparationAsync(id, state, linked), token);
+    public Task<LedgerResult<PreparationRecord>> CompletePreparationAsync(PreparationCompletion completion, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.CompletePreparationAsync(completion, linked), token);
+    public Task<LedgerResult<PreparationLookup>> FindPreparationAsync(string id, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.FindPreparationAsync(id, linked), token);
+    public Task<LedgerResult<PreparationLookup>> FindActivePreparationAsync(CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.FindActivePreparationAsync(linked), token);
+    public Task<LedgerResult<PreparationRecord>> ClosePreparationAsync(string id, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ClosePreparationAsync(id, linked), token);
+    public Task<LedgerResult<LedgerReservation>> ReservePreparedAsync(string id, string captureId, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReservePreparedAsync(id, captureId, state, linked), token);
+    public Task<LedgerResult<PreparationEventPage>> ReadPreparationEventsAsync(ulong after, int limit = 32, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReadPreparationEventsAsync(after, limit, linked), token);
 
     private async Task<T> RunRequestAsync<T>(Func<RuntimeSession, CancellationToken, Task<T>> request, CancellationToken token)
     {
