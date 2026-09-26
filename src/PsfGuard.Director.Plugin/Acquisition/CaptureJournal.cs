@@ -9,7 +9,7 @@ internal sealed record CaptureIntent(Guid CaptureId, Guid ProfileId, string RigI
     double ExposureSeconds, string TargetName, double RaDegrees, double DecDegrees,
     double PositionAngle, short BinX = 1, short BinY = 1, int Gain = -1, int Offset = -1);
 
-internal enum CapturePhase { Reserved, Capturing, Downloaded, SaveQueued, Saved, Failed, Interrupted, SaveUncertain }
+internal enum CapturePhase { Reserved, Capturing, Downloaded, SaveQueued, Saved, Failed, Interrupted, SaveUncertain, CaptureUncertain }
 internal sealed record CaptureDestination(string Directory, string Pattern, string Format);
 
 internal sealed record CaptureEvidence(int SchemaVersion, CaptureIntent Intent, CaptureDestination Destination, CapturePhase Phase,
@@ -70,7 +70,7 @@ internal sealed class CaptureJournal
         var validTransition = (Evidence.Phase, evidence.Phase) switch
         {
             (CapturePhase.Reserved, CapturePhase.Capturing or CapturePhase.Failed or CapturePhase.Interrupted) => true,
-            (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.Failed or CapturePhase.Interrupted) => true,
+            (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.CaptureUncertain) => true,
             (CapturePhase.Downloaded, CapturePhase.SaveQueued or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.SaveQueued, CapturePhase.Saved or CapturePhase.Failed or CapturePhase.SaveUncertain) => true,
             _ => false

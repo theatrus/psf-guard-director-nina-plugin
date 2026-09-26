@@ -59,6 +59,7 @@ requested exposure, destination, UTC timestamps, and observed state:
 | --- | --- |
 | Reserved | The attempt identity is durably claimed. |
 | Capturing | Dispatch is intended; a crash here does not prove whether hardware ran. |
+| CaptureUncertain | Capture returned no usable result or was interrupted after dispatch. Hardware may have exposed; recovery is required. |
 | Downloaded | N.I.N.A. returned a frame and image ID. |
 | SaveQueued | Save admission is being attempted or completion is still unconfirmed. |
 | Saved | A matching final file receipt was observed and recorded. This is not a grade. |
@@ -82,6 +83,9 @@ introduced here.
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
 observed wins a simultaneous cancellation, whether it reports success or failure.
+An error, cancellation, or missing result from the capture call is not proof
+that the camera did not expose. It records `CaptureUncertain`, with no automatic
+retry. Revalidation failures before dispatch remain distinct from this outcome.
 After cancellation/timeout, handlers detach and an unconfirmed save remains
 uncertain. N.I.N.A. may still write the queued image. A later recovery component
 must reconcile `PGCAPID`, the recorded destination, and catalog evidence before

@@ -48,12 +48,10 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 throw new InvalidOperationException("Director requires FITS or XISF image output.");
             journal = new CaptureJournal(journalRoot, intent,
                 new(fileSettings.FilePath, fileSettings.FilePattern, fileSettings.FileType.ToString()), clock.GetUtcNow());
-            Record(CapturePhase.Capturing);
             await revalidateAtDispatch(token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             CheckLocalContext(intent);
             Report("Exposing and downloading");
-            var captureStarted = clock.GetTimestamp();
             var capture = new CaptureSequence
             {
                 ExposureTime = intent.ExposureSeconds,
@@ -65,6 +63,8 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             };
             // Filter changes, autofocus, and other preparation happen before
             // revalidation. CaptureImage must not insert a filter change here.
+            Record(CapturePhase.Capturing);
+            var captureStarted = clock.GetTimestamp();
             var exposure = await imaging.CaptureImage(capture, token, progress, intent.TargetName).ConfigureAwait(false)
                 ?? throw new IOException("NINA returned no exposure data.");
             downloaded = clock.GetTimestamp();
@@ -165,9 +165,13 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         {
             if (journal is not null)
             {
-                var phase = journal.Evidence.Phase == CapturePhase.SaveQueued
-                    ? error is ImageSaveFailedException ? CapturePhase.Failed : CapturePhase.SaveUncertain
-                    : error is OperationCanceledException ? CapturePhase.Interrupted : CapturePhase.Failed;
+                var phase = journal.Evidence.Phase switch
+                {
+                    // A camera/transport error cannot prove that hardware did not expose.
+                    CapturePhase.Capturing => CapturePhase.CaptureUncertain,
+                    CapturePhase.SaveQueued => error is ImageSaveFailedException ? CapturePhase.Failed : CapturePhase.SaveUncertain,
+                    _ => error is OperationCanceledException ? CapturePhase.Interrupted : CapturePhase.Failed
+                };
                 try
                 {
                     journal.Record(journal.Evidence with

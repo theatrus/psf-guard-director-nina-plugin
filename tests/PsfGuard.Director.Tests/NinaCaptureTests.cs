@@ -57,7 +57,7 @@ public sealed class NinaCaptureTests
         using var f = new Fixture();
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Run(token =>
         {
-            Assert.Equal(CapturePhase.Capturing, f.Read().Phase);
+            Assert.Equal(CapturePhase.Reserved, f.Read().Phase);
             throw new InvalidOperationException("Stale assignment");
         }));
         f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(),
@@ -83,6 +83,36 @@ public sealed class NinaCaptureTests
         var keyword = Assert.Single(xisf.Image.Elements(), element =>
             element.Name.LocalName == "FITSKeyword" && (string?)element.Attribute("name") == NinaCaptureAdapter.CaptureIdHeader);
         Assert.Contains(f.Intent.CaptureId.ToString("D"), (string?)keyword.Attribute("value"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaptureErrorOrCancellationCannotProveNoExposureOccurred(bool cancelled)
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .Callback(() => Assert.Equal(CapturePhase.Capturing, f.Read().Phase))
+            .ThrowsAsync(cancelled ? new OperationCanceledException("camera interrupted") : new IOException("camera transport lost"));
+        if (cancelled) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run());
+        else await Assert.ThrowsAsync<IOException>(() => f.Run());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        Assert.Null(f.Read().NinaImageId);
+        Assert.False(f.Enqueued.Task.IsCompleted);
+        await Assert.ThrowsAsync<IOException>(() => f.Run());
+        f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName), Times.Once);
+    }
+
+    [Fact]
+    public async Task MissingCaptureResultIsUncertainAndCannotBeRetried()
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .ReturnsAsync((IExposureData)null!);
+        await Assert.ThrowsAsync<IOException>(() => f.Run());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        await Assert.ThrowsAsync<IOException>(() => f.Run());
+        f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName), Times.Once);
     }
 
     [Fact]
