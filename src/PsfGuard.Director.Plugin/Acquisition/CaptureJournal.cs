@@ -7,7 +7,10 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 internal sealed record CaptureIntent(Guid CaptureId, Guid ProfileId, string RigId, string ConfigurationId,
     string AssignmentId, ulong AssignmentRevision, string GoalId, string CameraDeviceId,
     double ExposureSeconds, string TargetName, double RaDegrees, double DecDegrees,
-    double PositionAngle, short BinX = 1, short BinY = 1, int Gain = -1, int Offset = -1);
+    double? PositionAngle, short BinX = 1, short BinY = 1, int Gain = -1, int Offset = -1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CaptureProgramContext? Program = null);
+
+internal sealed record CaptureProgramContext(string LedgerId, string TargetId, string RecipeId, string FilterId, short ReadoutMode);
 
 internal enum CapturePhase { Reserved, Capturing, Downloaded, SaveQueued, Saved, Failed, Interrupted, SaveUncertain, CaptureUncertain }
 internal sealed record CaptureDestination(string Directory, string Pattern, string Format);
@@ -39,7 +42,7 @@ internal sealed class CaptureJournal
         var directory = Path.Combine(root, intent.ProfileId.ToString("N"));
         Directory.CreateDirectory(directory);
         path = Path.Combine(directory, $"{intent.CaptureId:N}.json");
-        Evidence = new(1, intent, destination, CapturePhase.Reserved, now, now);
+        Evidence = new(intent.Program is null ? 1 : 2, intent, destination, CapturePhase.Reserved, now, now);
         Write(Evidence, overwrite: false);
     }
 
@@ -56,10 +59,14 @@ internal sealed class CaptureJournal
             || !double.IsFinite(intent.ExposureSeconds) || intent.ExposureSeconds <= 0 || intent.ExposureSeconds > 86400
             || !double.IsFinite(intent.RaDegrees) || intent.RaDegrees is < 0 or >= 360
             || !double.IsFinite(intent.DecDegrees) || intent.DecDegrees is < -90 or > 90
-            || !double.IsFinite(intent.PositionAngle) || intent.PositionAngle is < 0 or >= 360
+            || intent.PositionAngle is { } angle && (!double.IsFinite(angle) || angle is < 0 or >= 360)
+            || intent.Program is null && intent.PositionAngle is null
             || intent.BinX is < 1 or > 16 || intent.BinY is < 1 or > 16
             || intent.Gain < -1 || intent.Offset < -1)
             throw new ArgumentException("Invalid capture intent.", nameof(intent));
+        if (intent.Program is { } program && (!Guid.TryParseExact(program.LedgerId, "D", out var ledger) || ledger == Guid.Empty
+            || !Id(program.TargetId) || !Id(program.RecipeId) || !Id(program.FilterId) || program.ReadoutMode < 0))
+            throw new ArgumentException("Invalid capture program context.", nameof(intent));
     }
 
     internal void Record(CaptureEvidence evidence)
@@ -111,7 +118,8 @@ internal sealed class CaptureJournal
 
     private static void Validate(CaptureEvidence evidence)
     {
-        if (evidence.SchemaVersion != 1 || evidence.Intent is null || evidence.Destination is null || !Enum.IsDefined(evidence.Phase))
+        if (evidence.SchemaVersion is not (1 or 2) || evidence.Intent is null || evidence.Destination is null || !Enum.IsDefined(evidence.Phase)
+            || (evidence.SchemaVersion == 2) != (evidence.Intent.Program is not null))
             throw new InvalidDataException("Unsupported capture journal.");
         Validate(evidence.Intent);
         Validate(evidence.Destination);

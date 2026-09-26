@@ -88,7 +88,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             metadata.GenericHeaders.Add(new StringMetaDataHeader(CaptureIdHeader, intent.CaptureId.ToString("D"), "PSF Guard Director capture ID"));
             metadata.Target.Name = intent.TargetName;
             metadata.Target.Coordinates = new Coordinates(intent.RaDegrees, intent.DecDegrees, Epoch.J2000, Coordinates.RAType.Degrees);
-            metadata.Target.PositionAngle = intent.PositionAngle;
+            metadata.Target.PositionAngle = intent.PositionAngle ?? double.NaN;
             history.Add(metadata.Image.Id, CaptureSequence.ImageTypes.LIGHT);
             Report("Preparing image");
             var prepared = await imaging.PrepareImage(image, new PrepareImageParameters(true, true), token).ConfigureAwait(false);
