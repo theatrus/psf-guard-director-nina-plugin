@@ -43,6 +43,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
         NamedPipeServerStream? pipe = null;
         RuntimeSession? session = null;
         Process? process = null;
+        Task<string>? startupError = null;
         try
         {
             var name = $"psf-guard-director-{Guid.NewGuid():N}";
@@ -52,6 +53,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(bundle.Executable)!
             };
             info.ArgumentList.Add("--pipe");
@@ -65,6 +67,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
             }
             token.ThrowIfCancellationRequested();
             process = Process.Start(info) ?? throw new IOException("Director runtime did not start.");
+            startupError = ReadBoundedErrorAsync(process.StandardError);
             session = new RuntimeSession(pipe, process, bundle, storageDirectory is not null);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
@@ -87,7 +90,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 try { await connection.ConfigureAwait(false); } catch (OperationCanceledException) { }
             }
         }
-        catch
+        catch (Exception error)
         {
             if (session is not null) await session.DisposeAsync().ConfigureAwait(false);
             else
@@ -96,8 +99,31 @@ internal sealed class RuntimeSession : IAsyncDisposable
                 process?.Dispose();
                 bundle.Dispose();
             }
+            if (startupError is not null)
+            {
+                var diagnostic = await startupError.ConfigureAwait(false);
+                if (error is not OperationCanceledException && !string.IsNullOrWhiteSpace(diagnostic))
+                    throw new IOException($"Director runtime startup failed: {diagnostic.Trim()}", error);
+            }
             throw;
         }
+    }
+
+    private static async Task<string> ReadBoundedErrorAsync(StreamReader reader)
+    {
+        var buffer = new char[512];
+        var length = 0;
+        try
+        {
+            while (length < buffer.Length)
+            {
+                var count = await reader.ReadAsync(buffer.AsMemory(length)).ConfigureAwait(false);
+                if (count == 0) break;
+                length += count;
+            }
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException) { }
+        return new string(buffer, 0, length);
     }
 
     internal static async Task<RuntimeSession> ConnectTestStreamAsync(Stream stream, string rigId, CancellationToken token, bool storageEnabled = false)

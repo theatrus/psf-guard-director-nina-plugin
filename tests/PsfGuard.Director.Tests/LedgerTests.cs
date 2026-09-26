@@ -150,6 +150,7 @@ public sealed class LedgerTests
             var identity = (await owner.OpenLedgerAsync(request)).Value;
             await contender.StartAsync("rig-test");
             Assert.Equal(RuntimeState.Faulted, contender.Status.State);
+            Assert.Contains("execution storage unavailable", contender.Status.Error!.ToString());
             Assert.Equal(ReservationKind.Created, (await owner.ReserveAsync("capture", request.State)).Value!.Kind);
             await owner.StopAsync();
             await contender.StartAsync("rig-test");
