@@ -1,0 +1,40 @@
+name: Director plugin checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Fetch verified Rust runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./fetch-runtime.ps1
+      - run: dotnet restore --locked-mode
+      - run: dotnet format --verify-no-changes --no-restore
+      - run: dotnet build --configuration Release --no-restore
+      - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"
+      - name: Build development bundle
+        shell: pwsh
+        run: ./build-package.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: director-development-bundle
+          path: artifacts/PSFGuardDirector-0.1.0.0-dev.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: director-test-results
+          path: |
+            **/TestResults/*.trx
+            artifacts/settings-*.png
