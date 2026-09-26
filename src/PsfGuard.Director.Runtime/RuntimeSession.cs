@@ -296,6 +296,8 @@ internal sealed class RuntimeSession : IAsyncDisposable
             if (command == "shutdown")
             {
                 ready = false;
+                // Closing acknowledges the final reply before waiting for child exit.
+                pipe.Dispose();
                 if (process is not null)
                 {
                     await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);

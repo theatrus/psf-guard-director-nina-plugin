@@ -77,7 +77,9 @@ the plugin settings. The runtime library now exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. It still uses a local fixture assignment, not server authorization.
 
-The runtime host also exposes the sidecar's durable capture ledger through IPC 2.
+The runtime host also exposes the sidecar's durable capture ledger through IPC 3.
+Graceful shutdown reads the final reply and closes the pipe before waiting for
+child exit, so Windows cannot discard an unread reply during teardown.
 Storage is opt-in for callers with an existing private state directory. It
 supports reservations, observed outcomes, lookup, and bounded event replay;
 restarts retain unresolved attempts and saved-image pending credit. The native
@@ -92,7 +94,7 @@ and writes a versioned ZIP and manifest with the ZIP's exact SHA-256 under
 `artifacts/`. It does not publish or install anything.
 
 Publish those generated artifacts with the authenticated `gh` CLI as a GitHub
-prerelease using the reported tag. Never replace assets on an existing release.
+prerelease using the reported tag. Never replace assets on a published release.
 Copy the generated manifest, not its template, into the theatr.us registry at
 `manifests/p/PSF Guard Director/3.3.0.1058/manifest.json`. Verify the published
 archive checksum and the live registry response before calling the release done.

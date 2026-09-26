@@ -35,6 +35,16 @@ public sealed class ProcessTests
     }
 
     [Fact]
+    public async Task ShutdownAcknowledgesStoppedReplyByClosingThePipe()
+    {
+        await using var peer = await TestPeer.CreateAsync("none");
+        await peer.Session.ShutdownAsync(default);
+        await peer.ShutdownDisconnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(peer.Session.IsReady);
+        await Assert.ThrowsAsync<IOException>(() => peer.Session.PingAsync(default));
+    }
+
+    [Fact]
     public async Task ChildCrashCannotLeaveSessionUsable()
     {
         await using var session = await RuntimeSession.StartAsync(BundleDirectory, "rig-test", default);
