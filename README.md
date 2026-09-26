@@ -44,7 +44,7 @@ dotnet format --verify-no-changes --no-restore
 ```
 
 `runtime.lock.json` pins a reviewed PSF Guard commit, successful CI run,
-artifact identity, executable SHA-256, and all wire versions. Fetching never
+artifact identity, executable and license-notice SHA-256 hashes, and all wire versions. Fetching never
 builds Rust locally or silently takes a newer artifact. The same pin is embedded
 in the runtime-host assembly and checked before execution. The executable stays
 read-locked for the process lifetime. CI artifact pins are temporary development
@@ -52,7 +52,8 @@ inputs; expiry requires a reviewed update. Stable distribution will use durable,
 signed release artifacts, not expiring CI links.
 
 The package includes only the two Director assemblies, pinned sidecar, runtime
-lock, and license. It does not bundle N.I.N.A. assemblies, TS, or Sync. The build
+lock, license, and the sidecar's required third-party notices. Missing or changed
+notices invalidate the fetch cache. It does not bundle N.I.N.A. assemblies, TS, or Sync. The build
 does not install anything into a live N.I.N.A. profile or publish to a registry.
 
 Tests exercise the real pinned child and adversarial pipe peers. They cover
@@ -95,6 +96,11 @@ capabilities to durable execution. It rejects changed capture evidence and
 preparation settings while keeping selection policy in Rust. These APIs are
 development groundwork, not an acquisition-ready NINA container or an update
 to the published runtime preview.
+
+The development sidecar includes the shared core's observed-coordinate and
+full-horizon primitives from PSF Guard #475. This pin does not expose them as
+new IPC methods or authorize acquisition. Whole-exposure visibility and its
+production dispatch connection remain separate work.
 
 ## Preview releases
 

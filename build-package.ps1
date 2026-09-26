@@ -15,14 +15,17 @@ try {
     foreach ($name in @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll')) {
         Copy-Item -LiteralPath (Join-Path $output $name) -Destination $stage
     }
-    Copy-Item -LiteralPath "$PSScriptRoot/runtime/psf-guard-director-runtime.exe" -Destination (Join-Path $stage 'runtime')
+    foreach ($name in @('psf-guard-director-runtime.exe', 'SOFARS-LICENSE.txt', 'THIRD_PARTY_NOTICES.md')) {
+        Copy-Item -LiteralPath (Join-Path "$PSScriptRoot/runtime" $name) -Destination (Join-Path $stage 'runtime')
+    }
     Copy-Item -LiteralPath "$PSScriptRoot/runtime.lock.json", "$PSScriptRoot/LICENSE" -Destination $stage
     $archive = Join-Path $PSScriptRoot 'artifacts/PSFGuardDirector-0.1.0.0-dev.zip'
     Compress-Archive -Path "$stage/*" -DestinationPath $archive -Force
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
     try {
         $actual = @($zip.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName.Replace('\', '/') } | Sort-Object)
-        $expected = @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll', 'runtime/psf-guard-director-runtime.exe', 'runtime.lock.json', 'LICENSE') | Sort-Object
+        $expected = @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll', 'runtime/psf-guard-director-runtime.exe',
+            'runtime/SOFARS-LICENSE.txt', 'runtime/THIRD_PARTY_NOTICES.md', 'runtime.lock.json', 'LICENSE') | Sort-Object
         if (Compare-Object $actual $expected) { throw 'Unexpected files in plugin package.' }
     } finally { $zip.Dispose() }
     Write-Host "Development package: $archive"
