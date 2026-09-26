@@ -150,6 +150,23 @@ Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
 
+On 2026-09-26, nightly #58 with the same OmniSim devices passed the durable
+program probe at plugin commit `2abde35`. Rust issued six filter/readout
+operations and three GUID capture reservations. All three RGB FITS files passed
+pixel/identity readback, matched schema 2 journals, and were recorded saved in
+the Rust ledger. A sidecar restart retained the same ledger identity and returned
+`wait: pending_assessment` without reacquiring. The same-path horizon edit check
+also passed. Cleanup parked/disconnected all three devices; closing NINA left
+no NINA or Director runtime process. The image and three-exposure HFR history
+were visible in the real Imaging view.
+
+The first run exposed a native API mismatch: numeric `SwitchFilter.ComboBoxText`
+is sanitized into a symbol (`0` becomes `_0`). It failed validation, captured
+nothing, and cleaned up. The corrected run uses typed `Xfilter` constants;
+three new regression cases cover slots 0, 1, and 2 through NINA's real item.
+The full automated suite passed 316 tests. Neither this host run nor those
+tests establish production container, physical visibility, or server-loop parity.
+
 On 2026-09-25, nightly #58 with ASCOM Platform 7.1.3.4851 and OmniSim driver
 version 0.5 completed two native capture sequences. The final run included the
 FITS readback checks and reported `passed: true`, three captures, and no errors.

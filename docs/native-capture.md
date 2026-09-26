@@ -138,8 +138,9 @@ A `PlannerEvaluation` is a recommendation for its snapshot, not a durable or
 reusable authorization token. Production dispatch still needs a session-owned
 state generation, durable attempt/event accounting, recovery, and independent
 local safety enforcement at the actual equipment boundary. The simulator probe
-asks Rust again after filter preparation and immediately before the adapter's
-capture call, and rejects a changed recommendation. This does not solve the
+now uses the durable bound program path below: Rust rechecks the boundary when
+reserving after preparation. Its dispatch callback checks the local fixture and
+reserved evidence, not a new stateless recommendation. This does not solve the
 imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
