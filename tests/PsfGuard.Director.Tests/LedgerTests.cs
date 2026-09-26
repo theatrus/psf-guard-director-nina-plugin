@@ -300,18 +300,34 @@ public sealed class LedgerTests
                 using var child = Process.GetProcessById(session.ProcessId!.Value);
                 child.Kill();
                 await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(child.HasExited);
                 await Assert.ThrowsAnyAsync<IOException>(() => session.FindAttemptAsync("capture", default));
                 Assert.False(session.IsReady);
             }
             await using var reopened = await RuntimeSession.StartAsync(ProcessTests.BundleDirectory, "rig-test", default, directory.FullName);
+            using var inspectionProcess = Process.GetProcessById(reopened.ProcessId!.Value);
             Assert.Equal(identity, (await reopened.OpenLedgerAsync(request, default)).Value);
             Assert.Equal(ReservationKind.Existing, (await reopened.ReserveAsync("capture", request.State, default)).Value!.Kind);
             var next = (await reopened.ReserveAsync("replacement", request.State, default)).Value!;
             Assert.Equal(saved ? ReservationKind.Decision : ReservationKind.RecoveryRequired, next.Kind);
             if (saved) Assert.Equal(new(PlannerAction.Wait, "pending_assessment"), next.Decision);
             Assert.Equal(saved ? 2 : 1, (await reopened.ReadEventsAsync(0, 64, default)).Value!.Events.Length);
+            await reopened.ShutdownAsync(default);
+            Assert.True(inspectionProcess.HasExited);
         }
-        finally { directory.Delete(recursive: true); }
+        finally { await DeleteAfterProcessExitAsync(directory); }
+    }
+
+    private static async Task DeleteAfterProcessExitAsync(DirectoryInfo directory)
+    {
+        // Windows may briefly retain a SQLite file handle after process exit.
+        // Retry only sharing/lock violations, not permissions or arbitrary I/O failures.
+        for (var attempt = 0; ; attempt++)
+        {
+            try { directory.Delete(recursive: true); return; }
+            catch (IOException error) when (attempt < 20 && (error.HResult & 0xffff) is 32 or 33)
+            { await Task.Delay(50); }
+        }
     }
 
     [Theory]
