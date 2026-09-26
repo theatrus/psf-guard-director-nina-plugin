@@ -330,6 +330,36 @@ These tests do not execute equipment. Authoritative recipe/configuration binding
 the native N.I.N.A. container, server allocation/check-in, and the full-stack
 simulator gate remain required. The published 0.1.0.0 preview remains unchanged.
 
+## Native preparation lifecycle
+
+`NinaPreparationItems` creates internal, transient native filter and readout
+items from a newly issued Rust `PreparationNext.Run`. It rejects recovered
+in-flight operations, mismatched recipe bindings, cloning, and native retries.
+Resetting a NINA item cannot reset its one-use dispatch fence. Fixed-filter
+configurations use a checked no-op rather than moving a wheel.
+
+The native container still owns condition checks and inherited before/after
+triggers. Inside `Execute`, after before-triggers have run, the item calls the
+owner's current-boundary validator and compares fresh equipment configuration
+and mutable item settings with the immutable program. Completion also requires
+NINA to report the requested normal-image readout or settled filter. A failure
+after entering the native operation is uncertain, even if NINA swallows the
+exception. Skipped or invalid items may have no receipt. Owners must require
+both `FINISHED` and a matching successful receipt; a returned task is not proof
+of success. The original receipt is retained if a reset attempts redispatch.
+
+Operation durations use a monotonic clock from dispatch validation through the
+native result check. They exclude preceding inherited triggers. They are not
+whole-target timing observations. This helper does not persist authority or
+authorize recovery, and its callback is not yet a production server/core permit.
+Native trigger exceptions can be swallowed by NINA; a production session must
+observe hook failures and enforce safety independently. Slew/center, autofocus,
+guiding, dither, and the complete session container remain unfinished.
+
+Regression tests run the native container strategy with inherited triggers,
+condition-based skipping, cancellation, altered settings, driver failures,
+no-op readout, unsettled filters, reset, clone, and concurrent-entry cases.
+
 ## Recovery and validation limits
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
