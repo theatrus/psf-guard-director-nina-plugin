@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     & "$PSScriptRoot/fetch-runtime.ps1"
+    & "$PSScriptRoot/tools/fetch-nina-test-dependencies.ps1"
     & dotnet restore --locked-mode
     if ($LASTEXITCODE -ne 0) { throw 'Restore failed.' }
     & dotnet build --configuration Release --no-restore

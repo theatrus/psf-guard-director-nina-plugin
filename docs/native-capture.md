@@ -390,12 +390,38 @@ Errors remain available even when NINA catches them. Missing evidence is never
 proof that no exposure happened; skipped, canceled, abandoned, and uncertain
 operations still need the session's reconciliation rules.
 
-This is not a public acquisition container. Target context, production
+This is not a public acquisition container. Production
 authorization after slow hooks, hook-failure propagation, timing of inherited
 operations, and the complete TS-style session options remain required. Tests
 exercise the real native strategy and confirm native RestoreGuiding recognizes
 the item as a LIGHT exposure; they do not prove every native/third-party trigger.
 The ASCOM probe also checks inherited before/after hooks in the real nightly host.
+
+## Native target context
+
+`NinaTargetContainer` supplies NINA's public `IDeepSkyObjectContainer` contract
+to nested preparation and exposure items, including inherited trigger contexts.
+It preserves the program's target name, J2000 coordinates, and optional position
+angle. RA enters NINA in degrees; native consumers receive its usual hours.
+An absent angle remains NaN instead of requesting a zero-degree rotation.
+
+This transient container is one-use and cannot be cloned or retried. It rejects
+changed native coordinates, target names, rotation, profile, site, or reference
+night. The caller must repeat validation inside each operation's boundary
+callback, after inherited triggers. The simulator probe does this before and
+after its asynchronous validation. Native nighttime data comes from NINA's
+existing calculator; it does not authorize shared-core visibility or scheduling.
+
+Horizon validity remains the boundary owner's responsibility. The constraint
+reader reloads the full file and compares its revision. A valid reload replaces
+NINA's horizon object, so object identity is not a content-change signal. The
+target keeps its original display horizon; an actual content change must stop
+dispatch and rebuild the context. This is not a production session container or
+proof that every third-party trigger honors the native target contract.
+
+Target tests use pinned SOFA, NOVAS, and ephemeris test dependencies, fetched by
+`tools/fetch-nina-test-dependencies.ps1` with SHA-256 verification. They are not
+distributed in the plugin archive; the installed NINA host owns those files.
 
 ## Recovery and validation limits
 
