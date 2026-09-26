@@ -40,7 +40,7 @@ public sealed record PlannerEvaluation(PlannerRequest Snapshot, PlannerDecision?
 internal static class PlannerContract
 {
     internal const int MaxRequestBytes = 262144;
-    private static readonly JsonSerializerOptions Options = new()
+    internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) }
@@ -100,7 +100,7 @@ internal static class PlannerContract
         { throw new InvalidDataException("Malformed planner response.", error); }
     }
 
-    private static T ParseEnum<T>(string? value) where T : struct, Enum
+    internal static T ParseEnum<T>(string? value) where T : struct, Enum
     {
         foreach (var candidate in Enum.GetValues<T>())
             if (JsonNamingPolicy.SnakeCaseLower.ConvertName(candidate.ToString()) == value) return candidate;

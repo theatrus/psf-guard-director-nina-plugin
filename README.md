@@ -15,7 +15,7 @@ dependency of Director, and chat commands remain subject to local permissions
 and safe execution boundaries.
 
 The architecture and acceptance gates live in
-[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/codex/director-native-execution/docs/design/director.md).
+[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/codex/director-ledger-ipc/docs/design/director.md).
 This repository is not a stable plugin release and has no acquisition support yet.
 
 ## Runtime preview
@@ -76,6 +76,13 @@ not yet exposed as a production sequencer action and cannot be started from
 the plugin settings. The runtime library now exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. It still uses a local fixture assignment, not server authorization.
+
+The runtime host also exposes the sidecar's durable capture ledger through IPC 2.
+Storage is opt-in for callers with an existing private state directory. It
+supports reservations, observed outcomes, lookup, and bounded event replay;
+restarts retain unresolved attempts and saved-image pending credit. The native
+capture adapter and settings preview do not yet use this ledger. See the
+[ledger integration boundary](docs/native-capture.md#durable-ledger-host).
 
 ## License
 
