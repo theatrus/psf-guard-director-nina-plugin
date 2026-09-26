@@ -16,6 +16,28 @@ public sealed class NinaMountPreparationTests
     private static readonly IProgress<ApplicationStatus> Progress = new Progress<ApplicationStatus>();
 
     [Fact]
+    public void UnboundLegacyConfigurationKeepsItsOriginalFingerprint()
+    {
+        var f = new Fixture();
+        var unbound = f.Native.Binding with { TelescopeDeviceId = null };
+        var original = new NinaEquipmentSnapshot(f.Native.Profiles.Object, f.Native.CameraMediator.Object, f.Native.WheelMediator.Object).Read(unbound);
+        Assert.Equal(original.Id, f.Reader.Read(unbound).Id);
+    }
+
+    [Fact]
+    public void MountChangeBetweenCopiedReadsCannotExportAConfiguration()
+    {
+        var f = new Fixture();
+        var reads = 0;
+        f.Mount.Setup(x => x.GetInfo()).Returns(() =>
+        {
+            if (++reads == 2) f.Info.DriverVersion = "2";
+            return f.Info;
+        });
+        Assert.Throws<InvalidOperationException>(() => f.Reader.Read(f.Native.Binding));
+    }
+
+    [Fact]
     public void MountFingerprintTracksIdentityAndCapabilitiesButNotPositionOrParkState()
     {
         var f = new Fixture();

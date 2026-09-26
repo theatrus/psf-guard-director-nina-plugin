@@ -157,6 +157,15 @@ Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
 
+On 2026-09-26, commit `2d46f0a` passed nightly #58/OmniSim with a bound mount
+and Rust-issued unpark. The fixture began parked, executed one native unpark
+and six native filter/readout operations, saved three RGB images, and retained
+pending-assessment state after restarting the sidecar. FITS readback, capture
+IDs, horizon edit detection, and cleanup all passed. Evidence is in
+`artifacts/nina-smoke-58983a4d3d9547cd9cdd7a711332a969/probe/c46e89519ca54caebd7a6a895ccf749a/result.json`.
+The completed image view and disconnected equipment were inspected before
+closing the isolated NINA instance. This run did not exercise slew or guiding.
+
 On 2026-09-26, plugin commit `5e79f86` passed the same nightly #58/OmniSim
 fixture with one-use native preparation items inside transient sequential
 containers. Six operation receipts and all three RGB FITS captures passed;
