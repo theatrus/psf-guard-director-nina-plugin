@@ -23,6 +23,13 @@ jobs:
       - run: dotnet format --verify-no-changes --no-restore
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"
+      - name: Stress ledger restart and crash recovery
+        shell: pwsh
+        run: |
+          1..5 | ForEach-Object {
+            dotnet test --configuration Release --no-build --filter FullyQualifiedName~LedgerTests --logger "trx;LogFileName=ledger-stress-$_.trx"
+            if ($LASTEXITCODE -ne 0) { throw "Ledger restart stress failed on iteration $_." }
+          }
       - name: Build development bundle
         shell: pwsh
         run: ./build-package.ps1
