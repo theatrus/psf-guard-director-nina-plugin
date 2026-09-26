@@ -160,11 +160,15 @@ uncorrelated replies, deadlines, cancellation, and lifecycle/concurrency behavio
 The simulator desktop run is local evidence, not a hosted CI result.
 
 The first registry preview was rechecked on 2026-09-25 with runtime source
-`7267e54d9e8eef6724757a0acd297aad7ba7ae9c` (IPC 2) and the same nightly and
+`3f67369e76fad0525a1194dbd42ff25b82d921c5` (IPC 2) and the same nightly and
 simulators. All three Rust-selected RGB captures passed FITS readback and capture
 identity checks; the final decision was `wait: pending_assessment`. The probe
 reported no errors, parked and disconnected the simulators, and stopped its
 sidecar. The installed plugin's Start/Stop controls also reached Ready/Stopped
-without arming acquisition or leaving a child process. The automated plugin
-suite passed all 147 tests. This remains fixture-driven preview evidence, not
+without arming acquisition or leaving a child process. Both buttons fit at the
+default 800-pixel NINA window width. The automated plugin suite passed all 148
+tests, followed by ten ledger stress runs covering 500 rapid restarts. The
+runtime now waits briefly for transient storage ownership contention; a live
+owner still prevents a second sidecar from acquiring the same directory.
+This remains fixture-driven preview evidence, not
 the server-assignment or production acquisition acceptance gate.
