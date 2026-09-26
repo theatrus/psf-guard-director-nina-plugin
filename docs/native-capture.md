@@ -178,7 +178,40 @@ The original unbound APIs below remain available for isolated legacy tests;
 the runtime rejects their begin/advance/reservation commands on bound ledgers.
 The production container must use the bound APIs, a matching sidecar bundle,
 and fresh native dispatch checks. This host does not yet export actual NINA
-capabilities or connect the native capture journal to this durable ledger.
+capabilities through a production container or connect the native capture journal to this durable ledger.
+
+### Native equipment snapshot
+
+The internal `NinaEquipmentSnapshot` reader copies capabilities from the supported
+camera and filter-wheel mediators and the active profile's filter definitions.
+The local binding supplies explicit stable filter IDs and wheel slots. Names
+detect edited mappings; they do not establish remote identity. A wheel-free
+profile requires an explicit single fixed filter.
+
+The snapshot contains binning pairs, readout indices, gain and offset ranges or
+discrete values, and conservative whole-millisecond exposure bounds. Unsupported
+controls are explicit. Missing, ambiguous, disconnected, subframe, or
+unrepresentable configurations fail instead of acquiring with invented defaults.
+NINA's ASCOM adapter can optimistically advertise writable gain before it has
+ever attempted a write. Its exact absent-control state (unreadable gain, empty
+gain list, and both limits `-1`) exports an unavailable control, never a guessed
+range or a write to probe support. Other inconsistent ranges still fail.
+The configuration digest includes profile/device identity, driver versions,
+readout order, filter mappings, capture options, and the caller's constraint
+revision. Raw device paths are not exported. Capability sets are copied into
+immutable arrays and bounded to 256 entries.
+
+Two copied reads detect changes during export. This is not a hardware lock or
+permission to dispatch; the production executor must refresh the snapshot at
+each operation boundary. A configured driver identity does not attest a physical
+camera serial number. The site/horizon reader must provide the constraint
+revision, including same-path horizon changes; it is not implemented here.
+
+Regression tests validate a native snapshot with the real Rust program validator.
+The isolated ASCOM probe records the connected simulators' capabilities and
+checks that their identity survives three captures. Its constraint revision is
+explicitly a fixture, and its acquisition still uses the existing stateless
+probe assignment, not a production program-bound session.
 
 `EvaluateLedgerAsync` requests a read-only decision using durable progress,
 without reserving an exposure. `FindUnresolvedAttemptAsync` and

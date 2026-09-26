@@ -84,6 +84,7 @@ public sealed class SimulatorSequence : SequenceItem
         var errors = new List<Exception>();
         var captures = new List<CaptureEvidence>();
         var evaluations = new List<PlannerEvaluation>();
+        DirectorConfiguration? equipment = null;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime.CancelAfter(TimeSpan.FromMinutes(5));
@@ -129,6 +130,14 @@ public sealed class SimulatorSequence : SequenceItem
             CheckProfile();
             if (!await filters.Connect()) throw new IOException("Simulator filter wheel connection failed.");
             await Revalidate(lifetime.Token);
+            Step("Reading native simulator equipment capabilities");
+            // This label is fixture-only, not a claim that site constraints were read.
+            var equipmentBinding = new NinaEquipmentBinding(profileId, "ascom-smoke", "fixture-constraints",
+                "ASCOM.OmniSim.Camera", "ASCOM.OmniSim.FilterWheel",
+                profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Select(f =>
+                    new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), false, 0);
+            var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters);
+            equipment = equipmentReader.Read(equipmentBinding);
             Step("Unparking simulator");
             if (!await telescope.UnparkTelescope(progress, lifetime.Token)) throw new IOException("Unpark failed.");
             // A small move near the simulator's current position avoids any dependence
@@ -198,6 +207,8 @@ public sealed class SimulatorSequence : SequenceItem
                 };
             }
             await Revalidate(lifetime.Token);
+            if (equipmentReader.Read(equipmentBinding).Id != equipment.Id)
+                throw new InvalidOperationException("Simulator capability identity changed during capture.");
             Step("Three captures saved with correlated receipts");
         }
         catch (Exception error) { errors.Add(error); Logger.Error(error); }
@@ -232,6 +243,7 @@ public sealed class SimulatorSequence : SequenceItem
                 scope = "rust-selected-native-capture-with-fixture-assignment-not-server-or-recovery",
                 steps,
                 evaluations,
+                equipment,
                 captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
                 errors = errors.Select(e => e.ToString())
             };
