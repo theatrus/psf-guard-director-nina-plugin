@@ -108,7 +108,10 @@ The probe requires both a finished item and a successful completion receipt.
 Reported monotonic durations cover dispatch validation and the operation, not
 the preceding inherited triggers.
 Rust rechecks the boundary when reserving each prepared capture. The host obtains
-its saved binding and captures through `NinaProgramCapture` and `NinaCaptureAdapter`.
+its saved binding and runs a `NinaExposureItem` through nested native sequential
+containers. Its parent has test-only exposure hooks; the probe requires one
+inherited before-hook before boundary validation and one after-hook after the
+correlated save. Capture still uses `NinaProgramCapture` and `NinaCaptureAdapter`.
 It waits for correlated save receipts, reloads each FITS through N.I.N.A., checks
 `PGCAPID` and nonblank pixel data, and compares the durable journal with the
 returned evidence. Cleanup parks and disconnects the simulators and stops the
@@ -125,7 +128,8 @@ under the run's `journal` directory. The launcher returns after startup, not
 after completion: an absent result is **not** a pass. The N.I.N.A. log records
 each probe step. The result requires seven preparation receipts (one unpark and
 six filter/readout operations) and records ledger decisions,
-the ledger identity, equipment/constraint snapshots, and saved captures. The
+six exposure-hook records, the ledger identity, equipment/constraint snapshots,
+and saved captures. The
 Rust ledger is in the run's `state` directory. Close the isolated app after
 inspecting the result.
 
@@ -145,8 +149,9 @@ physical sky visibility or hardware safety. The fixture uses the simulator's
 initial pointing; it does not slew or validate plate solving. No TS, Sync, or Chatstronomy plugin
 is installed in this profile. Native preparation items run through NINA's normal
 container strategy. Automated tests exercise inherited triggers and conditions;
-this desktop fixture has no custom inherited hooks and is not a production
-Director session container. In particular, NINA can
+the desktop fixture exercises test-only inherited before/after exposure hooks.
+It is not a production Director session container and does not execute real
+autofocus, dither, or guiding hooks. In particular, NINA can
 swallow item failures or return after cancellation; a returned task alone must
 never be recorded as a successful equipment operation.
 
@@ -156,6 +161,16 @@ safety and meridian/horizon boundaries, crash recovery, and coexistence with
 Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
+
+On 2026-09-26, commit `7f6aac8` passed nightly #58/OmniSim with reserved captures
+running as native `IExposureItem` instances. Each of three captures inherited
+one before-hook before final validation and one after-hook after its correlated
+save. Seven preparation receipts, FITS readback, ledger restart, horizon edits,
+and cleanup also passed. All 358 automated plugin tests passed. Evidence is in
+`artifacts/nina-smoke-1d42a70fff59462d8aa0763b2b9322c9/probe/c1f4baab32cb4337b4e6fe100dacff05/result.json`.
+The completed image view and disconnected devices were inspected, then the
+isolated NINA instance was closed. These were test-only hooks, not autofocus
+or guiding operations.
 
 On 2026-09-26, commit `2d46f0a` passed nightly #58/OmniSim with a bound mount
 and Rust-issued unpark. The fixture began parked, executed one native unpark

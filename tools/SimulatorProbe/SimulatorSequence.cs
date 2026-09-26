@@ -85,6 +85,7 @@ public sealed class SimulatorSequence : SequenceItem
         var captures = new List<CaptureEvidence>();
         var evaluations = new List<PlannerDecision>();
         var operations = new List<PreparationCompletion>();
+        var exposureHooks = new List<string>();
         LedgerIdentity? ledger = null;
         DirectorConfiguration? equipment = null;
         NinaConstraints? constraints = null;
@@ -235,15 +236,36 @@ public sealed class SimulatorSequence : SequenceItem
                 var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding
                     ?? throw new InvalidDataException("New capture binding is missing.");
                 Step($"Capturing simulator exposure {captures.Count + 1}/3");
-                var evidence = await boundCapture.CaptureAsync(reservation, binding, equipmentBinding, async cancellation =>
+                var exposureItem = new NinaExposureItem(boundCapture, reservation, binding, equipmentBinding, async cancellation =>
                 {
                     await ValidateBoundary(cancellation);
+                    if (exposureHooks.LastOrDefault() != $"before:{captureId}")
+                        throw new InvalidOperationException("Exposure did not inherit its native before-trigger.");
                     if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
                         throw new InvalidOperationException("Simulator mount is parked or moving before capture.");
                     var currentBinding = Require(await runtime.FindCaptureBindingAsync(captureId, cancellation)).Binding;
                     if (currentBinding?.Attempt != binding.Attempt || currentBinding.Attempt.Evidence is not LedgerEvidence.Reserved)
                         throw new InvalidOperationException("Simulator reservation changed before dispatch.");
-                }, progress, lifetime.Token);
+                });
+                var exposureBlock = new NINA.Sequencer.Container.SequentialContainer();
+                var hookBlock = new NINA.Sequencer.Container.SequentialContainer();
+                hookBlock.AttachNewParent(Parent);
+                hookBlock.Add(exposureBlock);
+                exposureBlock.Add(exposureItem);
+                var hook = new ExposureHook(exposureItem, after => exposureHooks.Add($"{(after ? "after" : "before")}:{captureId}"));
+                hookBlock.Add(hook);
+                try { await hookBlock.Run(progress, lifetime.Token); }
+                finally
+                {
+                    hookBlock.Remove(hook);
+                    exposureBlock.Remove(exposureItem);
+                    hookBlock.Remove(exposureBlock);
+                    hookBlock.AttachNewParent(null);
+                }
+                var evidence = exposureItem.Evidence;
+                if (exposureItem.Status != NINA.Core.Enum.SequenceEntityStatus.FINISHED || evidence is null
+                    || exposureHooks.Count != (captures.Count + 1) * 2 || exposureHooks.LastOrDefault() != $"after:{captureId}")
+                    throw new InvalidOperationException("Native exposure or inherited hooks did not finish successfully.", exposureItem.ExecutionError);
                 if (evidence.Phase != CapturePhase.Saved || !File.Exists(evidence.SavedPath))
                     throw new IOException("Capture has no confirmed file.");
                 var restored = await imageFactory.CreateFromFile(evidence.SavedPath, 16, false, lifetime.Token);
@@ -316,6 +338,7 @@ public sealed class SimulatorSequence : SequenceItem
                 steps,
                 evaluations,
                 operations,
+                exposureHooks,
                 ledger,
                 equipment,
                 constraints,
@@ -338,6 +361,24 @@ public sealed class SimulatorSequence : SequenceItem
 
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
+
+    private sealed class ExposureHook(NinaExposureItem exposure, Action<bool> observe) : NINA.Sequencer.Trigger.SequenceTrigger
+    {
+        private int calls;
+        public override object Clone() => throw new NotSupportedException("Test-only transient hook.");
+        public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) =>
+            nextItem is NINA.Sequencer.Interfaces.IExposureItem && ReferenceEquals(nextItem, exposure);
+        public override bool ShouldTriggerAfter(ISequenceItem previousItem, ISequenceItem nextItem) => ReferenceEquals(previousItem, exposure);
+        public override Task Execute(NINA.Sequencer.Container.ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var after = calls++ != 0;
+            if (after && exposure.Evidence is not { Phase: CapturePhase.Saved })
+                throw new InvalidOperationException("After-exposure hook ran before the correlated save.");
+            observe(after);
+            return Task.CompletedTask;
+        }
+    }
 
     private string ValidateEnvironment() => ValidateEnvironment(
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
