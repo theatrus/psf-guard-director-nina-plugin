@@ -1,5 +1,8 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("PsfGuard.Director.Tests")]
 
 [assembly: ComVisible(false)]
 [assembly: Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5")]

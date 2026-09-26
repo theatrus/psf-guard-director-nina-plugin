@@ -70,6 +70,11 @@ For a real nightly session with fresh test profiles and plugin storage, use the
 [N.I.N.A. smoke-test procedure](docs/nina-smoke-test.md). The test-only startup
 hook is not part of the plugin bundle.
 
+The [native capture adapter](docs/native-capture.md) implements journaled capture,
+processing, and correlated save completion behind an internal interface. It is
+not yet wired to a sequencer action or planner authorization, and cannot be
+started from the plugin settings.
+
 ## License
 
 Apache-2.0. Copyright 2026 Yann Ramin (@theatrus).
