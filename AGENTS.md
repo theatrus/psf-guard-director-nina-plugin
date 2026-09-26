@@ -4,7 +4,9 @@
   shared Rust crate in PSF Guard. The runtime library must remain testable
   without loading N.I.N.A.
 - Do not change or replace PSF Guard Sync. Use a distinct plugin identity,
-  settings namespace, and experimental release channel.
+  settings namespace, and explicit experimental preview labeling. The theatr.us
+  registry uses one feed; publish previews as GitHub prereleases without a
+  manifest Channel override.
 - Use pinned N.I.N.A. and runtime versions. Verify runtime hashes and IPC,
   engine, and contract versions before accepting decisions.
 - A failed or stale runtime session cannot authorize equipment dispatch.
