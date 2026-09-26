@@ -66,6 +66,10 @@ style, checks command enablement/contrast/bounds at 360 and 640 pixels, and
 writes stopped/ready/fault screenshots into `artifacts/`. This validates the
 settings view in isolation, not plugin discovery or a real N.I.N.A. session.
 
+For a real nightly session with fresh test profiles and plugin storage, use the
+[N.I.N.A. smoke-test procedure](docs/nina-smoke-test.md). The test-only startup
+hook is not part of the plugin bundle.
+
 ## License
 
 Apache-2.0. Copyright 2026 Yann Ramin (@theatrus).

@@ -6,4 +6,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/PsfGuard.Director.Tests/PsfGuard.Director.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/NinaIsolation/NinaIsolation.csproj" />
+  </Folder>
 </Solution>
