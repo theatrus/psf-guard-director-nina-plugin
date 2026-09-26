@@ -258,7 +258,7 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
     }
 
     private async Task<LedgerResult<T>> SendLedgerAsync<T>(JsonObject operation, bool opening,
-        Func<JsonElement, LedgerResult<T>> decode, CancellationToken token) where T : class
+        Func<JsonElement, LedgerResult<T>> decode, CancellationToken token, bool? programBound = null) where T : class
     {
         LedgerContract.Encode(operation);
         await gate.WaitAsync(token).ConfigureAwait(false);
@@ -268,6 +268,8 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
             if (!storageEnabled) throw new InvalidOperationException("Runtime storage was not enabled.");
             if (opening ? ledgerIdentity is not null : ledgerIdentity is null)
                 throw new InvalidOperationException(opening ? "A ledger is already open." : "Open the ledger first.");
+            if (programBound is not null && programBound.Value != (ledgerProgram is not null))
+                throw new InvalidOperationException("Ledger program mode does not match this operation.");
             try
             {
                 if (!IsReady) throw new IOException("Director runtime session is unavailable.");

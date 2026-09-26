@@ -113,6 +113,18 @@ public sealed class RuntimeController : IAsyncDisposable
     public Task<LedgerResult<PreparationEventPage>> ReadPreparationEventsAsync(ulong after, int limit = 32, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ReadPreparationEventsAsync(after, limit, linked), token);
 
+    public Task<LedgerResult<LedgerIdentity>> OpenProgramAsync(DirectorProgram program, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.OpenProgramAsync(program, state, linked), token);
+    public Task<LedgerResult<PreparationStarted>> BeginProgramPreparationAsync(string id, string goalId, ProgramLocalState local,
+        PreparationEstimates estimates, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.BeginProgramPreparationAsync(id, goalId, local, estimates, state, linked), token);
+    public Task<LedgerResult<PreparationNext>> AdvanceProgramPreparationAsync(string id, DirectorConfiguration configuration, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.AdvanceProgramPreparationAsync(id, configuration, state, linked), token);
+    public Task<LedgerResult<LedgerReservation>> ReserveProgramPreparedAsync(string id, string captureId, DirectorConfiguration configuration, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReserveProgramPreparedAsync(id, captureId, configuration, state, linked), token);
+    public Task<LedgerResult<CaptureBindingLookup>> FindCaptureBindingAsync(string captureId, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.FindCaptureBindingAsync(captureId, linked), token);
+
     private async Task<T> RunRequestAsync<T>(Func<RuntimeSession, CancellationToken, Task<T>> request, CancellationToken token)
     {
         await lifecycle.WaitAsync(token).ConfigureAwait(false);

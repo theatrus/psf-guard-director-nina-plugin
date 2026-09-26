@@ -9,7 +9,7 @@ public enum LedgerError
     Disabled, NotOpen, AlreadyOpen, InvalidInput, InvalidSnapshot, InvalidDirectory,
     Unavailable, Busy, ForeignDatabase, UnsupportedSchema, UnsupportedEngine, UnsupportedStorage,
     AssignmentMismatch, UnknownCapture, ConflictingEvidence, CorruptLedger,
-    PreparationNotSelected, InvalidCompletion, ClockRegression
+    PreparationNotSelected, InvalidCompletion, ClockRegression, InvalidProgram
 }
 public sealed record LedgerResult<T>(T? Value, LedgerError? Error) where T : class;
 public sealed record LedgerIdentity(string LedgerId, string AssignmentId, ulong AssignmentRevision, string RigId, string ConfigurationId);
@@ -72,6 +72,7 @@ internal static class LedgerContract
             if (status != expected) throw new InvalidDataException("Unexpected ledger result.");
             if (expected is "events" or "preparation_events") PipeProtocol.RequireFields(response, "status", "events", "next_cursor");
             else if (expected == "preparation_started") PipeProtocol.RequireFields(response, "status", "created", "record");
+            else if (expected == "program_opened") PipeProtocol.RequireFields(response, "status", "info", "program_version");
             else PipeProtocol.RequireFields(response, "status", field);
             return new(read(response), null);
         }

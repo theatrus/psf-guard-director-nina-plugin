@@ -112,7 +112,7 @@ imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
 
-Runtime 0.3.0 / IPC 4 provides opt-in persistence through
+Runtime 0.4.0 / IPC 5 provides opt-in persistence through
 `RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
 an existing absolute, private, local Director-owned directory, scoped to its
 rig/profile and allocation. Do not accept this path from a server assignment.
@@ -156,6 +156,29 @@ and cancellation while the shared core owns operation policy. These host tests
 do not establish native container or TS behavioral parity.
 
 ### Preparation and recovery host
+
+`OpenProgramAsync` opens a program-bound ledger with the full immutable
+allocation, target/recipe bindings, and equipment capability snapshot. It cannot
+adopt an existing unbound ledger. `BeginProgramPreparationAsync` supplies local
+observations and estimates, not replacement settings or progress counters.
+`AdvanceProgramPreparationAsync` and `ReserveProgramPreparedAsync` require the
+complete refreshed configuration at each boundary. Rust validates capability
+ranges, resolves bindings, and owns scheduling and preparation policy.
+
+`FindCaptureBindingAsync` retrieves the saved target, recipe, configuration, and
+attempt. The host checks every field against the opened immutable program,
+including array contents and exact integer coordinates/timings. Preparation
+commands, recovery records, and preparation events are also checked against
+their program binding. An unknown capture returns an explicit null binding.
+No lookup, existing reservation, or recovery command authorizes redispatch.
+Malformed replies invalidate the session; a typed `InvalidProgram` or changed
+configuration error does not. Opening errors leave room for an exact retry.
+
+The original unbound APIs below remain available for isolated legacy tests;
+the runtime rejects their begin/advance/reservation commands on bound ledgers.
+The production container must use the bound APIs, a matching sidecar bundle,
+and fresh native dispatch checks. This host does not yet export actual NINA
+capabilities or connect the native capture journal to this durable ledger.
 
 `EvaluateLedgerAsync` requests a read-only decision using durable progress,
 without reserving an exposure. `FindUnresolvedAttemptAsync` and
