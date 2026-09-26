@@ -204,14 +204,58 @@ immutable arrays and bounded to 256 entries.
 Two copied reads detect changes during export. This is not a hardware lock or
 permission to dispatch; the production executor must refresh the snapshot at
 each operation boundary. A configured driver identity does not attest a physical
-camera serial number. The site/horizon reader must provide the constraint
-revision, including same-path horizon changes; it is not implemented here.
+camera serial number. The site/horizon reader supplies the constraint revision,
+including same-path horizon changes, as described below.
 
 Regression tests validate a native snapshot with the real Rust program validator.
 The isolated ASCOM probe records the connected simulators' capabilities and
-checks that their identity survives three captures. Its constraint revision is
-explicitly a fixture, and its acquisition still uses the existing stateless
-probe assignment, not a production program-bound session.
+checks that their identity survives three captures. Its acquisition still uses
+the existing stateless probe assignment, not a production program-bound session.
+
+### Native constraint snapshot
+
+`NinaConstraintSnapshot.Refresh` exports the active profile's site coordinates,
+native flip settings, the explicit rig before/after meridian exclusion, minimum
+altitude, and complete horizon breakpoints. Native flip/pause behavior remains
+separate from hard rig exclusions. This adapter exports data, not observing
+windows or a second scheduler. Rust visibility calculation and composition with
+project preferences still need implementation.
+
+The caller must persist an explicit `RequiredFile` or `FixedMinimum` declaration.
+An empty NINA file path does not disable a previously required horizon. The
+internal API rejects a missing, cleared, changed, malformed, or oversized file.
+Fixed-minimum mode requires both the NINA path and loaded horizon to be empty.
+There is no production settings UI or persisted declaration store yet.
+
+Refresh bounds file size and point count, then locks the file against writes
+and renames while calling NINA's public `ChangeHorizon` API. This controlled
+reload synchronizes NINA's model with the exact exported bytes, including edits
+that preserve the path, size, and modification timestamp. Call it only at a safe
+refresh/check-in boundary, not for each UI repaint. It emits NINA's normal
+`HorizonChanged` event. Do not recursively call Refresh from that event.
+
+Standard files contain azimuth/altitude pairs; `.hpts` files contain JSON
+altitude/azimuth pairs. Format selection matches the pinned NINA version,
+including its case-sensitive extension check. Breakpoints use degrees with
+azimuth north=0, east=90. Curves use linear interpolation, NINA's nearest-endpoint
+completion when 0/360 are missing, and modulo-360 query wrap. Explicit unequal
+0/360 endpoint values are retained. Duplicate azimuths use the last value as
+NINA does. Every breakpoint is retained; export never samples a coarse grid.
+The adapter checks knots, segment midpoints, wrap, and extrema against the
+fresh native model. Invalid lines that NINA might skip are rejected by Director.
+
+Profile/location/horizon events increment a local invalidation generation.
+Profile changes and unexpected events during refresh reject the snapshot;
+Dispose removes subscriptions. Generation alone does not detect disk edits:
+Refresh must reread the file at each controlled boundary. The content digest,
+profile, site, horizon, minimum altitude, rig exclusions, and native flip settings
+feed a versioned constraint revision used by the equipment identity. Paths stay
+local. This is not a hardware permit, filesystem watcher, or local safety monitor.
+
+The isolated ASCOM probe reads a fixture horizon through the real profile
+service and verifies a same-path edit reaches both NINA and the configuration
+identity. It still uses unrestricted fixture eligibility for capture; this
+test does not prove horizon enforcement during acquisition or server parity.
 
 `EvaluateLedgerAsync` requests a read-only decision using durable progress,
 without reserving an exposure. `FindUnresolvedAttemptAsync` and
