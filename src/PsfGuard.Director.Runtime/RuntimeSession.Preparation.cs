@@ -46,7 +46,7 @@ internal sealed partial class RuntimeSession
         };
         return SendLedgerAsync(operation, false, response => LedgerContract.Decode(response, "preparation_started", "record", value =>
         {
-            var record = PreparationContract.ReadRecord(value.GetProperty("record"), ledgerAssignment!, id);
+            var record = ReadPreparationRecord(value.GetProperty("record"), id);
             var created = value.GetProperty("created").GetBoolean();
             if (record.GoalId != context.GoalId || (created && (record.Lifecycle != PreparationLifecycle.Active
                 || record.Pending is not null || record.Halted is not null || !record.Observations.IsEmpty)))
@@ -67,7 +67,7 @@ internal sealed partial class RuntimeSession
         SendLedgerAsync(new JsonObject { ["action"] = "complete_preparation", ["completion"] = PreparationContract.EncodeCompletion(completion) }, false,
             response => LedgerContract.Decode(response, "preparation_recorded", "record", value =>
             {
-                var record = PreparationContract.ReadRecord(value.GetProperty("record"), ledgerAssignment!, completion.PreparationId);
+                var record = ReadPreparationRecord(value.GetProperty("record"), completion.PreparationId);
                 if (!record.Observations.Any(o => o.Completion == completion))
                     throw new InvalidDataException("Native receipt was not echoed by the ledger.");
                 return record;
@@ -86,7 +86,7 @@ internal sealed partial class RuntimeSession
         SendLedgerAsync(operation, false, response => LedgerContract.Decode(response, "preparation_found", "record", value =>
         {
             var record = value.GetProperty("record").ValueKind == JsonValueKind.Null ? null
-                : PreparationContract.ReadRecord(value.GetProperty("record"), ledgerAssignment!, id);
+                : ReadPreparationRecord(value.GetProperty("record"), id);
             if (activeOnly && record is not null && record.Lifecycle != PreparationLifecycle.Active)
                 throw new InvalidDataException("Active preparation lookup returned terminal evidence.");
             return new PreparationLookup(record);
@@ -98,7 +98,7 @@ internal sealed partial class RuntimeSession
         return SendLedgerAsync(new JsonObject { ["action"] = "close_preparation", ["preparation_id"] = id }, false,
             response => LedgerContract.Decode(response, "preparation_closed", "record", value =>
             {
-                var record = PreparationContract.ReadRecord(value.GetProperty("record"), ledgerAssignment!, id);
+                var record = ReadPreparationRecord(value.GetProperty("record"), id);
                 // Closing terminal work is idempotent; a captured record stays captured.
                 if (record.Lifecycle == PreparationLifecycle.Active) throw new InvalidDataException("Preparation is still active.");
                 return record;
@@ -120,6 +120,11 @@ internal sealed partial class RuntimeSession
         if (limit is < 1 or > PreparationContract.MaxPage) throw new ArgumentOutOfRangeException(nameof(limit));
         return SendLedgerAsync(new JsonObject { ["action"] = "preparation_events", ["after"] = after, ["limit"] = limit }, false,
             response => LedgerContract.Decode(response, "preparation_events", "events",
-                value => PreparationContract.ReadPage(value, ledgerIdentity!, ledgerAssignment!, after, limit)), token);
+                value =>
+                {
+                    var page = PreparationContract.ReadPage(value, ledgerIdentity!, ledgerAssignment!, after, limit);
+                    if (ledgerProgram is not null) ProgramContract.CheckPage(page, ledgerProgram);
+                    return page;
+                }), token);
     }
 }
