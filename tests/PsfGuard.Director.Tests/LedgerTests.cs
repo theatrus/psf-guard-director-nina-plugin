@@ -65,7 +65,7 @@ public sealed class LedgerTests
             await using var controller = new RuntimeController(ProcessTests.BundleDirectory, TimeSpan.FromMilliseconds(20), directory.FullName);
             var request = PlannerTests.Request();
             await controller.StartAsync("rig-test");
-            Assert.Equal(RuntimeState.Ready, controller.Status.State);
+            Assert.True(controller.Status.State == RuntimeState.Ready, controller.Status.ToString());
             var identity = (await controller.OpenLedgerAsync(request)).Value!;
             Assert.Equal(request.Assignment.Revision, identity.AssignmentRevision);
             Assert.Equal(ReservationKind.Created, (await controller.ReserveAsync("capture", request.State)).Value!.Kind);
@@ -78,6 +78,7 @@ public sealed class LedgerTests
             await controller.RecordAsync("capture", new LedgerEvidence.Uncertain("save-unconfirmed"));
             await controller.StopAsync();
             await controller.StartAsync("rig-test");
+            Assert.True(controller.Status.State == RuntimeState.Ready, controller.Status.ToString());
             Assert.Equal(identity, (await controller.OpenLedgerAsync(request)).Value);
             Assert.IsType<LedgerEvidence.Uncertain>((await controller.FindAttemptAsync("capture")).Value!.Attempt!.Evidence);
             Assert.Equal(ReservationKind.RecoveryRequired, (await controller.ReserveAsync("another", request.State)).Value!.Kind);
@@ -103,11 +104,35 @@ public sealed class LedgerTests
             Assert.Equal(RuntimeState.Ready, controller.Status.State);
             await controller.StopAsync();
             await controller.StartAsync("rig-test");
+            Assert.True(controller.Status.State == RuntimeState.Ready, controller.Status.ToString());
             Assert.Equal(identity, (await controller.OpenLedgerAsync(request)).Value);
             Assert.Equal(saved, (await controller.FindAttemptAsync("capture")).Value!.Attempt!.Evidence);
             Assert.Equal(PlannerAction.Wait, (await controller.ReserveAsync("another", request.State)).Value!.Decision!.Action);
             await controller.StopAsync();
             Assert.Equal(RuntimeState.Stopped, controller.Status.State);
+        }
+        finally { await DeleteAfterProcessExitAsync(directory); }
+    }
+
+    [Fact]
+    public async Task RepeatedStorageRestartsReleaseOwnershipBeforeNextHandshake()
+    {
+        var directory = Directory.CreateTempSubdirectory("director-ledger-test-");
+        try
+        {
+            await using var controller = new RuntimeController(ProcessTests.BundleDirectory, TimeSpan.FromMilliseconds(20), directory.FullName);
+            var request = PlannerTests.Request();
+            LedgerIdentity? identity = null;
+            for (var iteration = 0; iteration < 50; iteration++)
+            {
+                await controller.StartAsync("rig-test");
+                Assert.True(controller.Status.State == RuntimeState.Ready, $"Restart {iteration}: {controller.Status}");
+                var opened = (await controller.OpenLedgerAsync(request)).Value!;
+                identity ??= opened;
+                Assert.Equal(identity, opened);
+                await controller.StopAsync();
+                Assert.Equal(RuntimeState.Stopped, controller.Status.State);
+            }
         }
         finally { await DeleteAfterProcessExitAsync(directory); }
     }
