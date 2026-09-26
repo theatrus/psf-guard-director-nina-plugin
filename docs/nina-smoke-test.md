@@ -162,6 +162,17 @@ Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
 
+On 2026-09-26, commit `be633bc` passed nightly #58/OmniSim with native target
+containers around all preparation and exposure items. The six inherited exposure
+hooks resolved the exact J2000 coordinates and absent position angle through
+NINA's target-context API. Seven preparation receipts, three saved RGB FITS
+images, ledger restart, horizon edits, and cleanup passed without errors. All
+376 automated tests passed. Evidence is in
+`artifacts/nina-smoke-21c86cb0786d458b8093f47b0328c748/probe/2d70db2ffbeb4d14a319e0b8d712d865/result.json`.
+The completed image view and disconnected simulators were inspected before
+closing the isolated host. This remains a local fixture, not server-authorized
+acquisition or proof of real autofocus/guiding behavior.
+
 On 2026-09-26, commit `7f6aac8` passed nightly #58/OmniSim with reserved captures
 running as native `IExposureItem` instances. Each of three captures inherited
 one before-hook before final validation and one after-hook after its correlated
