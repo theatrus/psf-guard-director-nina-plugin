@@ -139,6 +139,15 @@ public sealed class RuntimeController : IAsyncDisposable
         DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ReserveGeometryPreparedAsync(id, captureId, configuration, constraints, state, linked), token);
 
+    /// <summary>Feasibility only. The original live-session one-shot command is still required.</summary>
+    public Task<LedgerResult<PlannerDecision>> CheckGeometryPendingDispatchAsync(PreparationCommand command,
+        DirectorConfiguration configuration, DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.CheckGeometryPendingDispatchAsync(command, configuration, constraints, state, linked), token);
+    /// <summary>Feasibility only. Recovered attempts must never authorize another exposure.</summary>
+    public Task<LedgerResult<PlannerDecision>> CheckGeometryCaptureDispatchAsync(string id, LedgerAttempt attempt,
+        DirectorConfiguration configuration, DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.CheckGeometryCaptureDispatchAsync(id, attempt, configuration, constraints, state, linked), token);
+
     private async Task<T> RunRequestAsync<T>(Func<RuntimeSession, CancellationToken, Task<T>> request, CancellationToken token)
     {
         await lifecycle.WaitAsync(token).ConfigureAwait(false);

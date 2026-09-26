@@ -59,6 +59,32 @@ public sealed record PreparationEventPage(LedgerIdentity Identity, ImmutableArra
 
 internal static class PreparationContract
 {
+    internal static JsonObject EncodeCommand(PreparationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        foreach (var id in new[] { command.PreparationId, command.GoalId, command.TargetId, command.RecipeId }) LedgerContract.CheckId(id);
+        if (command.Ordinal == 0) throw new ArgumentException("Operation ordinals start at one.");
+        var operation = command.Operation switch
+        {
+            PreparationOperation.Unpark => new JsonObject { ["operation"] = "unpark" },
+            PreparationOperation.Center c => new JsonObject { ["operation"] = "center", ["rotate"] = c.Rotate },
+            PreparationOperation.BeforeTarget => new JsonObject { ["operation"] = "before_target" },
+            PreparationOperation.Dither => new JsonObject { ["operation"] = "dither" },
+            PreparationOperation.SwitchFilter f when LedgerContract.ValidId(f.FilterId) => new JsonObject { ["operation"] = "switch_filter", ["filter_id"] = f.FilterId },
+            PreparationOperation.SetReadoutMode r when r.Mode >= 0 => new JsonObject { ["operation"] = "set_readout_mode", ["mode"] = r.Mode },
+            _ => throw new ArgumentException("Invalid native operation.")
+        };
+        return new JsonObject
+        {
+            ["preparation_id"] = command.PreparationId,
+            ["ordinal"] = command.Ordinal,
+            ["goal_id"] = command.GoalId,
+            ["target_id"] = command.TargetId,
+            ["recipe_id"] = command.RecipeId,
+            ["operation"] = operation
+        };
+    }
+
     internal const int MaxPage = 32;
 
     internal static JsonObject EncodeCompletion(PreparationCompletion completion)
@@ -175,7 +201,6 @@ internal static class PreparationContract
         var unsuccessful = observations.LastOrDefault()?.Completion.Outcome is PreparationOutcome.Failed or PreparationOutcome.Uncertain;
         if ((lifecycle == PreparationLifecycle.Captured) != (capture is not null)
             || (pending is not null && (pending.GoalId != goal || pending.Ordinal != (uint)observations.Count + 1 || lifecycle != PreparationLifecycle.Active))
-            || (lifecycle == PreparationLifecycle.Captured && halted is not null)
             || (unsuccessful && (halted is null || pending is not null || lifecycle == PreparationLifecycle.Captured))
             || (lifecycle == PreparationLifecycle.Closed && observations.Any(o => o.Completion.Outcome is PreparationOutcome.Uncertain)))
             throw new InvalidDataException("Inconsistent preparation lifecycle.");

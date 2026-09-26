@@ -7,7 +7,7 @@ using Xunit;
 
 namespace PsfGuard.Director.Tests;
 
-public sealed class GeometryTests
+public sealed partial class GeometryTests
 {
     private const ulong Start = 1790409600000;
     private static PlannerState State() => PlannerTests.Request().State with { NowMs = Start, ConditionsValidUntilMs = Start + 120000 };
@@ -192,7 +192,10 @@ public sealed class GeometryTests
         await peer.Session.BeginGeometryPreparationAsync("prep", "goal", Local(), Estimates(), constraints, State(), default);
         await peer.Session.AdvanceGeometryPreparationAsync("prep", Program().Configuration, constraints, State(), default);
         await peer.Session.ReserveGeometryPreparedAsync("prep", "capture", Program().Configuration, constraints, State(), default);
-        Assert.Equal(new[] { "open_geometry", "evaluate_geometry", "begin_geometry_preparation", "advance_geometry_preparation", "reserve_geometry_prepared" }, actions);
+        await peer.Session.CheckGeometryPendingDispatchAsync(Command(), Program().Configuration, constraints, State(), default);
+        await peer.Session.CheckGeometryCaptureDispatchAsync("prep", Attempt(), Program().Configuration, constraints, State(), default);
+        Assert.Equal(new[] { "open_geometry", "evaluate_geometry", "begin_geometry_preparation", "advance_geometry_preparation", "reserve_geometry_prepared",
+            "check_geometry_pending_dispatch", "check_geometry_capture_dispatch" }, actions);
         Assert.True(peer.Session.IsReady);
     }
 

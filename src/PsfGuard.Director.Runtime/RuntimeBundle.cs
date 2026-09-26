@@ -5,9 +5,9 @@ namespace PsfGuard.Director.Runtime;
 
 public static class RuntimeContract
 {
-    public const int ProtocolVersion = 6;
+    public const int ProtocolVersion = 7;
     public const int ContractVersion = 2;
-    public const string RuntimeVersion = "0.5.0";
+    public const string RuntimeVersion = "0.6.0";
     public const string EngineVersion = "0.2.0";
     public const string ExecutableName = "psf-guard-director-runtime.exe";
     internal const int MaxFrameBytes = 266240;
