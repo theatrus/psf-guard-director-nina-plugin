@@ -204,15 +204,7 @@ public sealed class SimulatorSequence : SequenceItem
                     if (next is not PreparationNext.Run issued || count >= 2)
                         throw new InvalidOperationException("Fixture preparation was not a new bounded operation.");
                     var operation = issued.Command;
-                    SequenceItem item = operation.Operation switch
-                    {
-                        PreparationOperation.SwitchFilter filter => new NINA.Sequencer.SequenceItem.FilterWheel.SwitchFilter(profiles, filters)
-                        {
-                            ComboBoxText = equipmentBinding.Filters.Single(f => f.Id == filter.FilterId).Position!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                        },
-                        PreparationOperation.SetReadoutMode mode => new NINA.Sequencer.SequenceItem.Camera.SetReadoutMode(camera) { Mode = mode.Mode },
-                        _ => throw new InvalidOperationException("Unexpected simulator preparation operation.")
-                    };
+                    var item = CreatePreparationItem(operation.Operation, profiles, camera, filters, equipmentBinding);
                     item.Attempts = 1;
                     item.AttachNewParent(Parent);
                     Step($"Executing native {operation.Operation.GetType().Name}");
@@ -334,6 +326,20 @@ public sealed class SimulatorSequence : SequenceItem
 
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
+
+    internal static SequenceItem CreatePreparationItem(PreparationOperation operation, IProfileService profiles,
+        ICameraMediator camera, IFilterWheelMediator filters, NinaEquipmentBinding binding) => operation switch
+        {
+            // ComboBoxText sanitizes numeric text as an identifier ("0" -> "_0").
+            // The typed property supplies a constant expression for the exact slot.
+            PreparationOperation.SwitchFilter filter => new NINA.Sequencer.SequenceItem.FilterWheel.SwitchFilter(profiles, filters)
+            {
+                Xfilter = binding.Filters.Single(f => f.Id == filter.FilterId).Position
+                    ?? throw new InvalidOperationException("This fixture requires a wheel slot.")
+            },
+            PreparationOperation.SetReadoutMode mode => new NINA.Sequencer.SequenceItem.Camera.SetReadoutMode(camera) { Mode = mode.Mode },
+            _ => throw new InvalidOperationException("Unexpected simulator preparation operation.")
+        };
 
     private string ValidateEnvironment() => ValidateEnvironment(
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
