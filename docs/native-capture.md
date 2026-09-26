@@ -112,7 +112,7 @@ imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
 
-Runtime 0.2.1 / IPC 3 provides opt-in persistence through
+Runtime 0.3.0 / IPC 4 provides opt-in persistence through
 `RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
 an existing absolute, private, local Director-owned directory, scoped to its
 rig/profile and allocation. Do not accept this path from a server assignment.
@@ -154,6 +154,47 @@ N.I.N.A. remains the only execution backend in scope. The production Director
 container must preserve TS-style options and normal sequence triggers, conditions,
 and cancellation while the shared core owns operation policy. These host tests
 do not establish native container or TS behavioral parity.
+
+### Preparation and recovery host
+
+`EvaluateLedgerAsync` requests a read-only decision using durable progress,
+without reserving an exposure. `FindUnresolvedAttemptAsync` and
+`FindActivePreparationAsync` discover interrupted work after a lost reply or
+host restart; callers do not need to have remembered its ID in memory.
+
+`BeginPreparationAsync` binds the resolved target/recipe/equipment context and
+blocking estimates. Rust decides native operation order. `AdvancePreparationAsync`
+returns a newly issued `Run`, existing `InFlight`, `ReadyToReserve`, or a planner
+decision. Only `Run` represents a newly issued operation, and it still requires
+independent local safety, profile, configuration, target/recipe, and native
+sequence-lifecycle validation at dispatch. A recovered record's `Pending`
+command is evidence, never permission to repeat an operation.
+
+`CompletePreparationAsync` records the operation ID/ordinal, outcome, wall-clock
+end, and measured monotonic elapsed duration. It verifies the returned receipt
+exactly, including 64-bit timings. Outer hook durations already include nested
+work; do not add child durations again. The host never advances counters or
+chooses the next operation itself. Failed and uncertain receipts stop progression.
+
+`ReservePreparedAsync` asks Rust to refresh the final boundary and atomically
+link the preparation to a capture reservation. Existing reservations remain
+non-dispatchable. `ClosePreparationAsync` cannot discard a pending or uncertain
+operation; closing an already captured preparation returns its captured evidence
+unchanged. It does not reset or refund that capture.
+
+`ReadPreparationEventsAsync` returns at most 32 events. Keep this cursor separate
+from `ReadEventsAsync`'s capture cursor. The decoder checks strict fields,
+allocation/rig/configuration/engine identity, contiguous sequences, native
+receipt identities, record lifecycle consistency, and known goals. New typed
+domain errors preserve the connection; malformed replies invalidate it.
+IPC 3 hosts and IPC 4 runtimes cannot negotiate a session.
+
+The plugin tests use the pinned CI-built runtime and terminate it after issue,
+then reopen the same ledger and verify no redispatch, idempotent receipts,
+prepared reservation, pending-image accounting, and separate event cursors.
+These tests do not execute equipment. Authoritative recipe/configuration binding,
+the native N.I.N.A. container, server allocation/check-in, and the full-stack
+simulator gate remain required. The published 0.1.0.0 preview remains unchanged.
 
 ## Recovery and validation limits
 

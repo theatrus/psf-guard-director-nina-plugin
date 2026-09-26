@@ -77,12 +77,15 @@ the plugin settings. The runtime library now exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. It still uses a local fixture assignment, not server authorization.
 
-The runtime host also exposes the sidecar's durable capture ledger through IPC 3.
+The runtime host also exposes the sidecar's durable capture and preparation
+ledgers through IPC 4 (runtime 0.3.0). It can request read-only, ledger-backed
+planning, discover interrupted work, report native-operation receipts, and
+reserve a prepared capture after a fresh shared-core boundary check.
 Graceful shutdown reads the final reply and closes the pipe before waiting for
 child exit, so Windows cannot discard an unread reply during teardown.
 Storage is opt-in for callers with an existing private state directory. It
 supports reservations, observed outcomes, lookup, and bounded event replay;
-restarts retain unresolved attempts and saved-image pending credit. The native
+restarts retain unresolved attempts, preparation operations, and saved-image pending credit. The native
 capture adapter and settings preview do not yet use this ledger. See the
 [ledger integration boundary](docs/native-capture.md#durable-ledger-host).
 

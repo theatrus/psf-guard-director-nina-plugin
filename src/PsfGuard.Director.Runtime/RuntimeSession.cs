@@ -9,7 +9,7 @@ using Microsoft.Win32.SafeHandles;
 namespace PsfGuard.Director.Runtime;
 
 // The host transports recommendations; it owns no equipment or dispatch permit.
-internal sealed class RuntimeSession : IAsyncDisposable
+internal sealed partial class RuntimeSession : IAsyncDisposable
 {
     private readonly RuntimeBundle? bundle;
     private readonly Stream pipe;

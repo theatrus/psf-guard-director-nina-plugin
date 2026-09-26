@@ -8,7 +8,8 @@ public enum LedgerError
 {
     Disabled, NotOpen, AlreadyOpen, InvalidInput, InvalidSnapshot, InvalidDirectory,
     Unavailable, Busy, ForeignDatabase, UnsupportedSchema, UnsupportedEngine, UnsupportedStorage,
-    AssignmentMismatch, UnknownCapture, ConflictingEvidence, CorruptLedger
+    AssignmentMismatch, UnknownCapture, ConflictingEvidence, CorruptLedger,
+    PreparationNotSelected, InvalidCompletion, ClockRegression
 }
 public sealed record LedgerResult<T>(T? Value, LedgerError? Error) where T : class;
 public sealed record LedgerIdentity(string LedgerId, string AssignmentId, ulong AssignmentRevision, string RigId, string ConfigurationId);
@@ -69,11 +70,12 @@ internal static class LedgerContract
                 return new(null, PlannerContract.ParseEnum<LedgerError>(response.GetProperty("code").GetString()));
             }
             if (status != expected) throw new InvalidDataException("Unexpected ledger result.");
-            if (expected == "events") PipeProtocol.RequireFields(response, "status", "events", "next_cursor");
+            if (expected is "events" or "preparation_events") PipeProtocol.RequireFields(response, "status", "events", "next_cursor");
+            else if (expected == "preparation_started") PipeProtocol.RequireFields(response, "status", "created", "record");
             else PipeProtocol.RequireFields(response, "status", field);
             return new(read(response), null);
         }
-        catch (Exception error) when (error is InvalidOperationException or KeyNotFoundException or FormatException or OverflowException)
+        catch (Exception error) when (error is InvalidOperationException or KeyNotFoundException or FormatException or OverflowException or JsonException)
         { throw new InvalidDataException("Malformed ledger response.", error); }
     }
 
@@ -175,7 +177,7 @@ internal static class LedgerContract
         return new(identity, events.ToImmutable(), cursor);
     }
 
-    private static string ReadId(JsonElement value, string field)
+    internal static string ReadId(JsonElement value, string field)
     {
         var result = value.GetProperty(field).GetString();
         if (!ValidId(result)) throw new InvalidDataException("Invalid ledger identity or reason code.");
