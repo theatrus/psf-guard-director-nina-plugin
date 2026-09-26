@@ -80,7 +80,7 @@ the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. It still uses a local fixture assignment, not server authorization.
 
 The runtime host also exposes the sidecar's durable capture and preparation
-ledgers through IPC 6 (runtime 0.5.0). It can request read-only, ledger-backed
+ledgers through IPC 7 (runtime 0.6.0). It can request read-only, ledger-backed
 planning, discover interrupted work, report native-operation receipts, and
 reserve a prepared capture after a fresh shared-core boundary check.
 Graceful shutdown reads the final reply and closes the pipe before waiting for
@@ -103,11 +103,17 @@ Each evaluation, preparation boundary, and final reservation requires fresh
 constraints. The shared Rust core computes whole-operation visibility and
 preserves its original binding across restarts; the C# client never computes
 replacement windows. Old program-only calls cannot bypass geometry mode.
-This development pin uses the reviewed runtime from merged PSF Guard #483.
 The internal native geometry exporter now joins NINA's complete
 horizon/site snapshot with the matching equipment fingerprint for this client.
 Production dispatch, an Earth-orientation data source, and the full server
 acceptance gate still need to be connected. The published preview is unchanged.
+
+The two dispatch-check APIs recheck an issued preparation command or reserved
+capture after native before-hooks. They preserve the original command, attempt
+budget and capture evidence; a successful check cannot authorize replay after
+recovery. The development pin uses the reviewed `codex/director-dispatch-ipc`
+integration build and must be refreshed to its merged runtime before this client
+merges. Native dispatch adoption and full-stack acceptance remain separate work.
 
 ## Preview releases
 

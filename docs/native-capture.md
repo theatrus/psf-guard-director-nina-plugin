@@ -145,7 +145,7 @@ imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
 
-Runtime 0.5.0 / IPC 6 provides opt-in persistence through
+Runtime 0.6.0 / IPC 7 provides opt-in persistence through
 `RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
 an existing absolute, private, local Director-owned directory, scoped to its
 rig/profile and allocation. Do not accept this path from a server assignment.
@@ -427,7 +427,7 @@ distributed in the plugin archive; the installed NINA host owns those files.
 
 ### Geometry-bound runtime client
 
-`RuntimeController.OpenGeometryAsync` opens the IPC 6 geometry ledger using an
+`RuntimeController.OpenGeometryAsync` opens the IPC 7 geometry ledger using an
 immutable `DirectorProgram` and `DirectorConstraints`. Evaluate, begin, advance,
 and final reservation require the complete fresh constraint snapshot. Rig IDs
 are checked before the request enters the pipe; the shared Rust core validates
@@ -468,6 +468,28 @@ compare current native profile/equipment state again after inherited triggers
 and at hardware dispatch. No finite set of snapshot reads prevents later changes.
 Do not construct permissive placeholder constraints or treat a successful ledger
 reservation as that last validation.
+
+### Dispatch feasibility after native hooks
+
+`CheckGeometryPendingDispatchAsync` takes the exact issued preparation command.
+`CheckGeometryCaptureDispatchAsync` takes the preparation ID and original reserved
+attempt. Both require a fresh complete configuration, constraints and state after
+the native before-hooks. Rust rechecks the remaining operation cost, capture
+overhead, horizon, meridian policy and current safety conditions. Refusals persist
+in the ledger without issuing another command or refunding an attempt.
+
+These APIs return feasibility, not dispatch authority. An `Acquire` reply must
+match the exact original goal, and it cannot authorize an `InFlight` command or
+`Existing` reservation discovered during recovery. The caller must retain its
+original-session, one-shot authority and repeat native validation at dispatch.
+The production native adapter has not adopted these calls yet.
+
+A post-reservation refusal can produce a `Captured` preparation with `Halted`
+set: here `Captured` means linked to a durable capture reservation, not proof
+that the camera exposed. Decoding permits this combination while still rejecting
+pending commands, failed or uncertain preparation observations, and non-refusal
+halt values. Original capture evidence remains available for late save receipts.
+The client requires IPC 7; older runtimes cannot negotiate this contract.
 
 ### Capture evidence
 
