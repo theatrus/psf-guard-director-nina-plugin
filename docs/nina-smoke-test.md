@@ -99,23 +99,29 @@ Do not interact with equipment/profile controls while the probe is running.
 
 The sequence starts the verified sidecar, connects the three simulators,
 unparks, and slews a small offset from the simulated position. It supplies a
-fixture assignment with three prioritized one-exposure filter goals to Rust.
-Rust selects the next goal; the host prepares its filter, obtains a fresh Rust
-decision at the adapter's dispatch callback, and captures through `NinaCaptureAdapter`.
+immutable fixture program with three prioritized one-exposure filter goals to
+Rust's durable ledger. Rust selects goals and issues filter/readout preparation
+commands. The probe runs the matching public NINA sequence items with one
+attempt, checks their final status, and reports monotonic operation durations.
+Rust rechecks the boundary when reserving each prepared capture. The host obtains
+its saved binding and captures through `NinaProgramCapture` and `NinaCaptureAdapter`.
 It waits for correlated save receipts, reloads each FITS through N.I.N.A., checks
 `PGCAPID` and nonblank pixel data, and compares the durable journal with the
 returned evidence. Cleanup parks and disconnects the simulators and stops the
 sidecar, including after a capture failure. Cleanup failures fail the test.
-Each successful save increments pending work and consumes one fixture attempt;
-it does not mark the image accepted. The final Rust result must be
-`wait: pending_assessment`, not `complete`.
+Each successful save is recorded in Rust; the C# probe no longer edits pending
+counts or attempt budgets. A save is not an accepted grade. The final Rust result
+must be `wait: pending_assessment`, not `complete`. The probe then restarts the
+sidecar, reopens the same immutable program, and checks ledger identity and
+pending progress survived without another capture.
 
 Inspect `<test-root>/probe/<run-id>/result.json` for `passed: true`, three
 captures, and no errors. Images live under `<test-root>/images`; journals are
 under the run's `journal` directory. The launcher returns after startup, not
 after completion: an absent result is **not** a pass. The N.I.N.A. log records
-each probe step. The result also records every planner snapshot and evaluation,
-including revalidation after filter preparation. Close the isolated app after
+each probe step. The result records ledger decisions, six preparation receipts,
+the ledger identity, equipment/constraint snapshots, and saved captures. The
+Rust ledger is in the run's `state` directory. Close the isolated app after
 inspecting the result.
 
 The test assembly and profile/sequence fixtures are excluded from the plugin
@@ -124,14 +130,18 @@ and fixture contracts; it does not run a desktop ASCOM sequence.
 
 ### Scope
 
-This is Rust-selected native capture with a local fixture assignment, not a
+This is durable Rust-program native capture with a local fixture, not a
 production autonomous Director session. The dispatch callback checks simulator
-context and asks the real core again, but there is no PSF Guard assignment,
-durable sidecar ledger, or resume/retry path. The host applies saved-image
-evidence to pending counts; selection remains in Rust. The fixture hard-codes
+context, unchanged horizon/configuration, the fixture deadline, and the reserved
+attempt. A binding lookup is not production dispatch authorization. There is no
+PSF Guard assignment or automatic crash/resume path. The fixture hard-codes
 simulated-safe conditions and unrestricted eligibility, so it cannot validate
 physical sky visibility or hardware safety. No TS, Sync, or Chatstronomy plugin
-is installed in this profile.
+is installed in this profile. Native preparation items run through NINA's `Run`
+with explicit result checking, but this probe is not a Director container and
+does not prove inherited trigger/condition semantics. In particular, NINA can
+swallow item failures or return after cancellation; a returned task alone must
+never be recorded as a successful equipment operation.
 
 Remaining full-stack coverage includes the server assignment/feedback loop,
 core-authorized dispatch and replanning, autofocus/plate solving/guiding,

@@ -241,8 +241,9 @@ including same-path horizon changes, as described below.
 
 Regression tests validate a native snapshot with the real Rust program validator.
 The isolated ASCOM probe records the connected simulators' capabilities and
-checks that their identity survives three captures. Its acquisition still uses
-the existing stateless probe assignment, not a production program-bound session.
+checks that their identity survives three captures. It binds those capabilities
+to a durable fixture program and checks saved progress after a sidecar restart.
+It is not a production session or server allocation.
 
 ### Native constraint snapshot
 
