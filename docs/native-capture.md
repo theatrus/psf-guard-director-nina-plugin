@@ -369,6 +369,34 @@ Regression tests run the native container strategy with inherited triggers,
 condition-based skipping, cancellation, altered settings, driver failures,
 no-op readout, unsettled filters, reset, clone, and concurrent-entry cases.
 
+## Native exposure lifecycle
+
+`NinaExposureItem` is an internal transient `SequenceItem` implementing NINA's
+`IExposureItem`. It exposes the reserved LIGHT recipe to exposure-aware native
+triggers (including autofocus, guiding, and dither), while dispatch still uses
+`NinaProgramCapture` and the correlated-save adapter. Native containers own
+inherited before/after triggers and conditions. The item performs final recipe
+and boundary validation after before-triggers; an inherited hook cannot silently
+change its exposure, gain, offset, binning, or image type. Estimated duration is
+the immutable exposure duration, matching the native exposure-item convention;
+it is not a whole-operation timing estimate or a visibility authorization.
+
+Each item can enter execution once. Native retry, clone, reset, and concurrent
+entry cannot repeat a reservation. It waits for the correlated save before
+returning, so after-exposure hooks observe saved evidence. A saved receipt stays
+available even if a later reset or hook fails. The owner must deliver that
+evidence to the ledger and decide whether execution may continue separately.
+Errors remain available even when NINA catches them. Missing evidence is never
+proof that no exposure happened; skipped, canceled, abandoned, and uncertain
+operations still need the session's reconciliation rules.
+
+This is not a public acquisition container. Target context, production
+authorization after slow hooks, hook-failure propagation, timing of inherited
+operations, and the complete TS-style session options remain required. Tests
+exercise the real native strategy and confirm native RestoreGuiding recognizes
+the item as a LIGHT exposure; they do not prove every native/third-party trigger.
+The ASCOM probe also checks inherited before/after hooks in the real nightly host.
+
 ## Recovery and validation limits
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
