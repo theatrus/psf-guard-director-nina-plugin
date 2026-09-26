@@ -10,7 +10,6 @@
   "ChangelogURL": "https://github.com/theatrus/psf-guard-director-nina-plugin/releases",
   "Tags": ["psf-guard", "director", "experimental"],
   "MinimumApplicationVersion": { "Major": 3, "Minor": 3, "Patch": 0, "Build": 1058 },
-  "Channel": "Beta",
   "Descriptions": {
     "ShortDescription": "Experimental PSF Guard Director runtime preview. Acquisition is not yet available.",
     "LongDescription": "Early preview of PSF Guard Director for NINA 3.3 nightly. This package provides an explicitly started, verified Rust runtime with status reporting and profile-scoped shutdown. It does not yet provide pairing, observing assignments, or an acquisition sequence container. Do not use it to run an unattended imaging session. Director is separate from PSF Guard Sync and does not replace or change Sync."

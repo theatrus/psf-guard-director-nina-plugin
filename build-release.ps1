@@ -12,7 +12,10 @@ try {
     if ([Reflection.AssemblyName]::GetAssemblyName($assembly).Version -ne $version) {
         throw 'Manifest version does not match the built plugin.'
     }
-    if ($manifest.Channel -ne 'Beta') { throw 'Director releases are experimental until the acquisition gates pass.' }
+    if ($manifest.ContainsKey('Channel') -or $manifest.Tags -notcontains 'experimental' -or
+        !$manifest.Descriptions.ShortDescription.Contains('Acquisition is not yet available.')) {
+        throw 'The shared registry feed requires explicit preview labeling and no Channel override.'
+    }
     $tag = "$version-preview.1"
     $name = "PSFGuardDirector-$version.zip"
     $archive = Join-Path $PSScriptRoot "artifacts/$name"

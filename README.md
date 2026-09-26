@@ -15,7 +15,7 @@ dependency of Director, and chat commands remain subject to local permissions
 and safe execution boundaries.
 
 The architecture and acceptance gates live in
-[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/codex/director-ledger-ipc/docs/design/director.md).
+[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md).
 This repository is not a stable plugin release and has no acquisition support yet.
 
 ## Runtime preview
@@ -96,7 +96,10 @@ prerelease using the reported tag. Never replace assets on an existing release.
 Copy the generated manifest, not its template, into the theatr.us registry at
 `manifests/p/PSF Guard Director/3.3.0.1058/manifest.json`. Verify the published
 archive checksum and the live registry response before calling the release done.
-Director uses the Beta channel and requires N.I.N.A. 3.3 nightly #58 or newer.
+The registry uses a single feed and rejects non-Release channels, so the manifest
+omits `Channel`. The description and GitHub prerelease label explicitly identify
+Director as experimental; feed placement does not make it stable. It requires
+N.I.N.A. 3.3 nightly #58 or newer.
 This runtime preview is not an acquisition controller and does not change Sync.
 
 ## License
