@@ -41,6 +41,7 @@ internal sealed class NinaConstraintSnapshot : IDisposable
     }
 
     internal long Generation => Interlocked.Read(ref generation);
+    internal bool IsCurrent(long expectedGeneration) => !disposed && Generation == expectedGeneration;
     private void Changed(object? sender, EventArgs args) => Interlocked.Increment(ref generation);
     private void ProfileChanged(object? sender, EventArgs args)
     {

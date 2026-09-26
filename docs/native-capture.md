@@ -446,11 +446,28 @@ are rejected intact before sending, not resampled. IEEE double vertices and
 death, matching-binding recovery, constraint changes with reused IDs, and late
 or unsafe final reservation. They do not replace the native-host acceptance gate.
 
+`NinaGeometrySnapshot` joins the native constraint reader and equipment exporter
+into one immutable native/configuration/wire snapshot. It retains every horizon
+breakpoint, including adjacent-double obstructions and unequal 0/360 endpoints.
+Only numeric site/curve/policy data enters the wire snapshot; local paths stay
+local. Required horizons never fall back to fixed minimum. Explicit fixed-minimum
+mode remains supported when no horizon is configured in NINA.
+
+The equipment binding must name the exact native constraint fingerprint. A file,
+site, flip, minimum-altitude or meridian-policy change blocks export until the
+owner rebuilds its rig configuration. Two fresh native/disk reads and equipment
+reads check for changes during export; events and disposal invalidate the result.
+The caller supplies goal limits, rig maximum altitude, a nonzero revision and a
+valid Earth-orientation snapshot explicitly. Rust still owns their numeric and
+astronomical validation. The adapter neither fetches EOP data nor inserts a
+zero-valued default, resamples the curve, or computes windows.
+
 This client is not yet wired into a production NINA container. The owner must
-export `NinaConstraintSnapshot` at each boundary, obtain a valid Earth-orientation
-snapshot, and compare current native profile/equipment state again after inherited
-triggers and at hardware dispatch. Do not construct permissive placeholder
-constraints or treat a successful ledger reservation as that last validation.
+call the exporter at each boundary, obtain valid Earth-orientation data, and
+compare current native profile/equipment state again after inherited triggers
+and at hardware dispatch. No finite set of snapshot reads prevents later changes.
+Do not construct permissive placeholder constraints or treat a successful ledger
+reservation as that last validation.
 
 ### Capture evidence
 

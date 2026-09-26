@@ -104,7 +104,9 @@ constraints. The shared Rust core computes whole-operation visibility and
 preserves its original binding across restarts; the C# client never computes
 replacement windows. Old program-only calls cannot bypass geometry mode.
 This development pin uses the reviewed runtime from merged PSF Guard #483.
-NINA horizon export, production dispatch, and the full server
+The internal native geometry exporter now joins NINA's complete
+horizon/site snapshot with the matching equipment fingerprint for this client.
+Production dispatch, an Earth-orientation data source, and the full server
 acceptance gate still need to be connected. The published preview is unchanged.
 
 ## Preview releases
