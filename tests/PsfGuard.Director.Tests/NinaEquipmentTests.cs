@@ -201,7 +201,7 @@ public sealed class NinaEquipmentTests
         finally { directory.Delete(true); }
     }
 
-    private sealed class Fixture
+    internal sealed class Fixture
     {
         internal readonly Mock<IProfile> Profile = new();
         internal readonly Mock<IProfileService> Profiles = new();

@@ -98,11 +98,15 @@ an unconfirmed isolation root, or an image destination outside the test root.
 Do not interact with equipment/profile controls while the probe is running.
 
 The sequence starts the verified sidecar, connects the three simulators,
-unparks, and slews a small offset from the simulated position. It supplies a
+unparks, and slews a small offset from the simulated position. It supplies an
 immutable fixture program with three prioritized one-exposure filter goals to
 Rust's durable ledger. Rust selects goals and issues filter/readout preparation
-commands. The probe runs the matching public NINA sequence items with one
-attempt, checks their final status, and reports monotonic operation durations.
+commands. The probe runs matching native NINA items inside a transient native
+sequential container. Each item allows one dispatch, revalidates after inherited
+before-triggers, and verifies the resulting readout or settled filter state.
+The probe requires both a finished item and a successful completion receipt.
+Reported monotonic durations cover dispatch validation and the operation, not
+the preceding inherited triggers.
 Rust rechecks the boundary when reserving each prepared capture. The host obtains
 its saved binding and captures through `NinaProgramCapture` and `NinaCaptureAdapter`.
 It waits for correlated save receipts, reloads each FITS through N.I.N.A., checks
@@ -137,9 +141,10 @@ attempt. A binding lookup is not production dispatch authorization. There is no
 PSF Guard assignment or automatic crash/resume path. The fixture hard-codes
 simulated-safe conditions and unrestricted eligibility, so it cannot validate
 physical sky visibility or hardware safety. No TS, Sync, or Chatstronomy plugin
-is installed in this profile. Native preparation items run through NINA's `Run`
-with explicit result checking, but this probe is not a Director container and
-does not prove inherited trigger/condition semantics. In particular, NINA can
+is installed in this profile. Native preparation items run through NINA's normal
+container strategy. Automated tests exercise inherited triggers and conditions;
+this desktop fixture has no custom inherited hooks and is not a production
+Director session container. In particular, NINA can
 swallow item failures or return after cancellation; a returned task alone must
 never be recorded as a successful equipment operation.
 
@@ -149,6 +154,15 @@ safety and meridian/horizon boundaries, crash recovery, and coexistence with
 Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
+
+On 2026-09-26, plugin commit `5e79f86` passed the same nightly #58/OmniSim
+fixture with one-use native preparation items inside transient sequential
+containers. Six operation receipts and all three RGB FITS captures passed;
+the restarted ledger remained pending assessment. Cleanup completed without
+errors. Evidence is in
+`artifacts/nina-smoke-049cae0efc384c7bba1746c9e972265f/probe/3062a6f2a75646fa845a80678a458c2a/result.json`.
+All 331 automated plugin tests also passed. The isolated NINA process was closed
+after inspecting its completed image view and disconnected equipment state.
 
 On 2026-09-26, nightly #58 with the same OmniSim devices passed the durable
 program probe at plugin commit `2abde35`. Rust issued six filter/readout

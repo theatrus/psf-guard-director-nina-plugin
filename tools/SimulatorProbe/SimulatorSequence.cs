@@ -161,6 +161,7 @@ public sealed class SimulatorSequence : SequenceItem
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
             var boundCapture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
+            var nativeItems = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System);
             if (equipment.Gain is not CameraControl.Unsupported || equipment.Offset is not CameraControl.Unsupported)
                 throw new InvalidOperationException("This fixture requires OmniSim's unsupported gain and offset controls.");
             static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -176,6 +177,12 @@ public sealed class SimulatorSequence : SequenceItem
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
             PlannerState State() => new("ascom-smoke", equipment.Id, NowMs(), started + 180000,
                 PlannerSafety.Safe, true, false, new(0, 0));
+            async Task ValidateBoundary(CancellationToken cancellation)
+            {
+                await Revalidate(cancellation);
+                if (constraintReader.Refresh(constraintBinding).Revision != constraints.Revision || NowMs() >= assignment.ExpiresAtMs)
+                    throw new InvalidOperationException("Simulator fixture constraints or deadline changed.");
+            }
             ledger = Require(await runtime.OpenProgramAsync(program, State(), lifetime.Token));
             async Task<PlannerDecision> Evaluate()
             {
@@ -204,16 +211,17 @@ public sealed class SimulatorSequence : SequenceItem
                     if (next is not PreparationNext.Run issued || count >= 2)
                         throw new InvalidOperationException("Fixture preparation was not a new bounded operation.");
                     var operation = issued.Command;
-                    var item = CreatePreparationItem(operation.Operation, profiles, camera, filters, equipmentBinding);
-                    item.Attempts = 1;
-                    item.AttachNewParent(Parent);
+                    var issuedItem = nativeItems.Create(next, program, equipmentBinding, ValidateBoundary);
+                    var item = issuedItem.Item;
+                    var block = new NINA.Sequencer.Container.SequentialContainer();
+                    block.AttachNewParent(Parent);
+                    block.Add(item);
                     Step($"Executing native {operation.Operation.GetType().Name}");
-                    var operationStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                    await item.Run(progress, lifetime.Token);
-                    if (item.Status != NINA.Core.Enum.SequenceEntityStatus.FINISHED)
+                    try { await block.Run(progress, lifetime.Token); }
+                    finally { block.Remove(item); block.AttachNewParent(null); }
+                    if (item.Status != NINA.Core.Enum.SequenceEntityStatus.FINISHED
+                        || issuedItem.Fence.Completion is not { Outcome: PreparationOutcome.Succeeded } completion)
                         throw new InvalidOperationException("Native preparation did not finish successfully; leave the ledger unresolved.");
-                    var completion = new PreparationCompletion(preparationId, operation.Ordinal, NowMs(),
-                        checked((ulong)Math.Ceiling(System.Diagnostics.Stopwatch.GetElapsedTime(operationStart).TotalMilliseconds)), new PreparationOutcome.Succeeded());
                     Require(await runtime.CompletePreparationAsync(completion, lifetime.Token));
                     operations.Add(completion);
                 }
@@ -225,9 +233,7 @@ public sealed class SimulatorSequence : SequenceItem
                 Step($"Capturing simulator exposure {captures.Count + 1}/3");
                 var evidence = await boundCapture.CaptureAsync(reservation, binding, equipmentBinding, async cancellation =>
                 {
-                    await Revalidate(cancellation);
-                    if (constraintReader.Refresh(constraintBinding).Revision != constraints.Revision || NowMs() >= assignment.ExpiresAtMs)
-                        throw new InvalidOperationException("Simulator fixture constraints or deadline changed.");
+                    await ValidateBoundary(cancellation);
                     var currentBinding = Require(await runtime.FindCaptureBindingAsync(captureId, cancellation)).Binding;
                     if (currentBinding?.Attempt != binding.Attempt || currentBinding.Attempt.Evidence is not LedgerEvidence.Reserved)
                         throw new InvalidOperationException("Simulator reservation changed before dispatch.");
@@ -326,20 +332,6 @@ public sealed class SimulatorSequence : SequenceItem
 
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
-
-    internal static SequenceItem CreatePreparationItem(PreparationOperation operation, IProfileService profiles,
-        ICameraMediator camera, IFilterWheelMediator filters, NinaEquipmentBinding binding) => operation switch
-        {
-            // ComboBoxText sanitizes numeric text as an identifier ("0" -> "_0").
-            // The typed property supplies a constant expression for the exact slot.
-            PreparationOperation.SwitchFilter filter => new NINA.Sequencer.SequenceItem.FilterWheel.SwitchFilter(profiles, filters)
-            {
-                Xfilter = binding.Filters.Single(f => f.Id == filter.FilterId).Position
-                    ?? throw new InvalidOperationException("This fixture requires a wheel slot.")
-            },
-            PreparationOperation.SetReadoutMode mode => new NINA.Sequencer.SequenceItem.Camera.SetReadoutMode(camera) { Mode = mode.Mode },
-            _ => throw new InvalidOperationException("Unexpected simulator preparation operation.")
-        };
 
     private string ValidateEnvironment() => ValidateEnvironment(
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
