@@ -24,6 +24,9 @@ jobs:
         shell: pwsh
         run: ./tools/fetch-nina-test-dependencies.ps1
       - run: dotnet format --verify-no-changes --no-restore
+      - name: Runtime fetch regression checks
+        shell: pwsh
+        run: ./tools/test-runtime-fetch.ps1
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"
       - name: Stress ledger and preparation recovery
