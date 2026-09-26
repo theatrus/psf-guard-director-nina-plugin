@@ -145,7 +145,7 @@ imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
 
-Runtime 0.4.0 / IPC 5 provides opt-in persistence through
+Runtime 0.5.0 / IPC 6 provides opt-in persistence through
 `RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
 an existing absolute, private, local Director-owned directory, scoped to its
 rig/profile and allocation. Do not accept this path from a server assignment.
@@ -424,6 +424,35 @@ Target tests use pinned SOFA, NOVAS, and ephemeris test dependencies, fetched by
 distributed in the plugin archive; the installed NINA host owns those files.
 
 ## Recovery and validation limits
+
+### Geometry-bound runtime client
+
+`RuntimeController.OpenGeometryAsync` opens the IPC 6 geometry ledger using an
+immutable `DirectorProgram` and `DirectorConstraints`. Evaluate, begin, advance,
+and final reservation require the complete fresh constraint snapshot. Rig IDs
+are checked before the request enters the pipe; the shared Rust core validates
+the site, Earth-orientation validity, horizon, goal limits and meridian policy.
+No geometry, window thinning or scheduling policy is duplicated in C#.
+
+The geometry mode is explicit and cannot fall back to program-only preparation,
+evaluation or reservation calls. Operation replies still pass the existing
+target, recipe and equipment checks. Receipts, pending-work discovery, exact
+capture bindings and event replay use the same shared client paths. A recovered
+`Existing` reservation is evidence, never permission to dispatch again.
+
+The complete operation must fit the 262,144-byte wire limit. Oversized horizons
+are rejected intact before sending, not resampled. IEEE double vertices and
+64-bit revision values retain their precision. Real-child tests cover process
+death, matching-binding recovery, constraint changes with reused IDs, and late
+or unsafe final reservation. They do not replace the native-host acceptance gate.
+
+This client is not yet wired into a production NINA container. The owner must
+export `NinaConstraintSnapshot` at each boundary, obtain a valid Earth-orientation
+snapshot, and compare current native profile/equipment state again after inherited
+triggers and at hardware dispatch. Do not construct permissive placeholder
+constraints or treat a successful ledger reservation as that last validation.
+
+### Capture evidence
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already
 observed wins a simultaneous cancellation, whether it reports success or failure.
