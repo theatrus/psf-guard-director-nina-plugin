@@ -6,7 +6,7 @@
     <RootNamespace>PsfGuard.Director.Plugin</RootNamespace>
     <Version>0.1.0.0</Version>
     <Title>PSF Guard Director</Title>
-    <Description>Goal-driven acquisition for PSF Guard. Experimental runtime preview.</Description>
+    <Description>Experimental PSF Guard Director runtime preview. Acquisition is not yet available.</Description>
     <Company>Yann Ramin (@theatrus)</Company>
     <Product>PSF Guard Director</Product>
     <Copyright>Copyright 2026 Yann Ramin</Copyright>

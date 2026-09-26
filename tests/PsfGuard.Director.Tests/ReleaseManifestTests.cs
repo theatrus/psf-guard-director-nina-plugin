@@ -39,6 +39,7 @@ public sealed class ReleaseManifestTests
         foreach (var key in new[] { "Homepage", "Repository", "License", "LicenseURL" })
             Assert.Equal(metadata[key], template[key]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], template["Descriptions"]!["ShortDescription"]!.GetValue<string>());
+        Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
         Assert.Contains("Acquisition is not yet available", metadata["ShortDescription"]);
         Assert.Null(template["Channel"]);
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "experimental");
