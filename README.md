@@ -103,8 +103,8 @@ Each evaluation, preparation boundary, and final reservation requires fresh
 constraints. The shared Rust core computes whole-operation visibility and
 preserves its original binding across restarts; the C# client never computes
 replacement windows. Old program-only calls cannot bypass geometry mode.
-This development pin depends on PSF Guard #483 and must not merge before that
-runtime change. NINA horizon export, production dispatch, and the full server
+This development pin uses the reviewed runtime from merged PSF Guard #483.
+NINA horizon export, production dispatch, and the full server
 acceptance gate still need to be connected. The published preview is unchanged.
 
 ## Preview releases
