@@ -98,18 +98,25 @@ an unconfirmed isolation root, or an image destination outside the test root.
 Do not interact with equipment/profile controls while the probe is running.
 
 The sequence starts the verified sidecar, connects the three simulators,
-unparks, slews a small offset from the simulated position, changes through three
-filters, and captures three one-second lights through `NinaCaptureAdapter`.
+unparks, and slews a small offset from the simulated position. It supplies a
+fixture assignment with three prioritized one-exposure filter goals to Rust.
+Rust selects the next goal; the host prepares its filter, obtains a fresh Rust
+decision at the adapter's dispatch callback, and captures through `NinaCaptureAdapter`.
 It waits for correlated save receipts, reloads each FITS through N.I.N.A., checks
 `PGCAPID` and nonblank pixel data, and compares the durable journal with the
 returned evidence. Cleanup parks and disconnects the simulators and stops the
 sidecar, including after a capture failure. Cleanup failures fail the test.
+Each successful save increments pending work and consumes one fixture attempt;
+it does not mark the image accepted. The final Rust result must be
+`wait: pending_assessment`, not `complete`.
 
 Inspect `<test-root>/probe/<run-id>/result.json` for `passed: true`, three
 captures, and no errors. Images live under `<test-root>/images`; journals are
 under the run's `journal` directory. The launcher returns after startup, not
 after completion: an absent result is **not** a pass. The N.I.N.A. log records
-each probe step. Close the isolated app after inspecting the result.
+each probe step. The result also records every planner snapshot and evaluation,
+including revalidation after filter preparation. Close the isolated app after
+inspecting the result.
 
 The test assembly and profile/sequence fixtures are excluded from the plugin
 ZIP by its explicit file allowlist. CI compiles the probe and tests its guard
@@ -117,11 +124,14 @@ and fixture contracts; it does not run a desktop ASCOM sequence.
 
 ### Scope
 
-This is a native adapter and sidecar-transport test, not autonomous Director
-execution. The test-only dispatch callback checks simulator context; it does
-not obtain a Rust planning decision or a PSF Guard assignment. The fixed three
-captures are a test fixture, not a new C# scheduler. No TS, Sync, or Chatstronomy
-plugin is installed in this profile.
+This is Rust-selected native capture with a local fixture assignment, not a
+production autonomous Director session. The dispatch callback checks simulator
+context and asks the real core again, but there is no PSF Guard assignment,
+durable sidecar ledger, or resume/retry path. The host applies saved-image
+evidence to pending counts; selection remains in Rust. The fixture hard-codes
+simulated-safe conditions and unrestricted eligibility, so it cannot validate
+physical sky visibility or hardware safety. No TS, Sync, or Chatstronomy plugin
+is installed in this profile.
 
 Remaining full-stack coverage includes the server assignment/feedback loop,
 core-authorized dispatch and replanning, autofocus/plate solving/guiding,
@@ -140,5 +150,11 @@ the preceding filter changes or slews. The mount parked, all three simulators
 disconnected, and the owned sidecar exited. The image was also visible in
 N.I.N.A.'s Imaging view with populated star/HFR history.
 
-The automated suite passed 81 tests, including ten probe guard/fixture cases.
+The original transport-only probe passed 81 automated tests. A follow-on real
+nightly run with the typed planner bridge passed three Rust-selected captures,
+including six acquisition decisions (selection and revalidation per filter) and
+one terminal `wait: pending_assessment`. All FITS readbacks and journals matched;
+cleanup completed without errors. The extended automated suite passed 102 tests,
+covering real-core outcomes, preparation-induced reselection, malformed and
+uncorrelated replies, deadlines, cancellation, and lifecycle/concurrency behavior.
 The simulator desktop run is local evidence, not a hosted CI result.

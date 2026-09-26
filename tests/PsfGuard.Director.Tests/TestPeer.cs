@@ -10,21 +10,23 @@ internal sealed class TestPeer : IAsyncDisposable
     private readonly NamedPipeServerStream server;
     private readonly CancellationTokenSource lifetime = new(TimeSpan.FromSeconds(15));
     private readonly string fault;
+    private readonly Func<JsonElement, JsonObject>? evaluation;
     private Task? worker;
     internal TaskCompletionSource PingSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal RuntimeSession Session { get; private set; } = null!;
 
-    private TestPeer(NamedPipeServerStream server, string fault)
+    private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation)
     {
         this.server = server;
         this.fault = fault;
+        this.evaluation = evaluation;
     }
 
-    internal static async Task<TestPeer> CreateAsync(string fault)
+    internal static async Task<TestPeer> CreateAsync(string fault, Func<JsonElement, JsonObject>? evaluation = null)
     {
         var name = "director-test-" + Guid.NewGuid().ToString("N");
         var peer = new TestPeer(new NamedPipeServerStream(name, PipeDirection.InOut, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault);
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault, evaluation);
         var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
@@ -64,7 +66,10 @@ internal sealed class TestPeer : IAsyncDisposable
             }
             PingSeen.TrySetResult();
             if (fault == "stall") { await Task.Delay(Timeout.Infinite, lifetime.Token); return; }
-            var reply = Reply(request, new JsonObject { ["type"] = "pong" });
+            var payload = request.GetProperty("payload");
+            var reply = Reply(request, payload.GetProperty("type").GetString() == "evaluate" && evaluation is not null
+                ? new JsonObject { ["type"] = "decision", ["response"] = evaluation(payload.GetProperty("request")) }
+                : new JsonObject { ["type"] = "pong" });
             switch (fault)
             {
                 case "session": reply["session_id"] = "old-session"; break;

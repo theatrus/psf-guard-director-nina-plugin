@@ -4,6 +4,8 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Collections.Immutable;
 using NINA.Astrometry;
 using NINA.Core.Model;
 using NINA.Core.Model.Equipment;
@@ -31,7 +33,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 public sealed class ProbeManifest : PluginBase { }
 
 // Deliberately absent from the release bundle. This is not a Director session
-// and its simulator-only dispatch callback is not planner authorization.
+// and its fixture assignment is not server authorization.
 [Export(typeof(ISequenceItem))]
 [ExportMetadata("Name", "Director ASCOM smoke test")]
 [ExportMetadata("Description", "Test-only native capture probe for an isolated simulator profile")]
@@ -81,6 +83,7 @@ public sealed class SimulatorSequence : SequenceItem
         var steps = new List<string>();
         var errors = new List<Exception>();
         var captures = new List<CaptureEvidence>();
+        var evaluations = new List<PlannerEvaluation>();
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime.CancelAfter(TimeSpan.FromMinutes(5));
@@ -112,7 +115,7 @@ public sealed class SimulatorSequence : SequenceItem
         }
         try
         {
-            Step("Starting verified sidecar (transport only)");
+            Step("Starting verified planning sidecar");
             await runtime.StartAsync("ascom-smoke", lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
             Step("Connecting ASCOM OmniSim camera, telescope and filter wheel");
@@ -137,16 +140,44 @@ public sealed class SimulatorSequence : SequenceItem
             if (!await telescope.SlewToCoordinatesAsync(target, lifetime.Token)) throw new IOException("Slew failed.");
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
-            for (short i = 0; i < 3; i++)
+            static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var started = NowMs();
+            var assignment = new PlannerAssignment($"smoke-{Path.GetFileName(run)}", 1, "ascom-smoke", "omnisim",
+                started, started + 180000, Enumerable.Range(0, 3).Select(i => new PlannerGoal(
+                    $"filter-{i}", (uint)(3 - i), 1, 0, 0, 1, 1000, 5000, [new(started, started + 180000)])).ToImmutableArray());
+            var filterPositions = new Dictionary<string, short> { ["filter-0"] = 0, ["filter-1"] = 1, ["filter-2"] = 2 };
+            async Task<PlannerEvaluation> Evaluate()
             {
                 await Revalidate(lifetime.Token);
+                var snapshot = new PlannerRequest(assignment, new("ascom-smoke", "omnisim", NowMs(),
+                    started + 180000, PlannerSafety.Safe, true, false, new(0, 0)));
+                var result = await runtime.EvaluateAsync(snapshot, lifetime.Token);
+                evaluations.Add(result);
+                Step($"Rust planner: {result.Decision?.Action.ToString() ?? result.Error?.ToString()} {result.Decision?.GoalId}");
+                if (result.Error is not null) throw new InvalidDataException($"Planner rejected simulator snapshot: {result.Error}");
+                return result;
+            }
+            while (true)
+            {
+                var selected = (await Evaluate()).Decision!;
+                if (selected.Action == PlannerAction.Wait && selected.Reason == "pending_assessment" && captures.Count == 3) break;
+                if (selected.Action != PlannerAction.Acquire || selected.GoalId is null || captures.Count >= 3)
+                    throw new InvalidOperationException("Unexpected simulator planner outcome.");
+                var goal = assignment.Goals.Single(g => g.Id == selected.GoalId);
+                var i = filterPositions[goal.Id];
                 Step($"Selecting simulator filter {i}");
                 await filters.ChangeFilter(new FilterInfo { Name = $"Smoke-{i}", Position = i }, lifetime.Token, progress);
-                Step($"Capturing simulator exposure {i + 1}/3");
+                Step($"Capturing simulator exposure {captures.Count + 1}/3");
                 var intent = new CaptureIntent(Guid.NewGuid(), profileId, "ascom-smoke", "omnisim",
-                    "test-fixture-not-server-assignment", 1, $"filter-{i}", "ASCOM.OmniSim.Camera", 1,
+                    assignment.Id, assignment.Revision, goal.Id, "ASCOM.OmniSim.Camera", goal.ExposureMs / 1000.0,
                     "Director ASCOM Smoke", catalogTarget.RA * 15, catalogTarget.Dec, 0);
-                var evidence = await adapter.CaptureAsync(intent, Revalidate, progress, lifetime.Token);
+                var evidence = await adapter.CaptureAsync(intent, async cancellation =>
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    var fresh = (await Evaluate()).Decision!;
+                    if (fresh.Action != PlannerAction.Acquire || fresh.GoalId != goal.Id)
+                        throw new InvalidOperationException("Planner no longer recommends this capture after preparation.");
+                }, progress, lifetime.Token);
                 if (evidence.Phase != CapturePhase.Saved || !File.Exists(evidence.SavedPath))
                     throw new IOException("Capture has no confirmed file.");
                 var restored = await imageFactory.CreateFromFile(evidence.SavedPath, 16, false, lifetime.Token);
@@ -158,6 +189,13 @@ public sealed class SimulatorSequence : SequenceItem
                 var journal = CaptureJournal.Read(Path.Combine(run, "journal", profileId.ToString("N"), $"{intent.CaptureId:N}.json"));
                 if (journal != evidence) throw new InvalidDataException("Durable journal differs from the save receipt.");
                 captures.Add(evidence);
+                // Save evidence reserves pending work; only a future PSF Guard grade
+                // can credit accepted work. This fixture has no resume/retry path.
+                assignment = assignment with
+                {
+                    Goals = assignment.Goals.Select(g => g.Id == goal.Id
+                    ? g with { Pending = g.Pending + 1, AttemptsRemaining = g.AttemptsRemaining - 1 } : g).ToImmutableArray()
+                };
             }
             await Revalidate(lifetime.Token);
             Step("Three captures saved with correlated receipts");
@@ -191,13 +229,19 @@ public sealed class SimulatorSequence : SequenceItem
             {
                 passed = errors.Count == 0 && captures.Count == 3,
                 nina = "3.3.0.1058",
-                scope = "native-adapter-and-runtime-transport-not-planning-or-server",
+                scope = "rust-selected-native-capture-with-fixture-assignment-not-server-or-recovery",
                 steps,
+                evaluations,
                 captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
                 errors = errors.Select(e => e.ToString())
             };
             var output = Path.Combine(run, "result.json");
-            await File.WriteAllTextAsync(output + ".tmp", JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+            await File.WriteAllTextAsync(output + ".tmp", JsonSerializer.Serialize(result, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) }
+            }));
             File.Move(output + ".tmp", output);
             Logger.Info($"Director simulator probe result: {output}");
         }

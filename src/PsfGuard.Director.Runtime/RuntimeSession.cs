@@ -8,8 +8,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace PsfGuard.Director.Runtime;
 
-// This host only negotiates and supervises a planner. It exposes no equipment
-// or evaluation API until the execution adapter can enforce decision freshness.
+// The host transports recommendations; it owns no equipment or dispatch permit.
 internal sealed class RuntimeSession : IAsyncDisposable
 {
     private readonly RuntimeBundle? bundle;
@@ -21,6 +20,7 @@ internal sealed class RuntimeSession : IAsyncDisposable
     private ulong nextId = 1;
     private volatile bool ready;
     private int disposed;
+    private string rigId = "";
     internal bool IsReady => ready && Volatile.Read(ref disposed) == 0;
     internal int? ProcessId => process?.Id;
     internal int? ExitCode => process is { HasExited: true } ? process.ExitCode : null;
@@ -118,11 +118,34 @@ internal sealed class RuntimeSession : IAsyncDisposable
             result.GetProperty("contract_version").GetInt32() != RuntimeContract.ContractVersion ||
             result.GetProperty("rig_id").GetString() != rigId)
             throw new InvalidDataException("Runtime identity or version mismatch.");
+        this.rigId = rigId;
         ready = true;
     }
 
     internal Task PingAsync(CancellationToken token) => SendControlAsync("ping", "pong", token);
     internal Task ShutdownAsync(CancellationToken token) => SendControlAsync("shutdown", "stopped", token);
+
+    internal async Task<PlannerEvaluation> EvaluateAsync(PlannerRequest request, CancellationToken token)
+    {
+        var encoded = PlannerContract.Encode(request, rigId);
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            if (!IsReady) throw new IOException("Director runtime session is unavailable.");
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+            deadline.CancelAfter(TimeSpan.FromSeconds(5));
+            var payload = await ExchangeAsync(checked(nextId++), new JsonObject
+            {
+                ["type"] = "evaluate",
+                ["request"] = encoded
+            }, "decision", deadline.Token).ConfigureAwait(false);
+            var result = PlannerContract.Decode(payload.GetProperty("response"), request);
+            deadline.Token.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch { Abort(); throw; }
+        finally { gate.Release(); }
+    }
 
     private async Task SendControlAsync(string command, string expected, CancellationToken token)
     {

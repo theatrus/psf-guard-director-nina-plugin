@@ -48,6 +48,8 @@ internal static class PipeProtocol
         var payload = reply.GetProperty("payload");
         if (type == "ready")
             RequireFields(payload, "type", "runtime_version", "engine_version", "contract_version", "rig_id");
+        else if (type == "decision")
+            RequireFields(payload, "type", "response");
         else
             RequireFields(payload, "type");
         if (payload.GetProperty("type").GetString() != type)

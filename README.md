@@ -72,8 +72,10 @@ hook is not part of the plugin bundle.
 
 The [native capture adapter](docs/native-capture.md) implements journaled capture,
 processing, and correlated save completion behind an internal interface. It is
-not yet wired to a sequencer action or planner authorization, and cannot be
-started from the plugin settings.
+not yet exposed as a production sequencer action and cannot be started from
+the plugin settings. The runtime library now exposes typed planning evaluation;
+the test-only ASCOM sequence exercises Rust-selected capture and pending-image
+feedback. It still uses a local fixture assignment, not server authorization.
 
 ## License
 
