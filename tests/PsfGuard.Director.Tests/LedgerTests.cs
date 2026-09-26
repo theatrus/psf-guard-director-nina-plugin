@@ -106,8 +106,10 @@ public sealed class LedgerTests
             Assert.Equal(identity, (await controller.OpenLedgerAsync(request)).Value);
             Assert.Equal(saved, (await controller.FindAttemptAsync("capture")).Value!.Attempt!.Evidence);
             Assert.Equal(PlannerAction.Wait, (await controller.ReserveAsync("another", request.State)).Value!.Decision!.Action);
+            await controller.StopAsync();
+            Assert.Equal(RuntimeState.Stopped, controller.Status.State);
         }
-        finally { directory.Delete(recursive: true); }
+        finally { await DeleteAfterProcessExitAsync(directory); }
     }
 
     [Fact]
@@ -132,8 +134,10 @@ public sealed class LedgerTests
             Assert.Equal(identity, (await contender.OpenLedgerAsync(request)).Value);
             Assert.Equal(ReservationKind.Existing, (await contender.ReserveAsync("capture", request.State)).Value!.Kind);
             Assert.Equal(ReservationKind.RecoveryRequired, (await contender.ReserveAsync("retry", request.State)).Value!.Kind);
+            await contender.StopAsync();
+            Assert.Equal(RuntimeState.Stopped, contender.Status.State);
         }
-        finally { directory.Delete(recursive: true); }
+        finally { await DeleteAfterProcessExitAsync(directory); }
     }
 
     [Theory]
