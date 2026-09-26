@@ -83,7 +83,12 @@ internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMed
         else
         {
             var gains = cameraInfo.Gains?.Take(257).ToArray() ?? throw new InvalidDataException("NINA gain capabilities are unavailable.");
-            if (gains.Length == 0) gain = Range(cameraInfo.GainMin, cameraInfo.GainMax);
+            // NINA's ASCOM adapter optimistically keeps CanSetGain true until a
+            // setter fails. Unreadable gain with both absent-range sentinels
+            // exposes no usable control; never probe support with a write.
+            if (gains.Length == 0 && !cameraInfo.CanGetGain && cameraInfo.GainMin == -1 && cameraInfo.GainMax == -1)
+                gain = new CameraControl.Unsupported();
+            else if (gains.Length == 0) gain = Range(cameraInfo.GainMin, cameraInfo.GainMax);
             else
             {
                 if (gains.Length > 256 || gains.Any(g => g < 0) || gains.Distinct().Count() != gains.Length)

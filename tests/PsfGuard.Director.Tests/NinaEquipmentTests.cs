@@ -135,6 +135,23 @@ public sealed class NinaEquipmentTests
     }
 
     [Fact]
+    public void AscomAbsentGainSentinelsDoNotAdvertiseAControl()
+    {
+        var f = new Fixture();
+        f.Camera.CanSetGain = true;
+        f.Camera.CanGetGain = false;
+        f.Camera.Gains = [];
+        f.Camera.GainMin = -1;
+        f.Camera.GainMax = -1;
+        Assert.IsType<CameraControl.Unsupported>(f.Read().Gain);
+        f.Camera.CanGetGain = true;
+        Assert.Throws<InvalidDataException>(() => f.Read());
+        f.Camera.CanGetGain = false;
+        f.Camera.GainMax = 10;
+        Assert.Throws<InvalidDataException>(() => f.Read());
+    }
+
+    [Fact]
     public void ChangingMediatorSnapshotDuringReadFailsClosed()
     {
         var f = new Fixture();

@@ -192,6 +192,10 @@ The snapshot contains binning pairs, readout indices, gain and offset ranges or
 discrete values, and conservative whole-millisecond exposure bounds. Unsupported
 controls are explicit. Missing, ambiguous, disconnected, subframe, or
 unrepresentable configurations fail instead of acquiring with invented defaults.
+NINA's ASCOM adapter can optimistically advertise writable gain before it has
+ever attempted a write. Its exact absent-control state (unreadable gain, empty
+gain list, and both limits `-1`) exports an unavailable control, never a guessed
+range or a write to probe support. Other inconsistent ranges still fail.
 The configuration digest includes profile/device identity, driver versions,
 readout order, filter mappings, capture options, and the caller's constraint
 revision. Raw device paths are not exported. Capability sets are copied into
