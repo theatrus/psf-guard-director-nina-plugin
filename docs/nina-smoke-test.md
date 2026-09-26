@@ -7,7 +7,7 @@ contains a WiX bundle with an embedded MSI. Extract the bundle, then use an MSI
 administrative extraction (`msiexec /a ... /qn TARGETDIR=...`) to unpack the app.
 The test launcher takes the resulting directory containing `NINA.exe`.
 Check the [official download page](https://nighttime-imaging.eu/download/) before
-a new test campaign. On 2026-09-25 its latest nightly was still #58. If that
+a new test campaign. On 2026-09-26 its latest nightly was still #58. If that
 changes, update the NuGet, host-version, and source-contract pins together;
 do not silently run a newer host against an unreviewed API contract.
 
@@ -100,14 +100,21 @@ Do not interact with equipment/profile controls while the probe is running.
 The sequence starts the verified sidecar, connects the three simulators, and
 parks the mount to establish the unpark test precondition. It supplies an
 immutable fixture program with three prioritized one-exposure filter goals to
-Rust's durable ledger. Rust selects goals and issues unpark and filter/readout preparation
+Rust's durable geometry ledger. The isolated profile has an explicit synthetic
+site (35 degrees north, 120 degrees west, 1000 m). The fixture supplies explicit
+synthetic Earth-orientation values valid only for its three-minute run, native
+horizon vertices, altitude limits and meridian policy. No production EOP source
+or permissive fallback is implied. Rust selects goals and issues unpark and filter/readout preparation
 commands. The probe runs matching native NINA items inside a transient native
 sequential container. Each item allows one dispatch, revalidates after inherited
 before-triggers, and verifies the resulting unparked mount, readout, or settled filter state.
 The probe requires both a finished item and a successful completion receipt.
 Reported monotonic durations cover dispatch validation and the operation, not
 the preceding inherited triggers.
-Rust rechecks the boundary when reserving each prepared capture. The host obtains
+Rust rechecks the remaining preparation after native before-hooks, and rechecks
+each reserved capture after native before-exposure hooks. The session-bound
+callbacks cannot be reused or revived by restarting the sidecar. Rust also
+rechecks the boundary when reserving each prepared capture. The host obtains
 its saved binding and runs a `NinaExposureItem` through nested native sequential
 containers. Its parent has test-only exposure hooks; the probe requires one
 inherited before-hook before boundary validation and one after-hook after the
@@ -139,13 +146,14 @@ and fixture contracts; it does not run a desktop ASCOM sequence.
 
 ### Scope
 
-This is durable Rust-program native capture with a local fixture, not a
+This is durable Rust-geometry native capture with a local fixture, not a
 production autonomous Director session. The dispatch callback checks simulator
 context, unchanged horizon/configuration, the fixture deadline, and the reserved
-attempt. A binding lookup is not production dispatch authorization. There is no
+attempt through the shared-core post-hook checks. There is no
 PSF Guard assignment or automatic crash/resume path. The fixture hard-codes
-simulated-safe conditions and unrestricted eligibility, so it cannot validate
-physical sky visibility or hardware safety. The fixture uses the simulator's
+simulated-safe conditions, synthetic EOP and broad authorized intervals. Rust
+still applies its physical visibility calculation, but this does not validate
+a real site's orientation source or hardware safety. The fixture uses the simulator's
 initial pointing; it does not slew or validate plate solving. No TS, Sync, or Chatstronomy plugin
 is installed in this profile. Native preparation items run through NINA's normal
 container strategy. Automated tests exercise inherited triggers and conditions;
@@ -161,6 +169,22 @@ safety and meridian/horizon boundaries, crash recovery, and coexistence with
 Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
 
 ### Local capture evidence
+
+On 2026-09-26, the IPC 7 geometry/dispatch development build passed nightly
+#58/OmniSim with full native horizon export and post-hook Rust feasibility
+checks. Seven preparation operations, three RGB FITS captures with identity and
+pixel readback, six target-aware hooks, ledger restart and horizon edit checks
+passed. The final and post-restart decisions were both `wait: pending_assessment`.
+Evidence is in
+`artifacts/nina-smoke-f2b0254a5a8a45cb827b78b2b29c3936/probe/32dfee9e90df4bcba889bd072de8dd8d/result.json`.
+This final run includes duplicate-wrapper rejection; all 447 automated tests
+also passed. An earlier successful run before that additional guard is retained
+under `artifacts/nina-smoke-725ee0cf41c2496ba0d76aacf39a72b8/`.
+The image view was inspected after the simulators disconnected. The first run
+refused all acquisition because the old profile's implicit 0/0 site placed the
+parked target below its minimum altitude. Setting the fixture's explicit
+synthetic site corrected the test without relaxing geometry. No server loop,
+real pointing accuracy or production Earth-orientation source was tested.
 
 On 2026-09-26, commit `1177c3b` repeated the nightly #58/OmniSim probe with
 the merged PSF Guard #475 runtime (`b7c2f89`) and its pinned license notices.

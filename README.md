@@ -114,8 +114,9 @@ budget and capture evidence; a successful check cannot authorize replay after
 recovery. The runtime pin uses the reviewed head of PSF Guard PR #487, built by
 the three-platform Director CI after rebasing onto main. This client must not
 merge until that exact runtime change has merged; a changed runtime head requires
-a reviewed pin update. Native dispatch adoption and full-stack acceptance remain
-separate work.
+a reviewed pin update. The isolated native simulator sequence uses session-bound post-hook
+checks; production container adoption and full-stack acceptance remain separate
+work.
 
 ## Preview releases
 
