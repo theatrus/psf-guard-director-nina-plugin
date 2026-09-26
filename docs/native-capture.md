@@ -95,8 +95,10 @@ perform recovery scans, or automatically refund an attempt.
 Tests use mocked public N.I.N.A. mediators and the real header serializers.
 They cover admission versus completion, identity correlation, save failures,
 stalled queues, cancellation races, profile changes, settings snapshots, journal
-failures, duplicate IDs, and FITS/XISF capture-ID preservation. These are not
-simulated-camera or full-stack tests of this new adapter.
+failures, duplicate IDs, and FITS/XISF capture-ID preservation. The separate
+[ASCOM smoke sequence](nina-smoke-test.md#ascom-capture-sequence) exercises this
+adapter inside the real nightly host with simulator camera, mount, and filter
+wheel. Neither suite proves the full-stack planning/server acceptance gate.
 
 Before exporting a Director sequencer item, wire core evaluation and a durable
 event handoff to the sidecar, implement recovery, and run the simulated-equipment

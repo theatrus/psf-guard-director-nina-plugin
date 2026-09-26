@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../tools/NinaIsolation/NinaIsolation.csproj" />
+    <ProjectReference Include="../../tools/SimulatorProbe/SimulatorProbe.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Runtime/PsfGuard.Director.Runtime.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
     <PackageReference Include="NINA.Plugin" Version="3.3.0.1058-nightly" PrivateAssets="all" />
@@ -14,5 +15,9 @@
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.1" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../tools/SimulatorProbe/ascom.profile.xml" Link="ascom.profile.xml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tools/SimulatorProbe/smoke.sequence.json" Link="smoke.sequence.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

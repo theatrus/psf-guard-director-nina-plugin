@@ -1,0 +1,234 @@
+using System.ComponentModel.Composition;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using NINA.Astrometry;
+using NINA.Core.Model;
+using NINA.Core.Model.Equipment;
+using NINA.Core.Utility;
+using NINA.Equipment.Interfaces.Mediator;
+using NINA.Image.ImageData;
+using NINA.Image.Interfaces;
+using NINA.Plugin;
+using NINA.Plugin.Interfaces;
+using NINA.Profile.Interfaces;
+using NINA.Sequencer.SequenceItem;
+using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.ViewModel;
+using PsfGuard.Director.Plugin;
+using PsfGuard.Director.Plugin.Acquisition;
+using PsfGuard.Director.Runtime;
+
+[assembly: Guid("a8f3b6dd-a195-40f8-9de3-208304473d53")]
+[assembly: InternalsVisibleTo("PsfGuard.Director.Tests")]
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.3.0.1058")]
+
+namespace PsfGuard.Director.SimulatorProbe;
+
+[Export(typeof(IPluginManifest))]
+public sealed class ProbeManifest : PluginBase { }
+
+// Deliberately absent from the release bundle. This is not a Director session
+// and its simulator-only dispatch callback is not planner authorization.
+[Export(typeof(ISequenceItem))]
+[ExportMetadata("Name", "Director ASCOM smoke test")]
+[ExportMetadata("Description", "Test-only native capture probe for an isolated simulator profile")]
+[ExportMetadata("Category", "Director Tests")]
+[ExportMetadata("Icon", "CameraSVG")]
+public sealed class SimulatorSequence : SequenceItem
+{
+    private readonly IProfileService profiles;
+    private readonly ICameraMediator camera;
+    private readonly ITelescopeMediator telescope;
+    private readonly IFilterWheelMediator filters;
+    private readonly IImagingMediator imaging;
+    private readonly IImageSaveMediator saves;
+    private readonly IImageHistoryVM history;
+    private readonly IImageDataFactory imageFactory;
+
+    [ImportingConstructor]
+    public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
+        IFilterWheelMediator filters, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
+        IImageDataFactory imageFactory)
+    {
+        this.profiles = profiles;
+        this.camera = camera;
+        this.telescope = telescope;
+        this.filters = filters;
+        this.imaging = imaging;
+        this.saves = saves;
+        this.history = history;
+        this.imageFactory = imageFactory;
+    }
+
+    public override object Clone()
+    {
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, imaging, saves, history, imageFactory);
+        clone.CopyMetaData(this);
+        return clone;
+    }
+
+    public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+    {
+        var root = ValidateEnvironment();
+        if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected)
+            throw new InvalidOperationException("Start the probe with all simulator devices disconnected.");
+        var profileId = profiles.ActiveProfile.Id;
+        var run = Path.Combine(root, "probe", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(run);
+        var steps = new List<string>();
+        var errors = new List<Exception>();
+        var captures = new List<CaptureEvidence>();
+        await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lifetime.CancelAfter(TimeSpan.FromMinutes(5));
+        void ProfileChanged(object? sender, EventArgs args) => lifetime.Cancel();
+        profiles.ProfileChanged += ProfileChanged;
+        void Step(string value)
+        {
+            steps.Add(value);
+            Logger.Info($"Director simulator probe: {value}");
+            try { progress.Report(new ApplicationStatus { Status = value }); }
+            catch (Exception error) { Logger.Error(error); }
+        }
+        void CheckProfile()
+        {
+            lifetime.Token.ThrowIfCancellationRequested();
+            ValidateEnvironment();
+            if (profiles.ActiveProfile.Id != profileId) throw new InvalidOperationException("Test profile changed.");
+        }
+        Task Revalidate(CancellationToken cancellation)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            CheckProfile();
+            if (profiles.ActiveProfile.Id != profileId || runtime.Status.State != RuntimeState.Ready
+                || camera.GetInfo().DeviceId != "ASCOM.OmniSim.Camera" || !camera.GetInfo().Connected
+                || telescope.GetInfo().DeviceId != "ASCOM.OmniSim.Telescope" || !telescope.GetInfo().Connected
+                || filters.GetInfo().DeviceId != "ASCOM.OmniSim.FilterWheel" || !filters.GetInfo().Connected)
+                throw new InvalidOperationException("Simulator context or sidecar changed.");
+            return Task.CompletedTask;
+        }
+        try
+        {
+            Step("Starting verified sidecar (transport only)");
+            await runtime.StartAsync("ascom-smoke", lifetime.Token);
+            if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
+            Step("Connecting ASCOM OmniSim camera, telescope and filter wheel");
+            await camera.Rescan();
+            CheckProfile();
+            if (!await camera.Connect()) throw new IOException("Simulator camera connection failed.");
+            await telescope.Rescan();
+            CheckProfile();
+            if (!await telescope.Connect()) throw new IOException("Simulator telescope connection failed.");
+            await filters.Rescan();
+            CheckProfile();
+            if (!await filters.Connect()) throw new IOException("Simulator filter wheel connection failed.");
+            await Revalidate(lifetime.Token);
+            Step("Unparking simulator");
+            if (!await telescope.UnparkTelescope(progress, lifetime.Token)) throw new IOException("Unpark failed.");
+            // A small move near the simulator's current position avoids any dependence
+            // on a real site's coordinates, sky visibility, or plate-solver catalogs.
+            var current = telescope.GetCurrentPosition();
+            var target = new Coordinates((current.RA + 0.02) % 24, current.Dec, current.Epoch, Coordinates.RAType.Hours);
+            var catalogTarget = target.Transform(Epoch.J2000);
+            Step("Slewing simulator");
+            if (!await telescope.SlewToCoordinatesAsync(target, lifetime.Token)) throw new IOException("Slew failed.");
+            var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
+                Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
+            for (short i = 0; i < 3; i++)
+            {
+                await Revalidate(lifetime.Token);
+                Step($"Selecting simulator filter {i}");
+                await filters.ChangeFilter(new FilterInfo { Name = $"Smoke-{i}", Position = i }, lifetime.Token, progress);
+                Step($"Capturing simulator exposure {i + 1}/3");
+                var intent = new CaptureIntent(Guid.NewGuid(), profileId, "ascom-smoke", "omnisim",
+                    "test-fixture-not-server-assignment", 1, $"filter-{i}", "ASCOM.OmniSim.Camera", 1,
+                    "Director ASCOM Smoke", catalogTarget.RA * 15, catalogTarget.Dec, 0);
+                var evidence = await adapter.CaptureAsync(intent, Revalidate, progress, lifetime.Token);
+                if (evidence.Phase != CapturePhase.Saved || !File.Exists(evidence.SavedPath))
+                    throw new IOException("Capture has no confirmed file.");
+                var restored = await imageFactory.CreateFromFile(evidence.SavedPath, 16, false, lifetime.Token);
+                if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h =>
+                        h.Key == NinaCaptureAdapter.CaptureIdHeader && h.Value.Trim() == intent.CaptureId.ToString("D"))
+                    || restored.Data.FlatArray.Length == 0
+                    || restored.Data.FlatArray.Min() == restored.Data.FlatArray.Max())
+                    throw new InvalidDataException("Saved FITS identity or pixel data failed readback.");
+                var journal = CaptureJournal.Read(Path.Combine(run, "journal", profileId.ToString("N"), $"{intent.CaptureId:N}.json"));
+                if (journal != evidence) throw new InvalidDataException("Durable journal differs from the save receipt.");
+                captures.Add(evidence);
+            }
+            await Revalidate(lifetime.Token);
+            Step("Three captures saved with correlated receipts");
+        }
+        catch (Exception error) { errors.Add(error); Logger.Error(error); }
+        finally
+        {
+            profiles.ProfileChanged -= ProfileChanged;
+            // Cleanup uses verified connected identities, never the newly selected
+            // profile, and continues after one cleanup operation fails.
+            async Task Cleanup(string step, Func<Task> action)
+            {
+                try { Step(step); await action(); }
+                catch (Exception error) { errors.Add(error); Logger.Error(error); }
+            }
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            if (telescope.GetInfo().Connected && telescope.GetInfo().DeviceId == "ASCOM.OmniSim.Telescope")
+            {
+                await Cleanup("Parking simulator", async () =>
+                {
+                    if (!await telescope.ParkTelescope(progress, cleanup.Token)) throw new IOException("Park failed.");
+                });
+                await Cleanup("Disconnecting simulator telescope", telescope.Disconnect);
+            }
+            if (filters.GetInfo().Connected && filters.GetInfo().DeviceId == "ASCOM.OmniSim.FilterWheel")
+                await Cleanup("Disconnecting simulator filter wheel", filters.Disconnect);
+            if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
+                await Cleanup("Disconnecting simulator camera", camera.Disconnect);
+            await Cleanup("Stopping sidecar", runtime.StopAsync);
+            var result = new
+            {
+                passed = errors.Count == 0 && captures.Count == 3,
+                nina = "3.3.0.1058",
+                scope = "native-adapter-and-runtime-transport-not-planning-or-server",
+                steps,
+                captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
+                errors = errors.Select(e => e.ToString())
+            };
+            var output = Path.Combine(run, "result.json");
+            await File.WriteAllTextAsync(output + ".tmp", JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(output + ".tmp", output);
+            Logger.Info($"Director simulator probe result: {output}");
+        }
+        if (errors.Count > 0) throw new AggregateException("Director simulator probe failed", errors);
+    }
+
+    private string ValidateEnvironment() => ValidateEnvironment(
+        Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
+        Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_TOKEN"), CoreUtil.APPLICATIONTEMPPATH, profiles.ActiveProfile);
+
+    internal static string ValidateEnvironment(string? root, string? token, string applicationRoot, IProfile profile)
+    {
+        if (root is null || !Path.IsPathFullyQualified(root) || !Guid.TryParseExact(token, "N", out _)
+            || !Path.GetFileName(root).StartsWith("nina-smoke-", StringComparison.Ordinal)
+            || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0
+            || File.ReadAllText(Path.Combine(root, ".director-test-root")) != token
+            || applicationRoot != root
+            || File.ReadAllText(Path.Combine(root, "isolation-ready.txt")) != root)
+            throw new InvalidOperationException("The probe requires the isolated NINA test launcher.");
+        if (profile.Name != "Director ASCOM Smoke" || profile.CameraSettings.Id != "ASCOM.OmniSim.Camera"
+            || profile.TelescopeSettings.Id != "ASCOM.OmniSim.Telescope"
+            || profile.FilterWheelSettings.Id != "ASCOM.OmniSim.FilterWheel"
+            || profile.ImageFileSettings.FilePath != Path.Combine(root, "images")
+            || profile.ImageFileSettings.FilePattern != "$$DATETIME$$_$$FILTER$$_$$FRAMENR$$"
+            || profile.ImageFileSettings.FileType != NINA.Core.Enum.FileTypeEnum.FITS
+            || profile.FocuserSettings.Id != "No_Device" || profile.RotatorSettings.Id != "No_Device"
+            || profile.GuiderSettings.GuiderName != "No_Guider"
+            || profile.DomeSettings.Id != "No_Device" || profile.SwitchSettings.Id != "No_Device"
+            || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != "No_Device"
+            || profile.WeatherDataSettings.Id != "No_Device")
+            throw new InvalidOperationException("The probe requires its simulator-only test profile.");
+        return root;
+    }
+}

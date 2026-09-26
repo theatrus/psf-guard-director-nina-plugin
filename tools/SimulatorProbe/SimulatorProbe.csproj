@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>PsfGuard.Director.SimulatorProbe</AssemblyName>
+    <Title>Director Simulator Probe (TEST ONLY)</Title>
+    <Version>0.1.0.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NINA.Plugin" Version="3.3.0.1058-nightly" PrivateAssets="all" />
+    <ProjectReference Include="../../src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
+  </ItemGroup>
+</Project>
