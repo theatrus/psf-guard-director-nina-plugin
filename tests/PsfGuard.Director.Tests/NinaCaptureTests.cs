@@ -3,6 +3,7 @@ using NINA.Core.Model;
 using NINA.Core.Enum;
 using NINA.Core.Utility;
 using NINA.Equipment.Equipment.MyCamera;
+using NINA.Equipment.Equipment.MyFilterWheel;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Equipment.Model;
 using NINA.Image.ImageData;
@@ -15,11 +16,12 @@ using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using Nito.AsyncEx;
 using PsfGuard.Director.Plugin.Acquisition;
+using PsfGuard.Director.Runtime;
 using Xunit;
 
 namespace PsfGuard.Director.Tests;
 
-public sealed class NinaCaptureTests
+public sealed partial class NinaCaptureTests
 {
     [Fact]
     public async Task WaitsForCorrelatedFinalSaveAndRecordsNativeMetadataAndTiming()
@@ -504,6 +506,10 @@ public sealed class NinaCaptureTests
         public Mock<IImageSaveMediator> Saves { get; } = new(MockBehavior.Strict);
         public Mock<IImageData> Image { get; } = new();
         public CameraInfo CameraInfo { get; } = new() { Connected = true, DeviceId = "camera" };
+        public FilterWheelInfo WheelInfo { get; } = new() { Connected = true, DeviceId = "wheel", SelectedFilter = new() { Position = 2, Name = "L" } };
+        public NinaEquipmentBinding Local { get; private set; } = null!;
+        public NinaProgramCapture BoundCapture { get; private set; } = null!;
+        public NinaEquipmentSnapshot Equipment { get; private set; } = null!;
         public ImageMetaData Metadata { get; } = new();
         public TaskCompletionSource Enqueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IImageData? EnqueuedImage { get; private set; }
@@ -522,6 +528,27 @@ public sealed class NinaCaptureTests
             profiles.SetupGet(x => x.ActiveProfile).Returns(Profile.Object);
             var camera = new Mock<ICameraMediator>();
             camera.Setup(x => x.GetInfo()).Returns(CameraInfo);
+            var cameraSettings = new Mock<ICameraSettings>();
+            cameraSettings.SetupGet(x => x.Id).Returns("camera");
+            Profile.SetupGet(x => x.CameraSettings).Returns(cameraSettings.Object);
+            var wheelSettings = new Mock<IFilterWheelSettings>();
+            wheelSettings.SetupGet(x => x.Id).Returns("wheel");
+            wheelSettings.SetupGet(x => x.FilterWheelFilters).Returns(new ObserveAllCollection<NINA.Core.Model.Equipment.FilterInfo>([new() { Position = 2, Name = "L" }]));
+            Profile.SetupGet(x => x.FilterWheelSettings).Returns(wheelSettings.Object);
+            var wheel = new Mock<IFilterWheelMediator>();
+            wheel.Setup(x => x.GetInfo()).Returns(WheelInfo);
+            CameraInfo.BinningModes = new([new(1, 1), new(2, 2)]);
+            CameraInfo.ReadoutModes = new[] { "Normal", "Fast" };
+            CameraInfo.ReadoutModeForNormalImages = 1;
+            CameraInfo.ExposureMin = 0.001;
+            CameraInfo.ExposureMax = 60;
+            CameraInfo.CanSetGain = true;
+            CameraInfo.Gains = new[] { 10, 40 };
+            CameraInfo.CanSetOffset = true;
+            CameraInfo.OffsetMin = 0;
+            CameraInfo.OffsetMax = 50;
+            Local = new(Intent.ProfileId, "rig", "constraints", "camera", "wheel", [new("filter-l", 2, "L")], false, 0);
+            Equipment = new(profiles.Object, camera.Object, wheel.Object);
             Metadata.Image.Id = 42;
             Image.SetupGet(x => x.MetaData).Returns(Metadata);
             Image.SetupGet(x => x.Statistics).Returns(new AsyncLazy<IImageStatistics>(() => Task.FromResult(Mock.Of<IImageStatistics>())));
@@ -549,6 +576,7 @@ public sealed class NinaCaptureTests
                 }).Returns(Task.CompletedTask);
             adapter = new(profiles.Object, camera.Object, Imaging.Object, Saves.Object, Mock.Of<IImageHistoryVM>(),
                 Root, timeout ?? TimeSpan.FromSeconds(5), Clock);
+            BoundCapture = new(Equipment, camera.Object, wheel.Object, adapter);
         }
 
         public Task<CaptureEvidence> Run(Func<CancellationToken, Task>? authorize = null, CancellationToken token = default) =>

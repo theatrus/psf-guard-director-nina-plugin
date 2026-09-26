@@ -51,7 +51,7 @@ bounded to 64 KiB, flushed to disk, and atomically renamed in the same directory
 An unwritable journal prevents dispatch. A failed final journal write does not
 return a successful result.
 
-Schema 1 is experimental host evidence, not the final IPC/event contract. It
+Schemas 1 and 2 are experimental host evidence, not the final IPC/event contract. They
 records rig/configuration, profile, assignment/revision, goal, camera, target,
 requested exposure, destination, UTC timestamps, and observed state:
 
@@ -78,6 +78,38 @@ attempt time includes host overhead. These intervals are nested, not additive.
 Exposure and download are not separately timed yet because `CaptureImage`
 returns them as one operation. No timing estimator or second C# scheduler is
 introduced here.
+
+### Bound native recipes
+
+The internal `NinaProgramCapture` adapter maps a validated Rust capture binding
+to native exposure seconds, binning, gain, offset, and ICRS target metadata.
+It requires a matching newly created reservation with a GUID capture ID.
+Existing, recovery, saved, or mismatched attempts cannot enter this path.
+A binding lookup alone is never authorization. The caller must still provide
+fresh dispatch validation and own the equipment and session lifecycle.
+
+The adapter rereads the full native configuration before creating the intent
+and after the dispatch callback. At the latter boundary it verifies the prepared
+filter slot/name, a stationary wheel, and `ReadoutModeForNormalImages`. NINA's
+LIGHT exposure uses that setting, not the currently active `ReadoutMode`.
+Preparation must set it through `SetReadoutModeForNormalImages`; capture does
+not insert filter, readout, autofocus, or other preparation operations.
+Supported gain and offset require explicit values. Native `-1` sentinels are
+used only for controls declared unsupported by the validated configuration.
+
+Bound captures write schema 2 journals with ledger, target, recipe, stable
+filter, and requested readout identities. Schema 1 journals remain readable.
+An unspecified position angle stays null in the journal and uses NINA's NaN
+metadata sentinel, not a fabricated zero-degree rotation. The host journal is
+still separate from the Rust ledger; the production container must coordinate
+outcomes and recovery. No automatic retry or ledger refund is introduced.
+
+Tests connect a real Rust prepared reservation and binding to mocked native
+capture/save mediators, then record the saved outcome in Rust. They also cover
+configuration drift, readout selection, wheel state, unsupported controls,
+fixed filters, and old journals. These are not the full NINA/server simulator
+gate. They do not prove that a camera driver applied a requested setting, nor
+remove the imaging mediator's internal queue delay or competing-controller risk.
 
 ## Planner evaluation
 
