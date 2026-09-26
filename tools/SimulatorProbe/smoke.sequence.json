@@ -1,0 +1,37 @@
+{
+  "$id": "1",
+  "$type": "NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer",
+  "Name": "Director ASCOM simulator smoke test",
+  "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+  "IsExpanded": true,
+  "Items": {
+    "$values": [
+      {
+        "$type": "NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer",
+        "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+        "Parent": { "$ref": "1" }
+      },
+      {
+        "$id": "2",
+        "$type": "NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer",
+        "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+        "Parent": { "$ref": "1" },
+        "Items": {
+          "$values": [
+            {
+              "$type": "PsfGuard.Director.SimulatorProbe.SimulatorSequence, PsfGuard.Director.SimulatorProbe",
+              "Name": "Director ASCOM smoke test",
+              "Parent": { "$ref": "2" },
+              "Attempts": 1
+            }
+          ]
+        }
+      },
+      {
+        "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
+        "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+        "Parent": { "$ref": "1" }
+      }
+    ]
+  }
+}

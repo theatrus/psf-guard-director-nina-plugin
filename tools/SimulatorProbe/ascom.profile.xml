@@ -1,0 +1,29 @@
+<Profile xmlns="http://schemas.datacontract.org/2004/07/NINA.Profile" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <CameraSettings i:type="CameraSettings">
+    <Id>ASCOM.OmniSim.Camera</Id>
+  </CameraSettings>
+  <FilterWheelSettings i:type="FilterWheelSettings">
+    <Id>ASCOM.OmniSim.FilterWheel</Id>
+  </FilterWheelSettings>
+  <GuiderSettings i:type="GuiderSettings">
+    <GuiderName>No_Guider</GuiderName>
+  </GuiderSettings>
+  <Id>00000000-0000-0000-0000-000000000000</Id>
+  <ImageFileSettings i:type="ImageFileSettings">
+    <FilePath />
+    <FilePattern>$$DATETIME$$_$$FILTER$$_$$FRAMENR$$</FilePattern>
+    <FileType>FITS</FileType>
+  </ImageFileSettings>
+  <Name>Director ASCOM Smoke</Name>
+  <SequenceSettings i:type="SequenceSettings">
+    <DefaultSequenceFolder />
+    <SequencerTargetsFolder />
+    <SequencerTemplatesFolder />
+  </SequenceSettings>
+  <TelescopeSettings i:type="TelescopeSettings">
+    <Id>ASCOM.OmniSim.Telescope</Id>
+    <SettleTime>0</SettleTime>
+    <TelescopeLocationSyncDirection>NOSYNC</TelescopeLocationSyncDirection>
+    <TimeSync>false</TimeSync>
+  </TelescopeSettings>
+</Profile>

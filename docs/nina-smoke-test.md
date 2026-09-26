@@ -6,6 +6,10 @@ directory. Do not install it over an existing N.I.N.A. installation. The officia
 contains a WiX bundle with an embedded MSI. Extract the bundle, then use an MSI
 administrative extraction (`msiexec /a ... /qn TARGETDIR=...`) to unpack the app.
 The test launcher takes the resulting directory containing `NINA.exe`.
+Check the [official download page](https://nighttime-imaging.eu/download/) before
+a new test campaign. On 2026-09-25 its latest nightly was still #58. If that
+changes, update the NuGet, host-version, and source-contract pins together;
+do not silently run a newer host against an unreviewed API contract.
 
 Build the plugin package, then launch from PowerShell 7.4 or later:
 
@@ -27,7 +31,7 @@ This is data-directory isolation, not an OS sandbox. N.I.N.A. can still discover
 hardware and make its normal network requests. Windows jump lists and .NET
 per-executable user settings are outside the redirected root. Use an extracted
 app in a test-only directory, and never connect real devices. A fresh default
-profile starts with no device selected. The launcher installs only Director;
+profile starts with no device selected. By default the launcher installs only Director;
 it does not copy TS, Sync, Chatstronomy, or any existing profile.
 
 ## Runtime host checks
@@ -50,7 +54,7 @@ it does not copy TS, Sync, Chatstronomy, or any existing profile.
 Do not publish complete N.I.N.A. logs without review: discovery logs can include
 local device names, network addresses, and filesystem paths.
 
-## Local evidence
+## Runtime host evidence
 
 Tested on 2026-09-25 with the official nightly above, Director host commit
 `0bc4abc1c84c5d06e00d737667e6ce582b342008`, and the pinned Rust runtime in
@@ -68,7 +72,73 @@ Tested on 2026-09-25 with the official nightly above, Director host commit
   succeeded while it ran. After Ready, terminating only N.I.N.A. also caused
   the runtime to exit without intervention.
 
-No hardware was connected and no images were acquired. These checks validate
+No hardware was connected and no images were acquired in those host checks. They validate
 the real runtime host, not the full-stack acquisition acceptance gate. That
 still requires the native N.I.N.A. acquisition adapter, simulated devices, and
 an isolated PSF Guard server built from the corresponding changes.
+
+## ASCOM capture sequence
+
+Install the ASCOM Platform with its OmniSim camera, telescope, and filter wheel.
+Do not run this alongside another client using the same simulator: its device
+state is shared even though N.I.N.A.'s profile is isolated. Close other test
+instances before starting another run.
+
+```powershell
+./build-package.ps1
+./tools/start-nina-smoke.ps1 -NinaDirectory C:/test/NINA `
+    -PluginZip ./artifacts/PSFGuardDirector-0.1.0.0-dev.zip -AscomSequence
+```
+
+This opt-in mode builds a test-only plugin and verifies that the bundle's plugin
+and runtime DLLs match the build. It creates a fresh simulator-only profile and
+starts the supplied advanced sequence through N.I.N.A.'s command-line interface.
+It refuses non-OmniSim camera/mount/filter selections, other configured devices,
+an unconfirmed isolation root, or an image destination outside the test root.
+Do not interact with equipment/profile controls while the probe is running.
+
+The sequence starts the verified sidecar, connects the three simulators,
+unparks, slews a small offset from the simulated position, changes through three
+filters, and captures three one-second lights through `NinaCaptureAdapter`.
+It waits for correlated save receipts, reloads each FITS through N.I.N.A., checks
+`PGCAPID` and nonblank pixel data, and compares the durable journal with the
+returned evidence. Cleanup parks and disconnects the simulators and stops the
+sidecar, including after a capture failure. Cleanup failures fail the test.
+
+Inspect `<test-root>/probe/<run-id>/result.json` for `passed: true`, three
+captures, and no errors. Images live under `<test-root>/images`; journals are
+under the run's `journal` directory. The launcher returns after startup, not
+after completion: an absent result is **not** a pass. The N.I.N.A. log records
+each probe step. Close the isolated app after inspecting the result.
+
+The test assembly and profile/sequence fixtures are excluded from the plugin
+ZIP by its explicit file allowlist. CI compiles the probe and tests its guard
+and fixture contracts; it does not run a desktop ASCOM sequence.
+
+### Scope
+
+This is a native adapter and sidecar-transport test, not autonomous Director
+execution. The test-only dispatch callback checks simulator context; it does
+not obtain a Rust planning decision or a PSF Guard assignment. The fixed three
+captures are a test fixture, not a new C# scheduler. No TS, Sync, or Chatstronomy
+plugin is installed in this profile.
+
+Remaining full-stack coverage includes the server assignment/feedback loop,
+core-authorized dispatch and replanning, autofocus/plate solving/guiding,
+safety and meridian/horizon boundaries, crash recovery, and coexistence with
+Sync and Chatstronomy. A simulator sequence alone does not satisfy those gates.
+
+### Local capture evidence
+
+On 2026-09-25, nightly #58 with ASCOM Platform 7.1.3.4851 and OmniSim driver
+version 0.5 completed two native capture sequences. The final run included the
+FITS readback checks and reported `passed: true`, three captures, and no errors.
+All three 800x600 images retained their journal's `PGCAPID` and had nonconstant
+pixels. Total adapter times were 1521, 1520, and 1382 ms for the one-second
+Red, Green, and Blue exposures. These include exposure/download and save, not
+the preceding filter changes or slews. The mount parked, all three simulators
+disconnected, and the owned sidecar exited. The image was also visible in
+N.I.N.A.'s Imaging view with populated star/HFR history.
+
+The automated suite passed 81 tests, including ten probe guard/fixture cases.
+The simulator desktop run is local evidence, not a hosted CI result.
