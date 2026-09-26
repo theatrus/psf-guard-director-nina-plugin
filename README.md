@@ -94,8 +94,7 @@ capture adapter and settings preview do not yet use this ledger. See the
 The typed program API binds immutable targets, exposure recipes, and equipment
 capabilities to durable execution. It rejects changed capture evidence and
 preparation settings while keeping selection policy in Rust. These APIs are
-development groundwork, not an acquisition-ready NINA container or an update
-to the published runtime preview.
+development groundwork, not an acquisition-ready NINA container.
 
 The typed geometry API opens a separate geometry-bound ledger with the complete
 site, Earth-orientation validity, horizon, altitude limits, and meridian policy.
@@ -106,19 +105,24 @@ replacement windows. Old program-only calls cannot bypass geometry mode.
 The internal native geometry exporter now joins NINA's complete
 horizon/site snapshot with the matching equipment fingerprint for this client.
 Production dispatch, an Earth-orientation data source, and the full server
-acceptance gate still need to be connected. The published preview is unchanged.
+acceptance gate still need to be connected.
 
 The two dispatch-check APIs recheck an issued preparation command or reserved
 capture after native before-hooks. They preserve the original command, attempt
 budget and capture evidence; a successful check cannot authorize replay after
-recovery. The runtime pin uses the reviewed head of PSF Guard PR #487, built by
-the three-platform Director CI after rebasing onto main. This client must not
-merge until that exact runtime change has merged; a changed runtime head requires
-a reviewed pin update. The isolated native simulator sequence uses session-bound post-hook
+recovery. The runtime pin uses the reviewed and merged head of PSF Guard PR #487,
+built by the three-platform Director CI. A changed runtime head requires a
+reviewed pin update. The isolated native simulator sequence uses session-bound post-hook
 checks; production container adoption and full-stack acceptance remain separate
 work.
 
 ## Preview releases
+
+Version 0.1.0.1 updates the bundled runtime to 0.6.0 / IPC 7 and includes the
+internal durable-ledger, geometry, and post-hook dispatch clients. Its public
+settings still control only Start/Stop and runtime status. It does not add
+pairing, server assignments, or a production acquisition container. See the
+[preview release notes](docs/releases/0.1.0.1.md).
 
 Run `./build-release.ps1` after the full test suite passes. It builds the same
 seven-file bundle, checks its assembly version against the registry template,
