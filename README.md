@@ -15,7 +15,7 @@ dependency of Director, and chat commands remain subject to local permissions
 and safe execution boundaries.
 
 The architecture and acceptance gates live in
-[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/codex/director-ledger-ipc/docs/design/director.md).
+[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md).
 This repository is not a stable plugin release and has no acquisition support yet.
 
 ## Runtime preview
@@ -83,6 +83,24 @@ supports reservations, observed outcomes, lookup, and bounded event replay;
 restarts retain unresolved attempts and saved-image pending credit. The native
 capture adapter and settings preview do not yet use this ledger. See the
 [ledger integration boundary](docs/native-capture.md#durable-ledger-host).
+
+## Preview releases
+
+Run `./build-release.ps1` after the full test suite passes. It builds the same
+five-file bundle, checks its assembly version against the registry template,
+and writes a versioned ZIP and manifest with the ZIP's exact SHA-256 under
+`artifacts/`. It does not publish or install anything.
+
+Publish those generated artifacts with the authenticated `gh` CLI as a GitHub
+prerelease using the reported tag. Never replace assets on an existing release.
+Copy the generated manifest, not its template, into the theatr.us registry at
+`manifests/p/PSF Guard Director/3.3.0.1058/manifest.json`. Verify the published
+archive checksum and the live registry response before calling the release done.
+The registry uses a single feed and rejects non-Release channels, so the manifest
+omits `Channel`. The description and GitHub prerelease label explicitly identify
+Director as experimental; feed placement does not make it stable. It requires
+N.I.N.A. 3.3 nightly #58 or newer.
+This runtime preview is not an acquisition controller and does not change Sync.
 
 ## License
 

@@ -1,0 +1,17 @@
+{
+  "Name": "PSF Guard Director",
+  "Identifier": "03a1d13e-67eb-4e24-a407-82bce7e576a5",
+  "Version": { "Major": 0, "Minor": 1, "Patch": 0, "Build": 0 },
+  "Author": "Yann Ramin (@theatrus)",
+  "Homepage": "https://psf-guard.com",
+  "Repository": "https://github.com/theatrus/psf-guard-director-nina-plugin",
+  "License": "Apache-2.0",
+  "LicenseURL": "https://github.com/theatrus/psf-guard-director-nina-plugin/blob/main/LICENSE",
+  "ChangelogURL": "https://github.com/theatrus/psf-guard-director-nina-plugin/releases",
+  "Tags": ["psf-guard", "director", "experimental"],
+  "MinimumApplicationVersion": { "Major": 3, "Minor": 3, "Patch": 0, "Build": 1058 },
+  "Descriptions": {
+    "ShortDescription": "Experimental PSF Guard Director runtime preview. Acquisition is not yet available.",
+    "LongDescription": "Early preview of PSF Guard Director for NINA 3.3 nightly. This package provides an explicitly started, verified Rust runtime with status reporting and profile-scoped shutdown. It does not yet provide pairing, observing assignments, or an acquisition sequence container. Do not use it to run an unattended imaging session. Director is separate from PSF Guard Sync and does not replace or change Sync."
+  }
+}

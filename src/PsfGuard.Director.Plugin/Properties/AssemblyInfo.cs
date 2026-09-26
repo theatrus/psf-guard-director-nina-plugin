@@ -12,6 +12,6 @@ using System.Runtime.CompilerServices;
 [assembly: AssemblyMetadata("Repository", "https://github.com/theatrus/psf-guard-director-nina-plugin")]
 [assembly: AssemblyMetadata("Homepage", "https://psf-guard.com")]
 [assembly: AssemblyMetadata("MinimumApplicationVersion", "3.3.0.1058")]
-[assembly: AssemblyMetadata("ShortDescription", "Goal-driven acquisition for PSF Guard")]
+[assembly: AssemblyMetadata("ShortDescription", "Experimental PSF Guard Director runtime preview. Acquisition is not yet available.")]
 [assembly: AssemblyMetadata("LongDescription", "Experimental Director runtime host. Acquisition is not yet available.")]
 [assembly: AssemblyMetadata("Tags", "psf-guard,director,experimental")]
