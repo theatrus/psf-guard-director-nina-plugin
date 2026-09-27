@@ -89,6 +89,8 @@ public sealed class SimulatorSequence : SequenceItem
         var operations = new List<PreparationCompletion>();
         var exposureHooks = new List<string>();
         LedgerIdentity? ledger = null;
+        CoordinatorProbe? coordinator = null;
+        CoordinatorCheckpointResult? checkpoint = null;
         DirectorConfiguration? equipment = null;
         NinaConstraints? constraints = null;
         NinaConstraints? editedConstraints = null;
@@ -126,7 +128,9 @@ public sealed class SimulatorSequence : SequenceItem
         try
         {
             Step("Starting verified planning sidecar");
-            await runtime.StartAsync("ascom-smoke", lifetime.Token);
+            coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
+            var rigId = coordinator?.RigId ?? "ascom-smoke";
+            await runtime.StartAsync(rigId, lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
             Step("Connecting ASCOM OmniSim camera, telescope and filter wheel");
             await camera.Rescan();
@@ -147,7 +151,7 @@ public sealed class SimulatorSequence : SequenceItem
             var constraintBinding = new NinaConstraintBinding(profileId, NinaHorizonMode.RequiredFile, horizonPath, 20, new(0, 0));
             constraints = constraintReader.Refresh(constraintBinding);
             Step("Reading native simulator equipment capabilities");
-            var equipmentBinding = new NinaEquipmentBinding(profileId, "ascom-smoke", constraints.Revision,
+            var equipmentBinding = new NinaEquipmentBinding(profileId, rigId, constraints.Revision,
                 "ASCOM.OmniSim.Camera", "ASCOM.OmniSim.FilterWheel",
                 profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Select(f =>
                     new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), false, 0,
@@ -170,7 +174,7 @@ public sealed class SimulatorSequence : SequenceItem
                 throw new InvalidOperationException("This fixture requires OmniSim's unsupported gain and offset controls.");
             static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             var started = NowMs();
-            var assignment = new PlannerAssignment($"smoke-{Path.GetFileName(run)}", 1, "ascom-smoke", equipment.Id,
+            var assignment = new PlannerAssignment($"smoke-{Path.GetFileName(run)}", 1, rigId, equipment.Id,
                 started, started + 180000, Enumerable.Range(0, 3).Select(i => new PlannerGoal(
                     $"filter-{i}", (uint)(3 - i), 1, 0, 0, 1, 1000, 5000, [new(started, started + 180000)])).ToImmutableArray());
             var programTarget = new DirectorTarget("smoke-target", "Director ASCOM Smoke",
@@ -179,7 +183,7 @@ public sealed class SimulatorSequence : SequenceItem
             var program = new DirectorProgram(1, assignment, equipment, [programTarget],
                 Enumerable.Range(0, 3).Select(i => new ExposureRecipe($"recipe-{i}", 1000, $"filter-{i}", new(1, 1), null, null, 0, null)).ToImmutableArray(),
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
-            PlannerState State() => new("ascom-smoke", equipment.Id, NowMs(), started + 180000,
+            PlannerState State() => new(rigId, equipment.Id, NowMs(), started + 180000,
                 PlannerSafety.Safe, true, false, new(0, 0));
             var geometryReader = new NinaGeometrySnapshot(constraintReader, equipmentReader);
             // Explicit synthetic EOP values for this isolated simulator fixture,
@@ -300,10 +304,15 @@ public sealed class SimulatorSequence : SequenceItem
             if (savedEvents.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Saved) != 3)
                 throw new InvalidDataException("The Rust ledger does not contain three saved captures.");
             await runtime.StopAsync();
-            await runtime.StartAsync("ascom-smoke", lifetime.Token);
+            await runtime.StartAsync(rigId, lifetime.Token);
             if (Require(await runtime.OpenGeometryAsync(program, DispatchSnapshot().Constraints, State(), lifetime.Token)) != ledger
                 || (await Evaluate()) is not { Action: PlannerAction.Wait, Reason: "pending_assessment" })
                 throw new InvalidDataException("Restarted ledger lost identity or pending progress.");
+            if (coordinator is not null)
+            {
+                Step("Delivering capture receipts to the isolated coordinator");
+                checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "checkin"), runtime, ledger, lifetime.Token);
+            }
             await Revalidate(lifetime.Token);
             if (equipmentReader.Read(equipmentBinding).Id != equipment.Id)
                 throw new InvalidOperationException("Simulator capability identity changed during capture.");
@@ -345,10 +354,12 @@ public sealed class SimulatorSequence : SequenceItem
             if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
             await Cleanup("Stopping sidecar", runtime.StopAsync);
+            if (coordinator is not null) await Cleanup("Revoking test pairing", () => coordinator.DisposeAsync().AsTask());
             var result = new
             {
                 passed = errors.Count == 0 && captures.Count == 3,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
+                ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,
                 ipc = RuntimeContract.ProtocolVersion,
                 scope = "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
@@ -357,6 +368,7 @@ public sealed class SimulatorSequence : SequenceItem
                 operations,
                 exposureHooks,
                 ledger,
+                checkpoint,
                 equipment,
                 constraints,
                 editedConstraints,

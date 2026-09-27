@@ -19,6 +19,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <TextBlock Grid.Row="0" Text="Profile" Margin="0,4,16,8" />
             <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProfileName}" TextWrapping="Wrap" Margin="0,4,0,8" />
@@ -36,6 +37,25 @@
                     <TextBlock Text="Stop runtime" Style="{StaticResource ActionLabel}" />
                 </Button>
             </WrapPanel>
+            <StackPanel Grid.Row="5" Grid.ColumnSpan="2" DataContext="{Binding Connection}" Margin="0,16,0,0">
+                <TextBlock Text="Coordinator" FontWeight="Bold" Margin="0,0,0,8" />
+                <TextBlock Text="Server URL" Margin="0,0,0,4" />
+                <TextBox Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MinWidth="160" />
+                <CheckBox IsChecked="{Binding AllowInsecureHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8">
+                    <TextBlock Text="Allow unencrypted HTTP" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock Text="Pairing code" Margin="0,0,0,4" />
+                <TextBox Text="{Binding PairingCode, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MinWidth="160" />
+                <WrapPanel Margin="0,8,0,0">
+                    <Button Command="{Binding PairCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6">
+                        <TextBlock Text="Pair" Style="{StaticResource ActionLabel}" />
+                    </Button>
+                    <Button Command="{Binding ResetPairingCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,0,8" Padding="12,6">
+                        <TextBlock Text="Reset pairing" Style="{StaticResource ActionLabel}" />
+                    </Button>
+                </WrapPanel>
+                <TextBlock Text="{Binding PairingStatus}" TextWrapping="Wrap" />
+            </StackPanel>
         </Grid>
     </DataTemplate>
 </ResourceDictionary>

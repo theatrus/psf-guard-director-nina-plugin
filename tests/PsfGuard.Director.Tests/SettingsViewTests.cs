@@ -13,7 +13,7 @@ namespace PsfGuard.Director.Tests;
 public sealed class SettingsViewTests
 {
     [Fact]
-    public async Task RealOptionsTemplateRendersWithNinaButtonStyle()
+    public async Task RealOptionsTemplateHasNinaStylesAndResponsiveLayout()
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
@@ -28,9 +28,10 @@ public sealed class SettingsViewTests
 
     private static void RenderStates()
     {
+        RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         // WPF's pack resource loader needs an application resource scope. This
         // test uses NINA's actual button template, not a browser approximation.
-        var app = new Application();
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var resources = app.Resources;
         foreach (var key in new[] { "BackgroundBrush", "SecondaryBackgroundBrush", "TertiaryBackgroundBrush", "BorderBrush" })
             resources[key] = new SolidColorBrush(Color.FromRgb(32, 32, 32));
@@ -64,8 +65,9 @@ public sealed class SettingsViewTests
                 host.UpdateLayout();
                 Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
                 host.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
                 var buttons = Descendants(host).OfType<Button>().ToArray();
-                Assert.Equal(2, buttons.Length);
+                Assert.Equal(4, buttons.Length);
                 Assert.Equal(state != "Ready", buttons[0].IsEnabled);
                 Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                 foreach (var button in buttons)
@@ -78,13 +80,20 @@ public sealed class SettingsViewTests
                     Assert.True(bounds.Right <= width && bounds.Left >= 0);
                 }
                 var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(host);
+                var drawing = new DrawingVisual();
+                using (var context = drawing.RenderOpen())
+                    context.DrawRectangle(new VisualBrush(host), null, new Rect(0, 0, width, host.ActualHeight));
+                bitmap.Render(drawing);
+                var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+                bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+                Assert.True(pixels.Where((_, index) => index % 4 != 3).Count(value => value > 150) > 1000,
+                    "Settings render must contain visible controls and text.");
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 var path = Path.Combine(FindRoot(), "artifacts", $"settings-{width}-{(state.Length > 10 ? "fault" : state.ToLowerInvariant())}.png");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                using var output = File.Create(path);
-                encoder.Save(output);
+                using var file = File.Create(path);
+                encoder.Save(file);
             }
         app.Shutdown();
     }
@@ -111,12 +120,24 @@ public sealed class SettingsViewTests
 
     public sealed class ViewModel(string state)
     {
+        public object Connection { get; } = new ConnectionViewModel();
         public string ProfileName => "Director simulator - long profile name";
         public string RuntimeStatus => state;
         public string EngineVersion => "0.2.0";
         public string AcquisitionStatus => "Not armed";
         public ICommand StartRuntimeCommand { get; } = new StubCommand(state != "Ready");
         public ICommand StopRuntimeCommand { get; } = new StubCommand(state != "Stopped");
+    }
+
+    public sealed class ConnectionViewModel
+    {
+        public string ServerUrl { get; set; } = "https://psf-guard.example";
+        public string PairingCode { get; set; } = "";
+        public string PairingStatus => "Paired to rig 9f8d73a9-8055-42a6-a105-fb74fe15a398";
+        public bool AllowInsecureHttp { get; set; }
+        public bool IsEditable => true;
+        public ICommand PairCommand { get; } = new StubCommand(false);
+        public ICommand ResetPairingCommand { get; } = new StubCommand(true);
     }
 
     private sealed class StubCommand(bool enabled) : ICommand

@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory)][string]$NinaDirectory,
     [Parameter(Mandatory)][string]$PluginZip,
-    [switch]$AscomSequence
+    [switch]$AscomSequence,
+    [string]$CoordinatorFixture
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -18,6 +19,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Isolation hook build failed.' }
 $builtHook = Join-Path $hookOutput 'NinaIsolation.dll'
 $root = Join-Path $repo "artifacts/nina-smoke-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $root | Out-Null
+if ($CoordinatorFixture) {
+    if (!$AscomSequence) { throw 'Coordinator receipt testing requires -AscomSequence.' }
+    Copy-Item -LiteralPath (Resolve-Path -LiteralPath $CoordinatorFixture).Path -Destination (Join-Path $root 'coordinator-fixture.json')
+}
 $hook = Join-Path $root 'NinaIsolation.dll'
 Copy-Item -LiteralPath $builtHook -Destination $hook
 $token = [Guid]::NewGuid().ToString('N')

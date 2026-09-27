@@ -137,7 +137,8 @@ for each request; there is no token setting, file, environment variable, URL or
 log entry. The client does not follow redirects or accept cookies. Provider,
 transport and server failures return bounded failure categories, not raw server
 bodies, credential exceptions or local paths. Anonymous requests remain possible
-for an isolated server configured to allow them. This is not Director pairing.
+for an isolated server configured to allow them. Paired clients also send the
+bound local profile in `X-PSF-Director-Profile`.
 
 The entire exchange, including credentials and body streaming, has a 30-second
 deadline and caller cancellation. Response bodies are limited to 1 MiB and the
@@ -147,18 +148,74 @@ are refused. Integer revisions and timestamps retain their full unsigned range.
 These transport bounds do not prove that a complete future IPC operation fits.
 
 The result is a `CoordinatorProgramPreview`, never acquisition authority. The
-client sends unconditional GETs and rejects `304`: it has no durable cache that
-could justify that response. Passing the prior preview checks that the same
+client sends unconditional GETs and rejects `304`: the current compiler does
+not provide an immutable, cache-revalidatable allocation. Passing the prior preview checks that the same
 ETag or assignment ID/revision never changes content, including validity.
 This intentionally rejects the current server's rebuilt validity under an
 unchanged identity. A genuinely different preview does not replace a ledger,
 refund attempts or reset pending credit. The caller must not discard the prior
 identity check to turn a refresh failure into an acquisition workaround.
 
-No settings UI, background poller, file cache, runtime ledger, sidecar request or
-native operation is connected here. Unit and loopback HTTP tests cover this
-client; they are not the real PSF Guard-to-NINA acquisition acceptance gate.
-The existing TS-style container and Sync surfaces are unchanged.
+`CoordinatorPreviewCache` atomically saves bounded inspection history with its
+origin, coordinator/catalog/rig/profile tuple, exact configuration and content
+fingerprint. `ReadAndCachePreviewAsync` loads that history before fetching and
+checks immutable identity again before replacing it. Corrupt history is an
+error, not permission to drop the guard. `ReadPrevious` can return expired
+history for inspection and comparison; it never authorizes offline equipment.
+The cache contains no credential. The existing TS-style container and Sync
+surfaces are unchanged.
+
+### Director pairing
+
+Settings accept a server URL and a Director `psfdpt_` pairing code only. An
+operator issues this code through PSF Guard's Director pairing API, scoped to
+the exact rig database. The plugin exchanges it at `POST /api/director/v1/pair`
+with protocol 1 and the local NINA profile GUID. It verifies the returned
+coordinator/catalog/rig/profile/client identities and exact program-read,
+checkin-write and status-write scopes. Sync codes and tokens are not compatible.
+The credential and its binding are stored together in Windows Credential
+Manager under a Director-only origin/profile key; no secret goes into NINA's
+profile XML, arguments, environment or logs. Codes are cleared after use.
+
+HTTPS and loopback HTTP work by default. A bare IP is treated as HTTP; a bare
+hostname defaults to HTTPS. Non-loopback HTTP needs explicit consent, saved for
+that exact origin in the current profile. Changing origins does not carry that
+consent forward. Pairing changes require a stopped/faulted runtime and profile
+changes cancel pending pairing. A configured but unpaired coordinator cannot
+silently start with a random local rig identity.
+
+Reset pairing deletes the local credential, not server authorization. Operators
+can revoke old clients on the server. If a credential is deleted manually,
+reset remains idempotent and a new code enables Pair without restarting NINA.
+Lost exchange responses or vault write failures require a new code. The server
+UI for issuing/revoking Director codes is separate frontend work.
+
+### Capture checkpoint delivery
+
+`CoordinatorCheckpointClient.DeliverAsync` reads the already-open runtime's
+capture feed in pages of at most 64, posting to the exact bound rig's `/checkin`
+endpoint. One call handles at most 16 pages by default (configurable, bounded).
+Each page has a 30-second deadline including ledger read, credentials and HTTP.
+There is no unbounded retry or preparation-feed mixing. This API is wired into
+the test-only simulator probe, not an automatic production polling loop.
+
+The local cursor is scoped to origin, coordinator/catalog/rig/profile and full
+ledger identity. Writes are flushed and atomically renamed; a cross-process
+lease prevents concurrent cursor replacement. Acknowledgements must match all
+identities, receipt outcomes/counts, conflict sequences and contiguous progress.
+Only the submitted page advances locally, even if the server knows later events.
+Conflicts, malformed replies and partial failures never advance that page or
+erase evidence. A lost response replays identical events and accepts duplicates.
+The last observed program revision persists with the cursor, so a later page
+failure cannot hide a required refresh on restart. Supplying that newly held
+revision acknowledges the refresh; no response replaces a runtime ledger.
+
+All capture/preparation evidence stays in the original ledger. The server
+currently accepts capture events only; a separately identified preparation feed
+is still needed. Production session ownership, authorized immutable allocation
+activation/replacement, engine negotiation, automatic/batch check-in sequencer
+controls and live-status reporting remain future work. The real NINA/server
+receipt smoke test does not prove the server-issued acquisition acceptance gate.
 
 ## Planner evaluation
 
