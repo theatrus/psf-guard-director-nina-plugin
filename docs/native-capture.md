@@ -119,6 +119,47 @@ fixed filters, and old journals. These are not the full NINA/server simulator
 gate. They do not prove that a camera driver applied a requested setting, nor
 remove the imaging mediator's internal queue delay or competing-controller risk.
 
+## Read-only coordinator intake
+
+`CoordinatorProgramClient.ReadPreviewAsync` reads the current
+`GET /api/director/v1/rigs/{rig}/program` compiler response. It requires an
+explicit coordinator/catalog/rig/local-profile binding and the complete current
+native configuration. The client preserves reverse-proxy URL prefixes, checks
+all three returned identities and exact configuration, and verifies goal links
+against the program's target/recipe bindings. Program schema 1 is understood;
+the response currently carries no engine-version negotiation. Shared-core
+domain validation and authorized ledger activation are still separate work.
+
+Only HTTPS and loopback HTTP are enabled by default. Remote cleartext HTTP
+requires explicit caller opt-in. URLs cannot contain credentials, queries or
+fragments. A caller-owned credential provider supplies a bearer token in memory
+for each request; there is no token setting, file, environment variable, URL or
+log entry. The client does not follow redirects or accept cookies. Provider,
+transport and server failures return bounded failure categories, not raw server
+bodies, credential exceptions or local paths. Anonymous requests remain possible
+for an isolated server configured to allow them. This is not Director pairing.
+
+The entire exchange, including credentials and body streaming, has a 30-second
+deadline and caller cancellation. Response bodies are limited to 1 MiB and the
+program to the core's 256 KiB request bound. Unknown/missing/duplicate fields,
+null array entries, incompatible schema, wrong ETag and expired/future validity
+are refused. Integer revisions and timestamps retain their full unsigned range.
+These transport bounds do not prove that a complete future IPC operation fits.
+
+The result is a `CoordinatorProgramPreview`, never acquisition authority. The
+client sends unconditional GETs and rejects `304`: it has no durable cache that
+could justify that response. Passing the prior preview checks that the same
+ETag or assignment ID/revision never changes content, including validity.
+This intentionally rejects the current server's rebuilt validity under an
+unchanged identity. A genuinely different preview does not replace a ledger,
+refund attempts or reset pending credit. The caller must not discard the prior
+identity check to turn a refresh failure into an acquisition workaround.
+
+No settings UI, background poller, file cache, runtime ledger, sidecar request or
+native operation is connected here. Unit and loopback HTTP tests cover this
+client; they are not the real PSF Guard-to-NINA acquisition acceptance gate.
+The existing TS-style container and Sync surfaces are unchanged.
+
 ## Planner evaluation
 
 `RuntimeController.EvaluateAsync` sends an immutable `PlannerRequest` through
