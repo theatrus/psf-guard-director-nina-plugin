@@ -28,6 +28,9 @@ Runtime state changes and faults are logged through N.I.N.A.
 The settings page shows the current profile, planner version, runtime state,
 and acquisition state. Start/Stop control the local planner process only.
 There is no PSF Guard pairing, target execution, or Chatstronomy adapter yet.
+An internal read-only coordinator client now validates program previews against
+an explicit database/rig/profile binding. It is not wired to settings or
+acquisition; see [coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
 
 ## Development
 
