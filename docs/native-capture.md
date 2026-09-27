@@ -399,6 +399,79 @@ The ASCOM probe also checks inherited before/after hooks in the real nightly hos
 
 ## Native target context
 
+### Target Scheduler-compatible instruction slots
+
+`NinaInstructionSlots` supplies the editable native instruction blocks for the
+future Director session container. It is internal and is not a new public
+sequencer container or a server-plan executor. Each slot uses NINA's existing
+`SequentialContainer`, including its nested instructions, triggers, conditions,
+and sequence JSON conventions. No TS assembly or private TS type is required.
+
+The compatibility baseline is TS `TargetSchedulerContainer`, `PlanContainer`,
+`InstructionContainer`, and `TargetSchedulerContainerTemplate.xaml` at source
+commit `8b549b1123520add0cb65124f469e9cb5723b13d`. Preserve its visible ordering
+and labels in the eventual Director UI:
+
+| Director slot / TS label | TS property | Intended boundary |
+| --- | --- | --- |
+| Before Wait Instructions | `BeforeWaitContainer` | Before each scheduler wait. |
+| After Wait Instructions | `AfterWaitContainer` | After that wait. |
+| Before New Target Instructions | `BeforeTargetContainer` | Before starting a new or changed target. |
+| After Each Exposure Instructions | `AfterEachExposureContainer` | After an exposure and its save work. |
+| After New Target Instructions | `AfterTargetContainer` | After imaging the departing new/changed target. |
+| After Each Target Instructions | `AfterAllTargetsContainer` | After a target plan, not a session-end alias. |
+| After Target Complete Instructions | `AfterTargetCompleteContainer` | When all of a target's exposure plans complete. |
+
+The TS source currently calls After New Target and After Each Target together
+when changing targets, entering a wait, or exhausting plans. Its UI describes
+After Each Target more broadly as every target plan. Director's eventual session
+must test and document that distinction explicitly; this adapter does not invent
+a second scheduling policy or choose event boundaries. It also must distinguish
+saved frames from accepted goal progress when deciding target completion.
+
+`CreateInvocation` freezes a cloned block, preserving disabled instructions and
+native retry/error settings. One invocation can run once, and an owning slot set
+rejects concurrent invocations. The editable configuration remains untouched.
+The invocation attaches to the supplied native parent for DSO target lookup,
+inherited triggers and conditions, initializes its own native entities, runs the
+native strategy, tears them down, and detaches even on failure. Parent trigger
+state belongs to the surrounding NINA session and is not reset or reinitialized.
+Cloned local trigger state is invocation-scoped, not a cross-exposure timer.
+Initialization/teardown follows NINA's root traversal: conditions, triggers,
+then items and nested item containers. Each trigger owns its runner's lifecycle;
+the adapter does not independently initialize its runner a second time.
+
+A returned task is not proof that hooks succeeded. `NinaInstructionResult`
+reports incomplete, skipped, or failed instructions and observed failed native
+triggers, including inherited triggers whose exceptions NINA swallowed. Disabled
+instructions are deliberately ignored. Cleanup failures remain visible and do
+not hide an initialization or cancellation error. This is evidence for the
+session, not an equipment permit: NINA can continue after a failed trigger, so
+independent safety handling and post-hook core revalidation remain mandatory.
+The helper cannot distinguish or authorize arbitrary science-exposure items
+inside hooks. Before invocation the production coordinator must validate or
+refuse those instructions; it must not count an unreserved hook exposure toward
+a Director goal. The same applies to competing equipment controllers in hooks.
+The owner must never replay a hook automatically after uncertain execution or a
+restart; durable hook identity, timing, and recovery policy remain unfinished.
+
+The public container/UI must still preserve TS's target name, coordinates,
+rotation and nighttime chart; Project/Target, Coordinates and Stop At context;
+Item/Filter/Start/End progress; pause after current exposure and resume; native
+disable, reset, duplicate and move controls; and the separate native trigger
+area. Its parent placement semantics matter for Center After Drift and Meridian
+Flip. Do not replace these with a simplified custom control surface. Native
+unsafe/weather interruption and third-party plugin triggers must coexist with
+automatic defaults without allowing a default and a configured hook to perform
+the same operation twice.
+
+Only the internal slot configuration/lifecycle is implemented here. The public
+TS-compatible UI, automatic operation policy, server assignment intake, offline
+session/recovery owner, live status and batch telemetry are not implemented by
+this helper. Local tests cover native sequencing and target lookup, JSON,
+cloning, conditions, swallowed failures and cancellation. They are not a real
+NINA/server acceptance run and do not certify every third-party instruction.
+
 `NinaTargetContainer` supplies NINA's public `IDeepSkyObjectContainer` contract
 to nested preparation and exposure items, including inherited trigger contexts.
 It preserves the program's target name, J2000 coordinates, and optional position
