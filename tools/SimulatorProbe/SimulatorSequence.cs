@@ -348,7 +348,9 @@ public sealed class SimulatorSequence : SequenceItem
             var result = new
             {
                 passed = errors.Count == 0 && captures.Count == 3,
-                nina = "3.3.0.1058",
+                nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
+                runtime = RuntimeContract.RuntimeVersion,
+                ipc = RuntimeContract.ProtocolVersion,
                 scope = "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
                 steps,
                 evaluations,

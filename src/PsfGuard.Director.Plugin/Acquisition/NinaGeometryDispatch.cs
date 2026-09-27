@@ -14,11 +14,12 @@ internal sealed class NinaGeometryDispatch
     private readonly RuntimeStatus session;
     private readonly Func<NinaDispatchSnapshot> read;
     private readonly Action validateNative;
+    private readonly TimeProvider clock;
     private readonly object claimsLock = new();
     private readonly HashSet<(string PreparationId, uint Ordinal)> commands = [];
     private readonly HashSet<string> captures = [];
 
-    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative)
+    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(read);
@@ -26,6 +27,7 @@ internal sealed class NinaGeometryDispatch
         this.runtime = runtime;
         this.read = read;
         this.validateNative = validateNative;
+        this.clock = clock ?? TimeProvider.System;
         session = runtime.Status;
         CheckSession();
     }
@@ -57,7 +59,7 @@ internal sealed class NinaGeometryDispatch
     }
 
     private Func<CancellationToken, Task> Once(string goal,
-        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDecision>>> check, Action? validateContext)
+        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDispatchCheck>>> check, Action? validateContext)
     {
         var entered = 0;
         return async token =>
@@ -68,13 +70,14 @@ internal sealed class NinaGeometryDispatch
             CheckSession();
             validateNative();
             validateContext?.Invoke();
+            var started = clock.GetTimestamp();
             var before = read();
             CheckSession();
             var result = await check(before, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             CheckSession();
-            if (result.Error is not null || result.Value is not { Action: PlannerAction.Acquire } decision || decision.GoalId != goal)
-                throw new InvalidOperationException($"Director refused native dispatch: {result.Error?.ToString() ?? result.Value?.Reason ?? "missing_decision"}.");
+            if (result.Error is not null || result.Value is not { Decision.Action: PlannerAction.Acquire } checkedDispatch || checkedDispatch.Decision.GoalId != goal)
+                throw new InvalidOperationException($"Director refused native dispatch: {result.Error?.ToString() ?? result.Value?.Decision.Reason ?? "missing_decision"}.");
 
             // The IPC exchange is asynchronous. Re-read local evidence before
             // allowing the native item to proceed; a changed state needs new work.
@@ -88,6 +91,7 @@ internal sealed class NinaGeometryDispatch
                 || before.State != (after.State with { NowMs = before.State.NowMs })
                 || after.State.NowMs < before.State.NowMs || after.State.NowMs >= after.State.ConditionsValidUntilMs)
                 throw new InvalidOperationException("Native constraints or conditions changed during the dispatch check.");
+            checkedDispatch.EnsureWithinDeadline(after.State.NowMs, clock.GetElapsedTime(started));
         };
     }
 

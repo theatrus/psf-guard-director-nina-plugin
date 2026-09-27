@@ -130,6 +130,41 @@ public sealed class NinaGeometryDispatchTests
         Assert.Throws<InvalidOperationException>(() => guard.Capture("other", reservation));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task DelayedSuccessfulReplyCannotDispatchEvenWithOtherwiseFreshConditions(bool capture, bool wallClock)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var clock = new DispatchClock();
+        var reads = 0;
+        var guard = new NinaGeometryDispatch(f.Runtime, () =>
+        {
+            var snapshot = f.Snapshot();
+            if (++reads == 2)
+            {
+                if (wallClock) snapshot = snapshot with { State = snapshot.State with { NowMs = Start + 59999 } };
+                else clock.Ticks = TimeSpan.FromSeconds(61).Ticks;
+            }
+            return snapshot;
+        }, () => { }, clock);
+        var check = capture ? guard.Capture("prep", await f.ReserveAsync()) : guard.Pending(f.Next);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+        f.Native.CameraMediator.Verify(m => m.SetReadoutModeForNormalImages(It.IsAny<short>()), Times.Never);
+        if (capture) Assert.IsType<LedgerEvidence.Reserved>((await f.Runtime.FindAttemptAsync("capture")).Value!.Attempt!.Evidence);
+        else Assert.Equal(f.Next.Command, (await f.Runtime.FindPreparationAsync("prep")).Value!.Record!.Pending);
+    }
+
+    private sealed class DispatchClock : TimeProvider
+    {
+        internal long Ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Ticks;
+    }
+
     [Fact]
     public async Task CanceledRuntimeLifetimeInvalidatesOriginalReadyStatus()
     {

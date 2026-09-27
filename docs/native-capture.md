@@ -145,7 +145,7 @@ imaging mediator's possible internal queue delay.
 
 ## Durable ledger host
 
-Runtime 0.6.0 / IPC 7 provides opt-in persistence through
+Runtime 0.7.0 / IPC 8 provides opt-in persistence through
 `RuntimeController(pluginDirectory, storageDirectory)`. The caller must supply
 an existing absolute, private, local Director-owned directory, scoped to its
 rig/profile and allocation. Do not accept this path from a server assignment.
@@ -500,7 +500,7 @@ distributed in the plugin archive; the installed NINA host owns those files.
 
 ### Geometry-bound runtime client
 
-`RuntimeController.OpenGeometryAsync` opens the IPC 7 geometry ledger using an
+`RuntimeController.OpenGeometryAsync` opens the IPC 8 geometry ledger using an
 immutable `DirectorProgram` and `DirectorConstraints`. Evaluate, begin, advance,
 and final reservation require the complete fresh constraint snapshot. Rig IDs
 are checked before the request enters the pipe; the shared Rust core validates
@@ -566,6 +566,16 @@ and conditions. A changed snapshot, canceled lifetime or restarted sidecar
 refuses dispatch even when the new session's displayed status is also Ready.
 The controller's liveness check includes cancellation, not just UI status.
 
+`PlannerDispatchCheck` carries `Decision`, `EvaluatedAtMs` and nullable
+`LatestStartMs`. The evaluation time must equal the submitted `NowMs`; an
+Acquire result needs an inclusive deadline within assignment/condition validity,
+while a refusal must have no deadline. Malformed replies revoke the session.
+The native callback starts a monotonic timer before sampling the request,
+then checks both elapsed time and freshly sampled wall-clock time after the
+reply and local revalidation. Elapsed fractions round up to milliseconds;
+clock regression, expired slack and a late reply refuse dispatch without
+refunding or replaying the issued work. Deadlines are not persisted permits.
+
 The callbacks do not dispatch hardware themselves. Native items still validate
 equipment and recipe settings immediately before calling NINA. This is sampled
 boundary validation, not a real-time hardware interlock or an execution lease:
@@ -578,7 +588,7 @@ set: here `Captured` means linked to a durable capture reservation, not proof
 that the camera exposed. Decoding permits this combination while still rejecting
 pending commands, failed or uncertain preparation observations, and non-refusal
 halt values. Original capture evidence remains available for late save receipts.
-The client requires IPC 7; older runtimes cannot negotiate this contract.
+The client requires IPC 8; older runtimes cannot negotiate this contract.
 
 ### Capture evidence
 

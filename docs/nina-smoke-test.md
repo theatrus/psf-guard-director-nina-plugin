@@ -1,15 +1,17 @@
 # Real N.I.N.A. smoke test
 
-Use the official N.I.N.A. 3.3 nightly #58 (`3.3.0.1058`) in a separate application
+Use the official N.I.N.A. 3.3 nightly #58 or #59 in a separate application
 directory. Do not install it over an existing N.I.N.A. installation. The official
 [nightly bundle](https://f002.backblazeb2.com/file/ninasetup/Nightlies/3.3.0.1058/NINASetupBundle_3.3.0.1058.zip)
 contains a WiX bundle with an embedded MSI. Extract the bundle, then use an MSI
 administrative extraction (`msiexec /a ... /qn TARGETDIR=...`) to unpack the app.
 The test launcher takes the resulting directory containing `NINA.exe`.
 Check the [official download page](https://nighttime-imaging.eu/download/) before
-a new test campaign. On 2026-09-26 its latest nightly was still #58. If that
-changes, update the NuGet, host-version, and source-contract pins together;
-do not silently run a newer host against an unreviewed API contract.
+a new test campaign. On 2026-09-27 its latest nightly was #59 (`3.3.0.1059`).
+The launcher explicitly allows both reviewed hosts, while the plugin keeps #58
+as its minimum API baseline. The #59 SOFA, NOVAS and JPLEPH files match the pinned
+test dependencies exactly. Review newer host contracts before adding them to
+this allowlist; a minimum-version declaration alone is not compatibility evidence.
 
 Build the plugin package, then launch from PowerShell 7.4 or later:
 
@@ -145,6 +147,16 @@ ZIP by its explicit file allowlist. CI compiles the probe and tests its guard
 and fixture contracts; it does not run a desktop ASCOM sequence.
 
 ### Scope
+
+On 2026-09-27 the isolated sequence passed on official nightly #59 with the
+IPC 8 / runtime 0.7.0 artifact pinned from PSF Guard #518. It recorded three
+verified FITS captures, seven successful preparation receipts, six inherited
+exposure-hook events and no errors. Restarting the sidecar retained ledger
+identity and `wait: pending_assessment` rather than acquiring extra frames.
+Same-path horizon edit detection, simulator park/disconnect, sidecar shutdown
+and normal N.I.N.A. close also succeeded. The combined plugin passed 476
+automated tests, including the native instruction-slot tests; this desktop
+fixture does not yet invoke all seven configured instruction slots.
 
 This is durable Rust-geometry native capture with a local fixture, not a
 production autonomous Director session. The dispatch callback checks simulator
