@@ -45,7 +45,7 @@ public sealed partial class NinaCaptureTests
             var reservation = (await runtime.ReserveProgramPreparedAsync("prep", source.Attempt.CaptureId, source.Configuration, state)).Value!;
             var binding = (await runtime.FindCaptureBindingAsync(source.Attempt.CaptureId)).Value!.Binding!;
             // Mock mediators only: the callback is not a production safety fence.
-            var task = f.BoundCapture.CaptureAsync(reservation, binding, f.Local, _ => Task.CompletedTask, f.Progress, default);
+            var task = f.BoundCapture.CaptureAsync(reservation, binding, f.Local, NativeDispatchTest.Allow, f.Progress, default);
             await f.Enqueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
             f.Saved();
             var saved = await task;
@@ -76,7 +76,7 @@ public sealed partial class NinaCaptureTests
     {
         using var f = new Fixture();
         var binding = Bound(f);
-        var task = f.BoundCapture.CaptureAsync(Created(binding), binding, f.Local, _ => Task.CompletedTask, f.Progress, default);
+        var task = f.BoundCapture.CaptureAsync(Created(binding), binding, f.Local, NativeDispatchTest.Allow, f.Progress, default);
         await f.Enqueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
         f.Saved();
         var result = await task;
@@ -89,7 +89,7 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(1.5, result.Intent.ExposureSeconds);
         Assert.Equal(result, f.Read());
         await Assert.ThrowsAsync<IOException>(() => f.BoundCapture.CaptureAsync(Created(binding), binding, f.Local,
-            _ => Task.CompletedTask, f.Progress, default));
+            NativeDispatchTest.Allow, f.Progress, default));
     }
 
     [Theory]
@@ -181,7 +181,7 @@ public sealed partial class NinaCaptureTests
                 case "capability": f.CameraInfo.Gains = new[] { 10, 41 }; break;
                 case "disconnected": f.WheelInfo.Connected = false; break;
             }
-            return Task.CompletedTask;
+            return NativeDispatchTest.Allow(default);
         }, f.Progress, default));
         f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(),
             It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<string>()), Times.Never);
@@ -194,7 +194,7 @@ public sealed partial class NinaCaptureTests
         using var f = new Fixture();
         var binding = Bound(f);
         binding = binding with { Target = binding.Target with { PositionAngleMas = null } };
-        var task = f.BoundCapture.CaptureAsync(Created(binding), binding, f.Local, _ => Task.CompletedTask, f.Progress, default);
+        var task = f.BoundCapture.CaptureAsync(Created(binding), binding, f.Local, NativeDispatchTest.Allow, f.Progress, default);
         await f.Enqueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
         f.Saved();
         Assert.Null((await task).Intent.PositionAngle);

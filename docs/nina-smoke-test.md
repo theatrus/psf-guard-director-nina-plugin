@@ -154,9 +154,12 @@ verified FITS captures, seven successful preparation receipts, six inherited
 exposure-hook events and no errors. Restarting the sidecar retained ledger
 identity and `wait: pending_assessment` rather than acquiring extra frames.
 Same-path horizon edit detection, simulator park/disconnect, sidecar shutdown
-and normal N.I.N.A. close also succeeded. The combined plugin passed 476
+and normal N.I.N.A. close also succeeded. The combined plugin passed 494
 automated tests, including the native instruction-slot tests; this desktop
 fixture does not yet invoke all seven configured instruction slots.
+The final run includes the one-use synchronous dispatch guard after journal and
+progress work, with final prepared-equipment and native-setting checks. Evidence:
+`artifacts/nina-smoke-e93231424a95409f977e8ced5b0f592c/probe/54967cb98af14d18baccfd136a1508b7/result.json`.
 
 This is durable Rust-geometry native capture with a local fixture, not a
 production autonomous Director session. The dispatch callback checks simulator

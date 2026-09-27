@@ -31,7 +31,9 @@ receipt, not a filename prediction or the event's profile-dependent file type.
 
 The caller must prepare filters, focus, pointing, and other operations before
 asking the Rust core again. Capture does not request a filter change. The
-mandatory dispatch callback must reject stale authorization. Profile and camera
+mandatory asynchronous dispatch callback returns a one-use synchronous guard.
+The adapter calls that guard after its local validation, progress reporting and
+durable `Capturing` marker, immediately before entering NINA. Profile and camera
 identity are checked before and after that callback and before enqueue. The
 adapter rejects concurrent calls rather than queuing another stale decision.
 
@@ -71,6 +73,12 @@ The adapter preserves downloaded image identity even when cancellation arrives
 before processing. It writes the stable Director capture GUID into FITS/XISF
 metadata as `PGCAPID`, alongside normal N.I.N.A. target metadata. Input RA is
 explicitly in degrees; the N.I.N.A. coordinate object converts it to hours.
+
+A final guard refusal after the `Capturing` marker but before the native call
+records `Failed` or `Interrupted`, because this running process knows it never
+entered hardware dispatch. A crash at the same durable marker remains ambiguous;
+it never authorizes replay. Once the native call is entered, failures remain
+`CaptureUncertain` even when the call throws synchronously.
 
 Elapsed times use a monotonic clock. Capture/download time excludes preceding
 authorization/journal work; processing/save time starts after download; total
@@ -572,7 +580,16 @@ Acquire result needs an inclusive deadline within assignment/condition validity,
 while a refusal must have no deadline. Malformed replies revoke the session.
 The native callback starts a monotonic timer before sampling the request,
 then checks both elapsed time and freshly sampled wall-clock time after the
-reply and local revalidation. Elapsed fractions round up to milliseconds;
+reply and local revalidation. It returns a separate one-use synchronous guard
+that repeats native/context and snapshot validation at the actual call boundary.
+Preparation items carry this guard past their equipment checks; capture carries
+it through recipe and exposure validation, progress observers and durable journal
+writes. Capture repeats profile/camera identity, the prepared filter/readout and
+the native exposure item's settings immediately before forwarding to the guard;
+progress callbacks cannot change those settings after authorization. The final
+deadline sample includes all those reads and writes. No async
+work or disk I/O may follow the guard before calling the native operation.
+Elapsed fractions round up to milliseconds;
 clock regression, expired slack and a late reply refuse dispatch without
 refunding or replaying the issued work. Deadlines are not persisted permits.
 

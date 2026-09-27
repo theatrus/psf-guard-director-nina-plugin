@@ -15,14 +15,14 @@ internal sealed class NinaExposureItem : SequenceItem, IExposureItem
     private readonly LedgerReservation reservation;
     private readonly CaptureBinding binding;
     private readonly NinaEquipmentBinding local;
-    private readonly Func<CancellationToken, Task> revalidate;
+    private readonly Func<CancellationToken, Task<Action>> revalidate;
     private readonly CaptureIntent intent;
     private int entered;
     private CaptureEvidence? evidence;
     private Exception? executionError;
 
     internal NinaExposureItem(NinaProgramCapture capture, LedgerReservation reservation, CaptureBinding binding,
-        NinaEquipmentBinding local, Func<CancellationToken, Task> revalidate)
+        NinaEquipmentBinding local, Func<CancellationToken, Task<Action>> revalidate)
     {
         ArgumentNullException.ThrowIfNull(revalidate);
         this.capture = capture;
@@ -64,9 +64,14 @@ internal sealed class NinaExposureItem : SequenceItem, IExposureItem
             CheckSettings();
             var saved = await capture.CaptureAsync(reservation, binding, local, async cancellation =>
             {
-                await revalidate(cancellation).ConfigureAwait(false);
+                var finalDispatch = await revalidate(cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();
                 CheckSettings();
+                return () =>
+                {
+                    CheckSettings();
+                    finalDispatch();
+                };
             }, progress, token).ConfigureAwait(false);
             Volatile.Write(ref evidence, saved);
         }

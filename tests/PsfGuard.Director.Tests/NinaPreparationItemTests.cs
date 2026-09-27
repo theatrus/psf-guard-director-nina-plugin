@@ -144,9 +144,9 @@ public sealed class NinaPreparationItemTests
     public void RecoveryAndUnboundOperationsCannotCreateItems()
     {
         var f = new Fixture();
-        Assert.Throws<InvalidOperationException>(() => f.Factory.Create(new PreparationNext.InFlight(1), f.Program, f.Native.Binding, _ => Task.CompletedTask));
+        Assert.Throws<InvalidOperationException>(() => f.Factory.Create(new PreparationNext.InFlight(1), f.Program, f.Native.Binding, NativeDispatchTest.Allow));
         var wrong = new PreparationNext.Run(f.Command with { TargetId = "wrong" });
-        Assert.Throws<InvalidDataException>(() => f.Factory.Create(wrong, f.Program, f.Native.Binding, _ => Task.CompletedTask));
+        Assert.Throws<InvalidDataException>(() => f.Factory.Create(wrong, f.Program, f.Native.Binding, NativeDispatchTest.Allow));
         Assert.Throws<NotSupportedException>(() => f.Create(operation: new PreparationOperation.SetReadoutMode(0)));
     }
 
@@ -195,7 +195,7 @@ public sealed class NinaPreparationItemTests
         var configuration = new NinaEquipmentSnapshot(f.Native.Profiles.Object, f.Native.CameraMediator.Object, f.Native.WheelMediator.Object).Read(local);
         var program = f.Program with { Configuration = configuration, Assignment = f.Program.Assignment with { ConfigurationId = configuration.Id } };
         var issued = f.Factory.Create(new PreparationNext.Run(f.Command with { Operation = new PreparationOperation.SwitchFilter("filter-l") }),
-            program, local, _ => Task.CompletedTask);
+            program, local, NativeDispatchTest.Allow);
         await issued.Item.Run(Progress, default);
         Assert.IsType<PreparationOutcome.Succeeded>(issued.Fence.Completion!.Outcome);
         f.Native.WheelMediator.Verify(x => x.ChangeFilter(It.IsAny<NINA.Core.Model.Equipment.FilterInfo>(),
@@ -209,7 +209,7 @@ public sealed class NinaPreparationItemTests
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var clock = new ManualClock();
         var f = new Fixture();
-        var fence = new NinaOperationFence(f.Command, _ => Task.CompletedTask, clock);
+        var fence = new NinaOperationFence(f.Command, NativeDispatchTest.Allow, clock);
         var run = fence.ExecuteAsync(async () => { entered.SetResult(); await finish.Task; clock.Milliseconds += 31; }, default);
         await entered.Task;
         await Assert.ThrowsAsync<InvalidOperationException>(() => fence.ExecuteAsync(() => throw new Exception("Repeated"), default));
@@ -237,7 +237,7 @@ public sealed class NinaPreparationItemTests
         var configuration = f.Native.Read();
         var program = f.Program with { Configuration = configuration, Assignment = f.Program.Assignment with { ConfigurationId = configuration.Id } };
         var issued = f.Factory.Create(new PreparationNext.Run(f.Command with { Operation = new PreparationOperation.SwitchFilter("filter-l") }),
-            program, f.Native.Binding, _ => Task.CompletedTask);
+            program, f.Native.Binding, NativeDispatchTest.Allow);
         var filter = Assert.IsAssignableFrom<SwitchFilter>(issued.Item);
         Assert.True(filter.Validate(), string.Join(", ", filter.Issues));
         Assert.Equal(slot, filter.Xfilter);
@@ -285,6 +285,6 @@ public sealed class NinaPreparationItemTests
         }
         internal NinaIssuedItem Create(Func<CancellationToken, Task>? validate = null, PreparationOperation? operation = null) =>
             Factory.Create(new PreparationNext.Run(operation is null ? Command : Command with { Operation = operation }),
-                Program, Native.Binding, validate ?? (_ => Task.CompletedTask));
+                Program, Native.Binding, NativeDispatchTest.After(validate));
     }
 }

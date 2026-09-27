@@ -135,8 +135,8 @@ public sealed class NinaMountPreparationTests
     {
         var f = new Fixture();
         var factory = new NinaPreparationItems(f.Native.Profiles.Object, f.Native.CameraMediator.Object, f.Native.WheelMediator.Object, f.Reader, TimeProvider.System);
-        Assert.Throws<NotSupportedException>(() => factory.Create(f.Next, f.Program, f.Native.Binding, _ => Task.CompletedTask));
-        Assert.Throws<NotSupportedException>(() => f.Factory.Create(f.Next, f.Program, f.Native.Binding with { TelescopeDeviceId = null }, _ => Task.CompletedTask));
+        Assert.Throws<NotSupportedException>(() => factory.Create(f.Next, f.Program, f.Native.Binding, NativeDispatchTest.Allow));
+        Assert.Throws<NotSupportedException>(() => f.Factory.Create(f.Next, f.Program, f.Native.Binding with { TelescopeDeviceId = null }, NativeDispatchTest.Allow));
     }
 
     private sealed class Fixture
@@ -163,6 +163,6 @@ public sealed class NinaMountPreparationTests
             Factory = new(Native.Profiles.Object, Native.CameraMediator.Object, Native.WheelMediator.Object, Reader, TimeProvider.System, Mount.Object);
         }
         internal NinaIssuedItem Create(Func<CancellationToken, Task>? validate = null) =>
-            Factory.Create(Next, Program, Native.Binding, validate ?? (_ => Task.CompletedTask));
+            Factory.Create(Next, Program, Native.Binding, NativeDispatchTest.After(validate));
     }
 }

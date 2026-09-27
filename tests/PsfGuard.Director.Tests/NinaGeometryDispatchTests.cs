@@ -165,6 +165,88 @@ public sealed class NinaGeometryDispatchTests
         public override long GetTimestamp() => Ticks;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalDispatchGuardIsOneUseAndRechecksAfterItWasReturned(bool capture)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var clock = new DispatchClock();
+        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock);
+        var check = capture ? guard.Capture("prep", await f.ReserveAsync()) : guard.Pending(f.Next);
+        var final = await check(default);
+        clock.Ticks = TimeSpan.FromSeconds(61).Ticks;
+        Assert.Throws<InvalidOperationException>(final);
+        clock.Ticks = 0;
+        Assert.Throws<InvalidOperationException>(final);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SuccessfulFinalGuardCannotBeUsedTwice(bool capture)
+    {
+        await using var f = await Fixture.CreateAsync();
+        var guard = f.Guard();
+        var check = capture ? guard.Capture("prep", await f.ReserveAsync()) : guard.Pending(f.Next);
+        var final = await check(default);
+        final();
+        Assert.Throws<InvalidOperationException>(final);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ReturnedGuardCannotSurviveCancellationOrSessionRestart(bool capture, bool restart)
+    {
+        await using var f = await Fixture.CreateAsync();
+        using var cancellation = new CancellationTokenSource();
+        var guard = f.Guard();
+        var check = capture ? guard.Capture("prep", await f.ReserveAsync()) : guard.Pending(f.Next);
+        var final = await check(cancellation.Token);
+        if (restart)
+        {
+            await f.Runtime.StopAsync();
+            await f.Runtime.StartAsync("rig-test");
+            await f.Runtime.OpenGeometryAsync(f.Program, f.Constraints, f.State);
+            Assert.Throws<IOException>(final);
+        }
+        else
+        {
+            cancellation.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(final);
+        }
+        Assert.Throws<InvalidOperationException>(final);
+    }
+
+    [Fact]
+    public async Task SlowEquipmentValidationAfterAsyncCheckCannotEnterNativePreparation()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var clock = new DispatchClock();
+        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock);
+        var check = guard.Pending(f.Next);
+        var returned = false;
+        f.Native.CameraMediator.Setup(x => x.GetInfo()).Returns(() =>
+        {
+            if (returned) clock.Ticks = TimeSpan.FromSeconds(61).Ticks;
+            return f.Native.Camera;
+        });
+        var factory = new NinaPreparationItems(f.Native.Profiles.Object, f.Native.CameraMediator.Object,
+            f.Native.WheelMediator.Object, f.Equipment, clock);
+        var issued = factory.Create(f.Next, f.Program, f.Native.Binding, async token =>
+        {
+            var final = await check(token);
+            returned = true;
+            return final;
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => issued.Item.Execute(Progress, default));
+        Assert.IsType<PreparationOutcome.Failed>(issued.Fence.Completion!.Outcome);
+        f.Native.CameraMediator.Verify(x => x.SetReadoutModeForNormalImages(It.IsAny<short>()), Times.Never);
+    }
+
     [Fact]
     public async Task CanceledRuntimeLifetimeInvalidatesOriginalReadyStatus()
     {
