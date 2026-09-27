@@ -77,7 +77,9 @@ internal sealed class CaptureJournal
         var validTransition = (Evidence.Phase, evidence.Phase) switch
         {
             (CapturePhase.Reserved, CapturePhase.Capturing or CapturePhase.Failed or CapturePhase.Interrupted) => true,
-            (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.CaptureUncertain) => true,
+            // A final native guard can refuse after the durable Capturing marker
+            // but before hardware entry. A crash at that marker stays uncertain.
+            (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.CaptureUncertain or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.Downloaded, CapturePhase.SaveQueued or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.SaveQueued, CapturePhase.Saved or CapturePhase.Failed or CapturePhase.SaveUncertain) => true,
             _ => false

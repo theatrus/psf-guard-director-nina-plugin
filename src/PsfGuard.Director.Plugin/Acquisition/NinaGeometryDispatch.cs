@@ -14,11 +14,12 @@ internal sealed class NinaGeometryDispatch
     private readonly RuntimeStatus session;
     private readonly Func<NinaDispatchSnapshot> read;
     private readonly Action validateNative;
+    private readonly TimeProvider clock;
     private readonly object claimsLock = new();
     private readonly HashSet<(string PreparationId, uint Ordinal)> commands = [];
     private readonly HashSet<string> captures = [];
 
-    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative)
+    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(read);
@@ -26,11 +27,12 @@ internal sealed class NinaGeometryDispatch
         this.runtime = runtime;
         this.read = read;
         this.validateNative = validateNative;
+        this.clock = clock ?? TimeProvider.System;
         session = runtime.Status;
         CheckSession();
     }
 
-    internal Func<CancellationToken, Task> Pending(PreparationNext next, Action? validateContext = null)
+    internal Func<CancellationToken, Task<Action>> Pending(PreparationNext next, Action? validateContext = null)
     {
         CheckSession();
         if (next is not PreparationNext.Run issued)
@@ -43,7 +45,7 @@ internal sealed class NinaGeometryDispatch
             snapshot.Configuration, snapshot.Constraints, snapshot.State, token), validateContext);
     }
 
-    internal Func<CancellationToken, Task> Capture(string preparationId, LedgerReservation reservation, Action? validateContext = null)
+    internal Func<CancellationToken, Task<Action>> Capture(string preparationId, LedgerReservation reservation, Action? validateContext = null)
     {
         CheckSession();
         if (reservation is not { Kind: ReservationKind.Created, Decision: null, Attempt.Evidence: LedgerEvidence.Reserved })
@@ -56,8 +58,8 @@ internal sealed class NinaGeometryDispatch
             snapshot.Configuration, snapshot.Constraints, snapshot.State, token), validateContext);
     }
 
-    private Func<CancellationToken, Task> Once(string goal,
-        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDecision>>> check, Action? validateContext)
+    private Func<CancellationToken, Task<Action>> Once(string goal,
+        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDispatchCheck>>> check, Action? validateContext)
     {
         var entered = 0;
         return async token =>
@@ -68,26 +70,40 @@ internal sealed class NinaGeometryDispatch
             CheckSession();
             validateNative();
             validateContext?.Invoke();
+            var started = clock.GetTimestamp();
             var before = read();
             CheckSession();
             var result = await check(before, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             CheckSession();
-            if (result.Error is not null || result.Value is not { Action: PlannerAction.Acquire } decision || decision.GoalId != goal)
-                throw new InvalidOperationException($"Director refused native dispatch: {result.Error?.ToString() ?? result.Value?.Reason ?? "missing_decision"}.");
+            if (result.Error is not null || result.Value is not { Decision.Action: PlannerAction.Acquire } checkedDispatch || checkedDispatch.Decision.GoalId != goal)
+                throw new InvalidOperationException($"Director refused native dispatch: {result.Error?.ToString() ?? result.Value?.Decision.Reason ?? "missing_decision"}.");
 
-            // The IPC exchange is asynchronous. Re-read local evidence before
-            // allowing the native item to proceed; a changed state needs new work.
-            validateNative();
-            validateContext?.Invoke();
-            var after = read();
-            CheckSession();
-            token.ThrowIfCancellationRequested();
-            if (JsonSerializer.Serialize(before.Configuration) != JsonSerializer.Serialize(after.Configuration)
-                || JsonSerializer.Serialize(before.Constraints) != JsonSerializer.Serialize(after.Constraints)
-                || before.State != (after.State with { NowMs = before.State.NowMs })
-                || after.State.NowMs < before.State.NowMs || after.State.NowMs >= after.State.ConditionsValidUntilMs)
-                throw new InvalidOperationException("Native constraints or conditions changed during the dispatch check.");
+            Validate();
+            var dispatched = 0;
+            return () =>
+            {
+                if (Interlocked.Exchange(ref dispatched, 1) != 0)
+                    throw new InvalidOperationException("This native dispatch guard has already been consumed.");
+                // The adapter calls this after its own validation, progress and
+                // durable journal writes, immediately before entering NINA.
+                Validate();
+            };
+
+            void Validate()
+            {
+                validateNative();
+                validateContext?.Invoke();
+                var after = read();
+                CheckSession();
+                token.ThrowIfCancellationRequested();
+                if (JsonSerializer.Serialize(before.Configuration) != JsonSerializer.Serialize(after.Configuration)
+                    || JsonSerializer.Serialize(before.Constraints) != JsonSerializer.Serialize(after.Constraints)
+                    || before.State != (after.State with { NowMs = before.State.NowMs })
+                    || after.State.NowMs < before.State.NowMs || after.State.NowMs >= after.State.ConditionsValidUntilMs)
+                    throw new InvalidOperationException("Native constraints or conditions changed during the dispatch check.");
+                checkedDispatch.EnsureWithinDeadline(after.State.NowMs, clock.GetElapsedTime(started));
+            }
         };
     }
 

@@ -11,16 +11,21 @@ internal sealed class NinaProgramCapture(NinaEquipmentSnapshot equipment, ICamer
     IFilterWheelMediator wheel, NinaCaptureAdapter capture)
 {
     internal Task<CaptureEvidence> CaptureAsync(LedgerReservation reservation, CaptureBinding binding,
-        NinaEquipmentBinding local, Func<CancellationToken, Task> revalidateAtDispatch,
+        NinaEquipmentBinding local, Func<CancellationToken, Task<Action>> revalidateAtDispatch,
         IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
         var intent = CreateIntent(reservation, binding, local);
         return capture.CaptureAsync(intent, async cancellation =>
         {
-            await revalidateAtDispatch(cancellation).ConfigureAwait(false);
+            var finalDispatch = await revalidateAtDispatch(cancellation).ConfigureAwait(false);
             cancellation.ThrowIfCancellationRequested();
             CheckPrepared(binding, local);
+            return () =>
+            {
+                CheckPrepared(binding, local);
+                finalDispatch();
+            };
         }, progress, token);
     }
 

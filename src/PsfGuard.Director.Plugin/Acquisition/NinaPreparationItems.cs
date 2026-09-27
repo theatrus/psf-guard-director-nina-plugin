@@ -18,7 +18,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
     NinaEquipmentSnapshot equipment, TimeProvider clock, ITelescopeMediator? telescope = null)
 {
     internal NinaIssuedItem Create(PreparationNext next, DirectorProgram program, NinaEquipmentBinding local,
-        Func<CancellationToken, Task> revalidateAtDispatch)
+        Func<CancellationToken, Task<Action>> revalidateAtDispatch)
     {
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
         if (next is not PreparationNext.Run run) throw new InvalidOperationException("Only a newly issued operation can create a native item.");
@@ -32,7 +32,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         SequenceItem? item = null;
         var fence = new NinaOperationFence(command, async token =>
         {
-            await revalidateAtDispatch(token).ConfigureAwait(false);
+            var finalDispatch = await revalidateAtDispatch(token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             if (JsonSerializer.Serialize(equipment.Read(local)) != JsonSerializer.Serialize(program.Configuration))
                 throw new InvalidOperationException("Native equipment changed before operation dispatch.");
@@ -51,6 +51,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
                     || filter.Xfilter != slot)
                     throw new InvalidOperationException("Native filter settings changed after issue.");
             }
+            return finalDispatch;
         }, clock, () =>
         {
             if (JsonSerializer.Serialize(equipment.Read(local)) != JsonSerializer.Serialize(program.Configuration))
@@ -126,7 +127,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
     }
 }
 
-internal sealed class NinaOperationFence(PreparationCommand command, Func<CancellationToken, Task> revalidate, TimeProvider clock,
+internal sealed class NinaOperationFence(PreparationCommand command, Func<CancellationToken, Task<Action>> revalidate, TimeProvider clock,
     Action? verifyCompletion = null)
 {
     private int invoked;
@@ -143,8 +144,9 @@ internal sealed class NinaOperationFence(PreparationCommand command, Func<Cancel
         try
         {
             token.ThrowIfCancellationRequested();
-            await revalidate(token).ConfigureAwait(false);
+            var finalDispatch = await revalidate(token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
+            finalDispatch();
             dispatched = true;
             await nativeAction().ConfigureAwait(false);
             verifyCompletion?.Invoke();

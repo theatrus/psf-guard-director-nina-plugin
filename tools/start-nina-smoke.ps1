@@ -8,8 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $nina = Join-Path (Resolve-Path -LiteralPath $NinaDirectory) 'NINA.exe'
-if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -ne '3.3.0.1058') {
-    throw 'This smoke test requires NINA 3.3 nightly #58 (3.3.0.1058).'
+if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058', '3.3.0.1059')) {
+    throw 'This smoke test requires a reviewed NINA 3.3 nightly #58 or #59 host.'
 }
 $zip = (Resolve-Path -LiteralPath $PluginZip).Path
 $hookOutput = Join-Path $repo 'artifacts/nina-hook-build'

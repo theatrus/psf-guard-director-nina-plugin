@@ -476,19 +476,22 @@ public sealed partial class NinaCaptureTests
     private sealed class ManualClock : TimeProvider
     {
         private long milliseconds;
+        public Action? OnTimestamp { get; set; }
         public void Advance(long value) => milliseconds += value;
         public override long TimestampFrequency => 1000;
-        public override long GetTimestamp() => milliseconds;
+        public override long GetTimestamp() { OnTimestamp?.Invoke(); return milliseconds; }
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch.AddMilliseconds(milliseconds);
     }
 
     private sealed class TestProgress : IProgress<ApplicationStatus>
     {
         public bool Throw { get; set; }
+        public Action<ApplicationStatus>? OnReport { get; set; }
         public List<string> Messages { get; } = [];
         public void Report(ApplicationStatus value)
         {
             if (Throw) throw new InvalidOperationException("observer failed");
+            OnReport?.Invoke(value);
             Messages.Add(value.Status);
         }
     }
@@ -580,7 +583,7 @@ public sealed partial class NinaCaptureTests
         }
 
         public Task<CaptureEvidence> Run(Func<CancellationToken, Task>? authorize = null, CancellationToken token = default) =>
-            adapter.CaptureAsync(Intent, authorize ?? (_ => Task.CompletedTask), Progress, token);
+            adapter.CaptureAsync(Intent, NativeDispatchTest.After(authorize), Progress, token);
         public CaptureEvidence Read() => CaptureJournal.Read(Path.Combine(Root, Intent.ProfileId.ToString("N"), $"{Intent.CaptureId:N}.json"));
         public void Saved(ImageMetaData? metadata = null) => Saves.Raise(x => x.ImageSaved += null!, Saves.Object,
             new ImageSavedEventArgs { MetaData = metadata ?? Metadata, PathToImage = new Uri(ImagePath) });

@@ -35,16 +35,21 @@ public sealed partial class GeometryTests
                 Assert.Equal(ReservationKind.Created, reservation.Kind);
                 attempt = reservation.Attempt!;
             }
-            Task<LedgerResult<PlannerDecision>> Check(DirectorConstraints current) => capture
+            Task<LedgerResult<PlannerDispatchCheck>> Check(DirectorConstraints current) => capture
                 ? controller.CheckGeometryCaptureDispatchAsync("prep", attempt!, configuration, current, state)
                 : controller.CheckGeometryPendingDispatchAsync(command, configuration, current, state);
-            Assert.Equal(PlannerAction.Acquire, (await Check(constraints)).Value!.Action);
+            var initial = (await Check(constraints)).Value!;
+            Assert.Equal(PlannerAction.Acquire, initial.Decision.Action);
+            Assert.Equal(state.NowMs, initial.EvaluatedAtMs);
+            Assert.True(initial.LatestStartMs >= initial.EvaluatedAtMs);
             var changed = constraints with { Rig = constraints.Rig with { Site = constraints.Rig.Site with { LatitudeDegrees = 36 } } };
-            Assert.Equal(PlannerAction.CheckIn, (await Check(changed)).Value!.Action);
+            var refused = (await Check(changed)).Value!;
+            Assert.Equal(PlannerAction.CheckIn, refused.Decision.Action);
+            Assert.Null(refused.LatestStartMs);
             await controller.StopAsync();
             await controller.StartAsync("rig-test");
             await controller.OpenGeometryAsync(Program(), constraints, state);
-            Assert.Equal(PlannerAction.CheckIn, (await Check(constraints)).Value!.Action);
+            Assert.Equal(PlannerAction.CheckIn, (await Check(constraints)).Value!.Decision.Action);
             var record = (await controller.FindPreparationAsync("prep")).Value!.Record!;
             Assert.Equal(PlannerAction.CheckIn, record.Halted!.Action);
             if (capture)
@@ -76,6 +81,16 @@ public sealed partial class GeometryTests
     [InlineData(true, "status")]
     [InlineData(false, "missing-reason")]
     [InlineData(true, "missing-reason")]
+    [InlineData(false, "missing-evaluation")]
+    [InlineData(true, "wrong-evaluation")]
+    [InlineData(false, "missing-deadline")]
+    [InlineData(true, "null-deadline")]
+    [InlineData(false, "negative-deadline")]
+    [InlineData(true, "fractional-deadline")]
+    [InlineData(false, "past-deadline")]
+    [InlineData(true, "expiry-deadline")]
+    [InlineData(false, "conditions-deadline")]
+    [InlineData(true, "non-acquire-deadline")]
     public async Task MalformedDispatchReplyRevokesSession(bool capture, string fault)
     {
         var program = Program();
@@ -88,10 +103,22 @@ public sealed partial class GeometryTests
         {
             if (op.GetProperty("action").GetString() == "open_geometry") return Opened();
             var reply = new JsonObject { ["status"] = "dispatch_checked", ["decision"] = new JsonObject { ["action"] = "acquire", ["goal_id"] = "goal", ["reason"] = "ready" } };
+            reply["evaluated_at_ms"] = Start;
+            reply["latest_start_ms"] = Start + 1000;
             if (fault == "other-goal") reply["decision"]!["goal_id"] = "other";
             if (fault == "extra") reply["permit"] = true;
             if (fault == "status") reply["status"] = "evaluated";
             if (fault == "missing-reason") reply["decision"]!.AsObject().Remove("reason");
+            if (fault == "missing-evaluation") reply.Remove("evaluated_at_ms");
+            if (fault == "wrong-evaluation") reply["evaluated_at_ms"] = Start + 1;
+            if (fault == "missing-deadline") reply.Remove("latest_start_ms");
+            if (fault == "null-deadline") reply["latest_start_ms"] = null;
+            if (fault == "negative-deadline") reply["latest_start_ms"] = -1;
+            if (fault == "fractional-deadline") reply["latest_start_ms"] = 1.5;
+            if (fault == "past-deadline") reply["latest_start_ms"] = Start - 1;
+            if (fault == "expiry-deadline") reply["latest_start_ms"] = program.Assignment.ExpiresAtMs;
+            if (fault == "conditions-deadline") reply["latest_start_ms"] = State().ConditionsValidUntilMs;
+            if (fault == "non-acquire-deadline") reply["decision"] = new JsonObject { ["action"] = "stop", ["reason"] = "unsafe" };
             return reply;
         });
         await peer.Session.OpenGeometryAsync(program, Constraints(), State(), default);

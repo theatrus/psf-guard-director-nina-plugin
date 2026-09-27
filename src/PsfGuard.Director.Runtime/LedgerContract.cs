@@ -74,6 +74,7 @@ internal static class LedgerContract
             else if (expected == "preparation_started") PipeProtocol.RequireFields(response, "status", "created", "record");
             else if (expected == "program_opened") PipeProtocol.RequireFields(response, "status", "info", "program_version");
             else if (expected == "geometry_opened") PipeProtocol.RequireFields(response, "status", "info", "program_version", "constraints_version");
+            else if (expected == "dispatch_checked") PipeProtocol.RequireFields(response, "status", "decision", "evaluated_at_ms", "latest_start_ms");
             else PipeProtocol.RequireFields(response, "status", field);
             return new(read(response), null);
         }

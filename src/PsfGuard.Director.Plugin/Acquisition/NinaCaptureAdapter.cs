@@ -23,7 +23,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     private readonly SemaphoreSlim captureGate = new(1, 1);
 
     internal async Task<CaptureEvidence> CaptureAsync(CaptureIntent intent,
-        Func<CancellationToken, Task> revalidateAtDispatch,
+        Func<CancellationToken, Task<Action>> revalidateAtDispatch,
         IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
@@ -34,6 +34,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             throw new InvalidOperationException("Director already owns an in-flight capture.");
 
         CaptureJournal? journal = null;
+        var captureEntered = false;
         var started = clock.GetTimestamp();
         var downloaded = started;
         try
@@ -48,7 +49,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 throw new InvalidOperationException("Director requires FITS or XISF image output.");
             journal = new CaptureJournal(journalRoot, intent,
                 new(fileSettings.FilePath, fileSettings.FilePattern, fileSettings.FileType.ToString()), clock.GetUtcNow());
-            await revalidateAtDispatch(token).ConfigureAwait(false);
+            var finalDispatch = await revalidateAtDispatch(token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             CheckLocalContext(intent);
             Report("Exposing and downloading");
@@ -64,7 +65,10 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             // Filter changes, autofocus, and other preparation happen before
             // revalidation. CaptureImage must not insert a filter change here.
             Record(CapturePhase.Capturing);
+            CheckLocalContext(intent);
+            finalDispatch();
             var captureStarted = clock.GetTimestamp();
+            captureEntered = true;
             var exposure = await imaging.CaptureImage(capture, token, progress, intent.TargetName).ConfigureAwait(false)
                 ?? throw new IOException("NINA returned no exposure data.");
             downloaded = clock.GetTimestamp();
@@ -168,7 +172,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 var phase = journal.Evidence.Phase switch
                 {
                     // A camera/transport error cannot prove that hardware did not expose.
-                    CapturePhase.Capturing => CapturePhase.CaptureUncertain,
+                    CapturePhase.Capturing when captureEntered => CapturePhase.CaptureUncertain,
                     CapturePhase.SaveQueued => error is ImageSaveFailedException ? CapturePhase.Failed : CapturePhase.SaveUncertain,
                     _ => error is OperationCanceledException ? CapturePhase.Interrupted : CapturePhase.Failed
                 };
