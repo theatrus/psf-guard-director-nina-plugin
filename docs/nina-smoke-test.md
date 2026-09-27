@@ -1,5 +1,31 @@
 # Real N.I.N.A. smoke test
 
+## Paired capture receipt smoke
+
+`-CoordinatorFixture <absolute-json-path>` extends `-AscomSequence` with a
+disposable loopback PSF Guard server. The JSON contains only `Endpoint`,
+`CoordinatorInstanceId`, `CatalogId` and `RigId`; never put a code or token in
+it. Bind an empty test database to that rig first. The probe issues a code using
+trusted local operator access, exchanges it through the real plugin client,
+and stores/reads the credential in the Windows vault for its isolated profile.
+It uses the paired rig identity in its fixture assignment. After native captures
+and a sidecar restart it checks in the six reservation/save events, recreates
+the sender to verify cursor recovery, and replays from a separate cursor to
+verify duplicate acknowledgements. Cleanup revokes the test client and removes
+its credential. This opt-in probe must never point at a live server/catalog.
+
+On 2026-09-27, this path passed with NINA nightly #59, OmniSim camera/mount/wheel,
+the bundled runtime 0.7.0 / IPC 8, and an isolated PSF Guard pairing build.
+Three FITS captures, seven preparation operations and six inherited trigger
+calls passed; all six capture ledger events were acknowledged, cursor restart
+and duplicate replay succeeded, and cleanup reported no errors. Evidence:
+`artifacts/nina-smoke-e60b4c8bf97d4fa6922cb47a360cb037/probe/8707ef9c7d6644599f3e1846693cb785/result.json`.
+This is fixture-driven acquisition plus real paired receipt delivery, not
+server-issued acquisition authorization, preparation telemetry or a production
+session container. The isolated NINA instance was closed normally afterwards.
+
+## Host setup
+
 Use the official N.I.N.A. 3.3 nightly #58 or #59 in a separate application
 directory. Do not install it over an existing N.I.N.A. installation. The official
 [nightly bundle](https://f002.backblazeb2.com/file/ninasetup/Nightlies/3.3.0.1058/NINASetupBundle_3.3.0.1058.zip)

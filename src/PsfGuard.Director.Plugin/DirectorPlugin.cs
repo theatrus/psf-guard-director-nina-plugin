@@ -25,6 +25,8 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     private int profileTransitions;
     private long profileGeneration;
     private string? commandError;
+    internal DirectorConnection ConnectionModel { get; }
+    public object Connection => ConnectionModel;
 
     [ImportingConstructor]
     public DirectorPlugin(IProfileService profileService)
@@ -32,12 +34,18 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         profiles = profileService;
         settings = new PluginOptionsAccessor(profiles, PluginId);
         runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
-        start = new AsyncCommand(StartRuntimeAsync,
+        ConnectionModel = new(() => profiles.ActiveProfile.Id,
             () => initialized && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => settings.GetValueString("CoordinatorUrl", ""), value => settings.SetValueString("CoordinatorUrl", value),
+            readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""),
+            writeHttpConsent: value => settings.SetValueString("HttpConsentOrigin", value));
+        start = new AsyncCommand(StartRuntimeAsync,
+            () => initialized && !ConnectionModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             ReportError);
         stop = new AsyncCommand(runtime.StopAsync,
             () => initialized && runtime.Status.State is RuntimeState.Starting or RuntimeState.Ready or RuntimeState.Faulted,
             ReportError);
+        ConnectionModel.PropertyChanged += (_, _) => start.Refresh();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -54,12 +62,14 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         profiles.ProfileChanged += ProfileChanged;
         runtime.StateChanged += RuntimeStateChanged;
         initialized = true;
+        ConnectionModel.Reload();
         Refresh();
     }
 
     public override async Task Teardown()
     {
         initialized = false;
+        ConnectionModel.Dispose();
         profiles.ProfileChanged -= ProfileChanged;
         runtime.StateChanged -= RuntimeStateChanged;
         try { await runtime.DisposeAsync(); }
@@ -71,7 +81,10 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     {
         commandError = null;
         var generation = Interlocked.Read(ref profileGeneration);
-        var rigId = settings.GetValueString("RigId", "");
+        var pairing = ConnectionModel.ReadPairing();
+        if (pairing is null && !string.IsNullOrWhiteSpace(ConnectionModel.ServerUrl))
+            throw new InvalidOperationException("Pair the configured coordinator before starting the runtime.");
+        var rigId = pairing?.Binding.RigId.ToString("D") ?? settings.GetValueString("RigId", "");
         if (!Guid.TryParse(rigId, out _))
         {
             rigId = Guid.NewGuid().ToString("D");
@@ -86,6 +99,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     {
         Interlocked.Increment(ref profileGeneration);
         Interlocked.Increment(ref profileTransitions);
+        ConnectionModel.ProfileChanged();
         commandError = null;
         Refresh();
         try { await runtime.StopAsync(); }
@@ -120,5 +134,6 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProfileName)));
         start.Refresh();
         stop.Refresh();
+        ConnectionModel.Changed();
     }
 }

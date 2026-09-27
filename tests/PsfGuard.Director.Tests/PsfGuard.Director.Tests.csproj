@@ -6,6 +6,8 @@
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.ShouldRenderEvenWhenNoDisplayDevicesAreAvailable" Value="true" />
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.ShouldNotRenderInNonInteractiveWindowStation" Value="false" />
     <ProjectReference Include="../../tools/NinaIsolation/NinaIsolation.csproj" />
     <ProjectReference Include="../../tools/SimulatorProbe/SimulatorProbe.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Runtime/PsfGuard.Director.Runtime.csproj" />

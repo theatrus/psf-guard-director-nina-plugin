@@ -27,10 +27,16 @@ Runtime state changes and faults are logged through N.I.N.A.
 
 The settings page shows the current profile, planner version, runtime state,
 and acquisition state. Start/Stop control the local planner process only.
-There is no PSF Guard pairing, target execution, or Chatstronomy adapter yet.
-An internal read-only coordinator client now validates program previews against
-an explicit database/rig/profile binding. It is not wired to settings or
-acquisition; see [coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
+The Coordinator section pairs with a Director code, stores the resulting
+credential in Windows Credential Manager, and can reset local pairing. It never
+displays an API key. A configured coordinator must be paired before starting its
+rig's runtime. Pairing is not permission to acquire.
+The read-only coordinator client validates and caches program previews against
+an explicit database/rig/profile binding. A separate capture checkpoint client
+delivers durable ledger evidence in bounded batches and resumes after restart.
+Neither is yet a production background session or target executor; see
+[coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
+There is no Chatstronomy adapter yet.
 
 ## Development
 

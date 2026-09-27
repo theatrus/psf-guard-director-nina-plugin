@@ -44,7 +44,7 @@ public sealed class CoordinatorProgramPreview
 internal static class CoordinatorProgramContract
 {
     internal const int MaximumBytes = 1048576;
-    private static readonly JsonSerializerOptions Options = new(PlannerContract.Options)
+    internal static readonly JsonSerializerOptions Options = new(PlannerContract.Options)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectRequiredConstructorParameters = true,
@@ -105,7 +105,7 @@ internal static class CoordinatorProgramContract
         }
     }
 
-    private static void CheckTree(JsonElement value)
+    internal static void CheckTree(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object)
         {

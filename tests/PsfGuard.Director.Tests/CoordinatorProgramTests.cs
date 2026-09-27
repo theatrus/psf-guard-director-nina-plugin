@@ -13,13 +13,13 @@ namespace PsfGuard.Director.Tests;
 public sealed class CoordinatorProgramTests
 {
     private const ulong Now = 1790409600000;
-    private static readonly Uri Endpoint = new("https://coordinator.example/prefix/");
-    private static readonly CoordinatorBinding Binding = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+    internal static readonly Uri Endpoint = new("https://coordinator.example/prefix/");
+    internal static readonly CoordinatorBinding Binding = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
     private static readonly Guid Goal = Guid.NewGuid(), Target = Guid.NewGuid(), Contribution = Guid.NewGuid();
-    private static readonly DirectorConfiguration Configuration = new(Binding.RigId.ToString("D"), "config", "camera", "wheel",
+    internal static readonly DirectorConfiguration Configuration = new(Binding.RigId.ToString("D"), "config", "camera", "wheel",
         [new("filter-0", 0)], [new(1, 1)], [0], new CameraControl.Unsupported(), new CameraControl.Unsupported(), 1, 600000, false, 0);
 
-    private static CoordinatorProgramEnvelope Envelope() => new(Binding.CoordinatorInstanceId, Binding.CatalogId, Binding.RigId,
+    internal static CoordinatorProgramEnvelope Envelope() => new(Binding.CoordinatorInstanceId, Binding.CatalogId, Binding.RigId,
         new string('a', 64), Now - 1000,
         new(1, new("assignment", 1, Binding.RigId.ToString("D"), "config", Now - 1000, Now + 60000,
             [new(Goal.ToString("D"), 1, 10, 0, 0, 15, 1000, 1000, [new(Now - 1000, Now + 60000)])]), Configuration,
