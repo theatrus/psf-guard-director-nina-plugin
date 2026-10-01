@@ -487,6 +487,7 @@ public sealed class SimulatorSequence : SequenceItem
                     ? "server-plan-native-dispatch-simulator-not-production-container"
                     : "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
                 programRevision = coordinator?.ProgramRevision,
+                allocationId = coordinator?.AllocationId,
                 serverOutage = coordinator?.ExerciseOutage ?? false,
                 liveStatusVerified = coordinator?.LiveStatusVerified ?? false,
                 steps,

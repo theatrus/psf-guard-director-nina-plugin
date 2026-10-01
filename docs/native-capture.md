@@ -43,6 +43,36 @@ and profile/session lifetime, and enforce eligibility at the actual hardware
 boundary. N.I.N.A.'s imaging mediator can itself wait behind another capture;
 calling the adapter is not proof that the shutter started at that instant.
 
+## Issued allocation intake
+
+`CoordinatorAllocationClient` reads the separate `/rigs/{rig}/allocation`
+endpoint. An interactive PSF Guard operator must first admit the reviewed
+preview for that exact paired client/profile. The issued snapshot has a distinct
+`allocation-{uuid}` assignment identity and immutable original budgets/validity.
+Program previews cannot be substituted for it. Existing pairing scopes do not
+grant admission; a second client for the same profile cannot fetch the grant.
+
+The client validates scope, configuration, ancestry links, size and expiry using
+the existing strict transport/program decoder. It never requests admission and
+never falls back to cache on HTTP failures. `CoordinatorAllocationCache` stores
+the envelope atomically, bound to origin, coordinator, catalog, rig, profile and
+client. Configuration changes cannot choose a fresh cache. Changed snapshots or
+replacement IDs are refused even after expiry. Read requires current validity;
+the cache contains no credentials and is not itself a hardware permit.
+
+The isolated simulator operator admits the first allocation, retries admission,
+and uses the paired client/cache to feed the existing Rust ledger. Outage,
+restart and receipt tests require that allocation to stay byte-equivalent after
+normal previews change their pending counts. No production acquisition gate is
+removed. Exclusive ownership, durable ledger binding/loss detection, clock
+continuity, operation policies and successor accounting are still required.
+There is no renewal/replacement API; never delete allocation evidence to mint
+another budget. Offline revocation is bounded by validity, not immediate.
+Check-in/status change hints use the allocation's source `PreviewRevision`;
+capture events carry the allocated assignment ID. Do not compare a mutable
+preview revision to the new allocation snapshot revision or silently replace the
+grant when the server reports a plan change.
+
 ## Local safety and Earth orientation
 
 `NinaSafetyInterlock` subscribes to NINA's safety mediator and binds the exact

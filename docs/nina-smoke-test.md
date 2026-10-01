@@ -11,8 +11,8 @@ revive the canceled owner. Final evidence:
 The package build, formatting, diff check and all 612 plugin tests passed locally.
 No public acquisition gate was removed.
 
-Build PSF Guard with the [stable program-preview handoff](https://github.com/theatrus/psf-guard/pull/606) and build this plugin's
-development ZIP, then run:
+Build PSF Guard with immutable first-allocation admission (meta schema 15) and
+build this plugin's development ZIP, then run:
 
 ```powershell
 ./tools/run-server-plan-smoke.ps1 -PsfGuardExe C:/test/psf-guard-cli.exe `
@@ -31,11 +31,15 @@ It does not use any existing PSF Guard registry or NINA profile.
 The test-only operator client reports actual native equipment and filter labels,
 saves framing/plan drafts, and applies activation for three one-frame goals.
 The real paired preview client pulls and caches the returned program twice.
-The harness stops the server; the probe verifies a connection failure, captures
-three FITS frames and restarts its durable sidecar entirely offline. After the
-server restarts, it checks unchanged program identity, delivers the capture
+The operator then admits the reviewed first allocation for that paired client,
+retries admission, and the allocation client validates/caches the issued snapshot.
+The harness stops the server; the probe verifies a connection failure, validates
+the persisted allocation, captures three FITS frames and restarts its durable
+sidecar entirely offline. After the server restarts, it checks unchanged program
+identity, delivers the capture
 receipts, resumes its cursor and replays duplicates. A fresh program must show
-exactly one pending image per goal. Paired status reports must be visible in the
+exactly one pending image per goal, while the issued allocation remains unchanged.
+Paired status reports must be visible in the
 server's live rig inventory before and after the outage. Cleanup revokes the
 test credential, removes it from the vault, parks/disconnects the simulators,
 and closes the owned processes. Results and server logs remain for inspection.
@@ -46,7 +50,18 @@ server-plan/native-capture/check-in path, not a production session container:
 safety uses NINA's built-in simulator and Earth orientation uses its local cache.
 Pointing uses the simulator's current coordinates, and no slew, autofocus, guiding,
 flip or unattended safety recovery is claimed. A program preview remains
-inspection data, not acquisition authorization.
+inspection data. The server-issued allocation is exercised by the guarded test
+probe, not the public session container; production ownership/recovery gates
+remain unfinished.
+
+The allocation run passed on September 30 with the same nightly/runtime and the
+new local server. Evidence:
+`artifacts/nina-smoke-41b2ad183d094c89812ca07605dce3b8/probe/b183a26338e34405b553743705ed206a/result.json`.
+The ledger's assignment ID is the issued `allocation-...`, not the preview ID.
+The full plugin suite passed 625 tests with
+`dotnet test --configuration Release --no-build -- xUnit.MaxParallelThreads=1 xUnit.ParallelizeTestCollections=false`.
+Parallel runs showed intermittent existing sidecar timeout/cleanup-lock failures;
+the serial run and native test passed. No public acquisition gate was removed.
 
 On 2026-09-30 the combined test passed on nightly #64 (`3.3.0.1064`) with
 runtime 0.7.0 / IPC 8 and the PSF Guard handoff correction. It saved three
