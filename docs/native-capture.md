@@ -43,6 +43,41 @@ and profile/session lifetime, and enforce eligibility at the actual hardware
 boundary. N.I.N.A.'s imaging mediator can itself wait behind another capture;
 calling the adapter is not proof that the shutter started at that instant.
 
+## Local safety and Earth orientation
+
+`NinaSafetyInterlock` subscribes to NINA's safety mediator and binds the exact
+profile and monitor. Only device broadcasts refresh evidence; a boolean Safe
+event or reading the mediator's cached object cannot renew it. Evidence expires
+after three polling intervals (at least five seconds), with polling above ten
+seconds refused. A local watchdog checks every 250 ms, independently of HTTP.
+
+Arming requires fresh connected Safe evidence. Unsafe/disconnected/changed or
+stale evidence cancels the owner permanently, including updates that resume
+after sleep and backward clock movement. A profile-change event invalidates an
+unarmed owner too. The native session links this token to its operation lifetime;
+Safe returning cannot resume old work. Cancellation callbacks run outside the
+monitor's lock and cannot throw through NINA's broadcasting thread.
+
+`NinaEarthOrientation` reads `%LOCALAPPDATA%/NINA/NINA.sqlite` read-only, without
+initializing, migrating, or downloading data. It requires three consecutive
+daily IERS rows around the midpoint of an assignment of at most 24 hours, checks
+their dates/MJD and ranges, and converts native polar-motion arcseconds to
+radians. Missing data fails; NINA's nearest-row/zero-fallback helpers are not used.
+
+IPC 8 accepts one fixed EOP value. The reader binds the middle sample over the
+requested span only when adjacent samples differ by no more than 2 ms UT1 and
+0.01 arcseconds per pole component. This is a daily approximation with measured
+sample drift, not an interpolation or a proof of intra-day error. Sample
+provenance is retained. Discontinuities require updated evidence or a future
+time-series contract; they never widen validity or replace a ledger's binding.
+
+The simulator uses both adapters, including an unsafe transition interrupting a
+native wait. The public container remains blocked: production admission must
+bind these sources and define the shared core's conditions horizon separately
+from monitor freshness. A fresh Safe observation is not a forecast that an
+entire long exposure will stay safe. Continuous cancellation, safe shutdown,
+uncertain-capture recovery and explicit restart admission remain required.
+
 ## Capture evidence
 
 Before dispatch, the adapter reserves

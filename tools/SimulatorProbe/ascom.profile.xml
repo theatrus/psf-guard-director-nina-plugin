@@ -20,6 +20,9 @@
     <FileType>FITS</FileType>
   </ImageFileSettings>
   <Name>Director ASCOM Smoke</Name>
+  <SafetyMonitorSettings i:type="SafetyMonitorSettings">
+    <Id>613EC0FF-87D7-4475-9352-F6F6EB1CDE75</Id>
+  </SafetyMonitorSettings>
   <SequenceSettings i:type="SequenceSettings">
     <DefaultSequenceFolder />
     <SequencerTargetsFolder />

@@ -2,6 +2,15 @@
 
 ## Server-plan outage test
 
+The September 30 local-evidence increment passed on NINA `3.3.0.1064` with
+runtime 0.7.0 / IPC 8. It read dated IERS rows from NINA's cache, ran all three
+filtered captures and offline/restart/check-in assertions, then interrupted a
+running native Wait through the safety simulator. Returning to Safe did not
+revive the canceled owner. Final evidence:
+`artifacts/nina-smoke-2dcb4e2122be49fb919e26ebb799c36e/probe/2d10555875864a6c9d03d04f4acb81aa/result.json`.
+The package build, formatting, diff check and all 612 plugin tests passed locally.
+No public acquisition gate was removed.
+
 Build PSF Guard with the [stable program-preview handoff](https://github.com/theatrus/psf-guard/pull/606) and build this plugin's
 development ZIP, then run:
 
@@ -12,7 +21,9 @@ development ZIP, then run:
 ```
 
 This requires Python's standard `sqlite3` module to seed a profile in the new
-empty catalog, plus the existing OmniSim drivers. The script creates a unique
+empty catalog, plus the existing OmniSim drivers and current daily IERS rows in
+NINA's local astronomy cache. The cache is read-only; missing rows fail the test.
+The script creates a unique
 temporary server directory, registry, meta database and catalog, verifies the
 loopback listener belongs to its process, and starts an isolated NINA profile.
 It does not use any existing PSF Guard registry or NINA profile.
@@ -32,8 +43,8 @@ and closes the owned processes. Results and server logs remain for inspection.
 The non-secret fixture flags `ActivateSimulatorPlan` and `ExerciseOutage` are
 explicit opt-ins. Never supply them against a live server. This proves the
 server-plan/native-capture/check-in path, not a production session container:
-safety and Earth orientation remain explicit synthetic test inputs, pointing
-uses the simulator's current coordinates, and no slew, autofocus, guiding,
+safety uses NINA's built-in simulator and Earth orientation uses its local cache.
+Pointing uses the simulator's current coordinates, and no slew, autofocus, guiding,
 flip or unattended safety recovery is claimed. A program preview remains
 inspection data, not acquisition authorization.
 
@@ -169,18 +180,22 @@ instances before starting another run.
 This opt-in mode builds a test-only plugin and verifies that the bundle's plugin
 and runtime DLLs match the build. It creates a fresh simulator-only profile and
 starts the supplied advanced sequence through N.I.N.A.'s command-line interface.
-It refuses non-OmniSim camera/mount/filter selections, other configured devices,
+It refuses non-OmniSim camera/mount/filter selections, a safety monitor other
+than the built-in NINA simulator, other configured devices,
 an unconfirmed isolation root, or an image destination outside the test root.
 Do not interact with equipment/profile controls while the probe is running.
 
-The sequence starts the verified sidecar, connects the three simulators, and
+The sequence starts the verified sidecar, connects the three ASCOM simulators
+and NINA's built-in safety simulator, and
 parks the mount to establish the unpark test precondition. It supplies an
 immutable fixture program with three prioritized one-exposure filter goals to
 Rust's durable geometry ledger. The isolated profile has an explicit synthetic
-site (35 degrees north, 120 degrees west, 1000 m). The fixture supplies explicit
-synthetic Earth-orientation values valid only for its three-minute run, native
-horizon vertices, altitude limits and meridian policy. No production EOP source
-or permissive fallback is implied. Rust selects goals and issues unpark and filter/readout preparation
+site (35 degrees north, 120 degrees west, 1000 m). The fixture reads dated
+Earth-orientation rows from NINA's cache and supplies native horizon vertices,
+altitude limits and meridian policy. A continuously checked native safety
+interlock cancels the session on stale/unsafe evidence. The test still supplies
+its own three-minute conditions horizon, not a production forecast or permit.
+Rust selects goals and issues unpark and filter/readout preparation
 commands. The probe runs matching native NINA items inside a transient native
 sequential container. Each item allows one dispatch, revalidates after inherited
 before-triggers, and verifies the resulting unparked mount, readout, or settled filter state.
