@@ -1,5 +1,40 @@
 # Native capture adapter
 
+## Public prepared-target mode (experimental)
+
+`Director Session` can opt in to prepared-target acquisition. It requires the
+server's one-shot allocation-start API, online first launch, a connected safe
+monitor, matching commissioned equipment/site/horizon, and dated NINA IERS
+data. Sequence files cannot store launch authority. Lost launch responses and
+restarts require reconciliation; this mode never reuses a consumed allocation.
+
+Enable prepared-target acquisition in the Session tab. Select **Sequence** for
+centering, autofocus, guiding, dithering and meridian flips, and **Director**
+for startup/shutdown. Prepare one allocated target through normal NINA
+instructions or the Before New Target hook. The executor requires reported
+pointing within three arcminutes and tracking before exposure; this check is
+not plate-solve evidence. Rotation requests and automatic multi-target work are
+not supported yet. Unsupported policies fail validation, not silent fallback.
+
+The shared core selects recipes and owns preparation/capture budgets. Native
+exposure instructions inherit sequence triggers/conditions; all seven named
+slots remain available. Director handles unpark with native sidereal tracking,
+filter/readout preparation,
+correlated image saves, local journals, batch check-in and optional live status.
+It parks on shutdown and, when selected, on waits. Pending assessment ends the
+bounded run without declaring the target complete. Offline continuation applies
+only to an already admitted running process, never an offline cold start.
+
+Only one local Director session can own equipment. NINA must remain the sole
+hardware controller; this lock cannot exclude arbitrary external applications.
+Clock discontinuity, stale/unsafe monitoring, profile drift and failed native
+operations stop acquisition. Authentication failures never become offline
+fallback. Preserve the local acquisition directory for reconciliation.
+
+The historical sections below describe the adapters' earlier validation gates;
+the public increment does not remove gates for automatic multi-target work,
+resume/successor accounting, duration learning or pixel-verified pointing.
+
 This is the internal acquisition building block for Director's session
 container. It is not exported to N.I.N.A.'s sequencer or MEF and has no settings
 button. It does not select goals, retry exposures, or replace the Rust planner.
@@ -63,9 +98,10 @@ the cache contains no credentials and is not itself a hardware permit.
 The isolated simulator operator admits the first allocation, retries admission,
 and uses the paired client/cache to feed the existing Rust ledger. Outage,
 restart and receipt tests require that allocation to stay byte-equivalent after
-normal previews change their pending counts. No production acquisition gate is
-removed. Exclusive ownership, durable ledger binding/loss detection, clock
-continuity, operation policies and successor accounting are still required.
+normal previews change their pending counts. Public prepared-target mode adds
+exclusive local ownership, a one-shot server launch bound to a new ledger,
+clock continuity and explicit narrow operation policies. It does not support
+restart/resume or successor accounting.
 There is no renewal/replacement API; never delete allocation evidence to mint
 another budget. Offline revocation is bounded by validity, not immediate.
 Check-in/status change hints use the allocation's source `PreviewRevision`;
@@ -671,11 +707,10 @@ distributed in the plugin archive; the installed NINA host owns those files.
 
 `Director Session` is a public Advanced Sequencer container, separate from Sync
 and TS. It exports both native item/container contracts and its own WPF template.
-It intentionally fails validation and execution before running its configured
-hooks: production admission, real safety and Earth-orientation sources are not
-connected. There is no hidden checkbox or saved sequence field that bypasses
-this gate. The simulator invokes the internal adapters explicitly and is not
-shipped in the plugin archive.
+Acquisition stays disabled until the explicit prepared-target toggle and narrow
+ownership/safety policies validate. The enable field requests acquisition; it
+cannot bypass online one-shot server admission, native safety, orientation or
+fresh dispatch checks. The test-only simulator is not shipped in the archive.
 
 The editor saves versioned local requests in four groups:
 
@@ -687,13 +722,12 @@ The editor saves versioned local requests in four groups:
 - Offline continuation, start/end/target check-ins, batch interval, and live
   status with its independent interval.
 
-Except for the internal hook deadline, these are saved requests for the future
-production owner, not active equipment or background-network settings. Attended
-mode is not saved consent to bypass safety. Sequence ownership means an explicit
-native instruction/trigger policy, not silently disabling an operation. The
-future owner must validate capability and resolve each operation to exactly one
-owner before arming. Planner priority/filter policy stays in the shared core and
-project/rig/site defaults, not a second C# scheduler.
+Prepared-target mode binds these requests to its session owner. It refuses
+attended mode and automatic centering/focus/guiding/dither/flip ownership.
+Sequence-owned dithering uses native trigger configuration, not the Director
+dither interval. Sequence ownership means explicit native instructions/triggers,
+not silently disabling an operation. Planner priority/filter policy stays in
+the shared core and project/rig/site defaults, not a second C# scheduler.
 
 The seven named instruction editors use NINA items, triggers and conditions.
 Top-level session triggers/conditions have a separate tab. Named slots cannot be
@@ -720,8 +754,9 @@ IDs and detached target context stop subsequent hook boundaries.
 
 The Status tab has rig, project, target, goal, operation, revision, connection,
 safety, queue, last check-in and wait-reason observations. They are never saved
-in sequences or cloned as authority. The simulator feeds actual test observations;
-the public production status service is not connected yet.
+in sequences or cloned as authority. The public session updates phase, rig,
+target, goal, operation, safety, connectivity, queue and check-in observations.
+Optional central status reports are separate from durable capture receipts.
 
 ## Recovery and validation limits
 

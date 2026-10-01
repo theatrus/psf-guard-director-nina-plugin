@@ -11,7 +11,7 @@
   "Tags": ["psf-guard", "director", "experimental"],
   "MinimumApplicationVersion": { "Major": 3, "Minor": 3, "Patch": 0, "Build": 1058 },
   "Descriptions": {
-    "ShortDescription": "Experimental PSF Guard Director runtime preview. Acquisition is not yet available.",
-    "LongDescription": "Early preview of PSF Guard Director for NINA 3.3 nightly. This package provides an explicitly started, verified Rust runtime with status reporting and profile-scoped shutdown. It does not yet provide pairing, observing assignments, or an acquisition sequence container. Do not use it to run an unattended imaging session. Director is separate from PSF Guard Sync and does not replace or change Sync."
+    "ShortDescription": "Experimental PSF Guard Director with bounded prepared-target acquisition.",
+    "LongDescription": "Experimental Director for operator-issued, single prepared-target allocations. Requires NINA safety monitoring and sequence-owned centering, focus, guiding, dithering and meridian flips. Automatic scheduling and restart/resume are not yet available. Director is separate from PSF Guard Sync and does not replace or change Sync."
   }
 }

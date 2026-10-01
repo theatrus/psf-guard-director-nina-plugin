@@ -4,9 +4,13 @@ param(
     [Parameter(Mandatory)][string]$PsfGuardExe,
     [Parameter(Mandatory)][string]$NinaDirectory,
     [Parameter(Mandatory)][string]$PluginZip,
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    [switch]$PublicAcquisition,
+    [switch]$PublicUnsafe,
+    [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
+if ($PublicUnsafe -and !$PublicAcquisition) { throw 'PublicUnsafe requires PublicAcquisition.' }
 $root = Join-Path $env:TEMP "director-server-plan-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $root, "$root/images" | Out-Null
 $exe = Join-Path $root 'psf-guard-cli.exe'
@@ -54,9 +58,9 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
-        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=$true } |
+        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=$true; PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
-    $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture
+    $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
     if (!$started) { throw 'NINA launcher did not return an isolated process.' }
     $nina = Get-Process -Id $started.ProcessId

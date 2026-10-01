@@ -66,6 +66,7 @@ internal sealed class DirectorConnection : INotifyPropertyChanged, IDisposable
     }
     public bool IsEditable => !busy && idle() && !lifetime.IsCancellationRequested;
     internal bool IsBusy => busy;
+    internal Uri? ResolvedEndpoint => Endpoint();
     public string PairingStatus => status;
     public ICommand PairCommand => pair;
     public ICommand ResetPairingCommand => reset;

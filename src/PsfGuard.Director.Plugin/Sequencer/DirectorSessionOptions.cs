@@ -21,6 +21,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private DirectorSafetyPolicy safety = DirectorSafetyPolicy.RequireMonitor;
     private DirectorHorizonPolicy horizon = DirectorHorizonPolicy.NinaProfile;
     private DirectorOperationOwner startup, slewCenter, focus, guiding, dither, meridianFlip, shutdown;
+    private bool enableAcquisition;
+    [JsonProperty] public bool EnableAcquisition { get => enableAcquisition; set => Set(ref enableAcquisition, value); }
 
     [JsonProperty] public double MaximumHours { get => maximumHours; set => Set(ref maximumHours, value); }
     [JsonProperty] public double MinimumAltitude { get => minimumAltitude; set => Set(ref minimumAltitude, value); }

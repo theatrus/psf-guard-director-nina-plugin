@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory)][string]$NinaDirectory,
     [Parameter(Mandatory)][string]$PluginZip,
     [switch]$AscomSequence,
-    [string]$CoordinatorFixture
+    [string]$CoordinatorFixture,
+    [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -13,11 +14,11 @@ if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058',
     throw 'This smoke test requires a reviewed NINA 3.3 nightly #58, #59 or #64 host.'
 }
 $zip = (Resolve-Path -LiteralPath $PluginZip).Path
-$hookOutput = Join-Path $repo 'artifacts/nina-hook-build'
+$hookOutput = Join-Path $ArtifactDirectory 'nina-hook-build'
 dotnet build (Join-Path $PSScriptRoot 'NinaIsolation/NinaIsolation.csproj') --configuration Release -p:RestoreLockedMode=true --output $hookOutput
 if ($LASTEXITCODE -ne 0) { throw 'Isolation hook build failed.' }
 $builtHook = Join-Path $hookOutput 'NinaIsolation.dll'
-$root = Join-Path $repo "artifacts/nina-smoke-$([Guid]::NewGuid().ToString('N'))"
+$root = Join-Path $ArtifactDirectory "nina-smoke-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $root | Out-Null
 if ($CoordinatorFixture) {
     if (!$AscomSequence) { throw 'Coordinator receipt testing requires -AscomSequence.' }

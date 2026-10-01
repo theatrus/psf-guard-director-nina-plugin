@@ -35,12 +35,12 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         settings = new PluginOptionsAccessor(profiles, PluginId);
         runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
         ConnectionModel = new(() => profiles.ActiveProfile.Id,
-            () => initialized && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => initialized && !AcquisitionLease.IsActive && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             () => settings.GetValueString("CoordinatorUrl", ""), value => settings.SetValueString("CoordinatorUrl", value),
             readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""),
             writeHttpConsent: value => settings.SetValueString("HttpConsentOrigin", value));
         start = new AsyncCommand(StartRuntimeAsync,
-            () => initialized && !ConnectionModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => initialized && !AcquisitionLease.IsActive && !ConnectionModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             ReportError);
         stop = new AsyncCommand(runtime.StopAsync,
             () => initialized && runtime.Status.State is RuntimeState.Starting or RuntimeState.Ready or RuntimeState.Faulted,

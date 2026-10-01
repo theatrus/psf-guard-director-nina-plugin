@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$ArtifactDirectory = (Join-Path $PSScriptRoot 'artifacts'))
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
@@ -10,7 +10,7 @@ try {
     & dotnet build --configuration Release --no-restore
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
     $output = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Plugin/bin/Release/net10.0-windows7.0'
-    $stage = Join-Path $PSScriptRoot "artifacts/package-$([Guid]::NewGuid().ToString('N'))"
+    $stage = Join-Path $ArtifactDirectory "package-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force | Out-Null
     foreach ($name in @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll')) {
         Copy-Item -LiteralPath (Join-Path $output $name) -Destination $stage
@@ -19,7 +19,7 @@ try {
         Copy-Item -LiteralPath (Join-Path "$PSScriptRoot/runtime" $name) -Destination (Join-Path $stage 'runtime')
     }
     Copy-Item -LiteralPath "$PSScriptRoot/runtime.lock.json", "$PSScriptRoot/LICENSE" -Destination $stage
-    $archive = Join-Path $PSScriptRoot 'artifacts/PSFGuardDirector-0.1.0.0-dev.zip'
+    $archive = Join-Path $ArtifactDirectory 'PSFGuardDirector-0.1.0.0-dev.zip'
     Compress-Archive -Path "$stage/*" -DestinationPath $archive -Force
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
     try {

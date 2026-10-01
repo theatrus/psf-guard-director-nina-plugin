@@ -103,8 +103,80 @@ public sealed class CoordinatorAllocationTests
     }
 
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now); }
+
+    [Theory]
+    [InlineData("ledger")]
+    [InlineData("configuration")]
+    [InlineData("revision")]
+    [InlineData("client")]
+    public async Task LaunchRejectsMismatchedLedgerBeforePosting(string fault)
+    {
+        var allocation = Read(Allocation());
+        var a = allocation.Envelope.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), a.Id, a.Revision, a.RigId, a.ConfigurationId);
+        ledger = fault switch
+        {
+            "ledger" => ledger with { LedgerId = Guid.Empty.ToString("D") },
+            "configuration" => ledger with { ConfigurationId = "changed" },
+            "revision" => ledger with { AssignmentRevision = a.Revision + 1 },
+            _ => ledger
+        };
+        using var client = new CoordinatorAllocationClient(Endpoint, _ => ValueTask.FromResult<string?>("test-token"),
+            new Handler(_ => throw new InvalidOperationException("Must not post")), new Clock());
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.StartOnceAsync(Binding, fault == "client" ? Guid.NewGuid() : ClientId, allocation, ledger));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LaunchPostsOnceAndNeverRetriesConflict(bool conflict)
+    {
+        var allocation = Read(Allocation());
+        var a = allocation.Envelope.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), a.Id, a.Revision, a.RigId, a.ConfigurationId);
+        var calls = 0;
+        using var client = new CoordinatorAllocationClient(Endpoint, _ => ValueTask.FromResult<string?>("test-token"), new Handler(request =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.EndsWith("/allocation/start", request.RequestUri!.AbsolutePath);
+            return conflict ? new(HttpStatusCode.Conflict) : new(HttpStatusCode.OK)
+            { Content = new StringContent(System.Text.Encoding.UTF8.GetString(CoordinatorAllocation.Wrap(allocation.Envelope)), System.Text.Encoding.UTF8, "application/json") };
+        }), new Clock());
+        if (conflict) await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.StartOnceAsync(Binding, ClientId, allocation, ledger));
+        else await client.StartOnceAsync(Binding, ClientId, allocation, ledger);
+        Assert.Equal(1, calls);
+    }
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => Task.FromResult(send(request)); }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("json")]
+    [InlineData("missing")]
+    [InlineData("rejected")]
+    [InlineData("unknown")]
+    [InlineData("changed")]
+    public async Task StatusAcknowledgementIsStrictAndDoesNotLeakResponse(string fault)
+    {
+        var allocation = Read(Allocation());
+        var reply = System.Text.Json.Nodes.JsonNode.Parse(CoordinatorAllocation.Wrap(new
+        { accepted = fault != "rejected", program_revision = allocation.Envelope.PreviewRevision, program_changed = false, received_at_ms = Now }))!;
+        if (fault == "unknown") reply["data"]!["secret"] = "do-not-log";
+        if (fault == "changed") reply["data"]!["program_changed"] = true;
+        if (fault == "missing") reply["data"]!.AsObject().Remove("accepted");
+        using var reporter = new CoordinatorSessionReporter(Endpoint, Binding, _ => ValueTask.FromResult<string?>("test-token"),
+            new Handler(request => new(HttpStatusCode.OK)
+            { Content = new StringContent(fault == "json" ? "do-not-log" : reply.ToJsonString(), System.Text.Encoding.UTF8, "application/json") }));
+        var work = reporter.ReportAsync(allocation, Guid.NewGuid().ToString("D"), "Acquiring", "Target", "Safe", default);
+        if (fault == "valid") await work;
+        else
+        {
+            var error = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => work);
+            Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement, error.Failure);
+            Assert.DoesNotContain("do-not-log", error.ToString());
+        }
+    }
 
     [Fact]
     public async Task IntakeUsesScopedCredentialAndDoesNotFallbackOnRevocation()

@@ -89,6 +89,7 @@ public sealed class NinaMountPreparationTests
         await issued.Item.Run(Progress, default);
         Assert.Equal(SequenceEntityStatus.FAILED, issued.Item.Status);
         f.Mount.Verify(x => x.UnparkTelescope(Progress, It.IsAny<CancellationToken>()), Times.Once);
+        f.Mount.Verify(x => x.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal), Times.Once);
     }
 
     [Theory]
@@ -131,6 +132,18 @@ public sealed class NinaMountPreparationTests
     }
 
     [Fact]
+    public async Task TrackingNotConfirmedNeverCreditsStartup()
+    {
+        var f = new Fixture();
+        f.Mount.Setup(x => x.UnparkTelescope(Progress, It.IsAny<CancellationToken>())).ReturnsAsync(() => { f.Info.AtPark = false; return true; });
+        f.Mount.Setup(x => x.SetTrackingMode(It.IsAny<NINA.Equipment.Interfaces.TrackingMode>())).Returns(false);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var issued = f.Create();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => issued.Item.Execute(Progress, deadline.Token));
+        Assert.IsType<PreparationOutcome.Uncertain>(issued.Fence.Completion!.Outcome);
+    }
+
+    [Fact]
     public void UnparkNeedsExplicitLocalMountBinding()
     {
         var f = new Fixture();
@@ -155,6 +168,7 @@ public sealed class NinaMountPreparationTests
             Native.Profile.SetupGet(x => x.TelescopeSettings).Returns(Settings.Object);
             Settings.SetupGet(x => x.Id).Returns("Mount");
             Mount.Setup(x => x.GetInfo()).Returns(Info);
+            Mount.Setup(x => x.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal)).Returns(() => { Info.TrackingEnabled = true; return true; });
             Reader = new(Native.Profiles.Object, Native.CameraMediator.Object, Native.WheelMediator.Object, Mount.Object);
             var config = Reader.Read(Native.Binding);
             Program = new(1, PlannerTests.Request().Assignment with { ConfigurationId = config.Id }, config,

@@ -84,6 +84,42 @@ public sealed class CoordinatorAllocationClient : IDisposable
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
     }
     public void Dispose() => transport.Dispose();
+
+    /// <summary>Consumes the allocation's one-shot launch. Never retry this call:
+    /// a lost acknowledgement requires reconciliation, not another execution.</summary>
+    public async Task StartOnceAsync(CoordinatorBinding binding, Guid clientId, CoordinatorAllocation allocation,
+        LedgerIdentity ledger, CancellationToken token = default)
+    {
+        CoordinatorCheckpointClient.ValidateBinding(binding);
+        if (ledger.AssignmentId != allocation.Envelope.Snapshot.Program.Assignment.Id
+            || ledger.AssignmentRevision != allocation.Envelope.Snapshot.Program.Assignment.Revision
+            || ledger.ConfigurationId != allocation.Envelope.Snapshot.Program.Configuration.Id
+            || allocation.Envelope.ClientId != clientId || allocation.Envelope.ProfileId != binding.ProfileId
+            || allocation.Envelope.RigId != binding.RigId || allocation.Envelope.CatalogId != binding.CatalogId
+            || allocation.Envelope.CoordinatorInstanceId != binding.CoordinatorInstanceId
+            || ledger.RigId != binding.RigId.ToString("D") || !Guid.TryParseExact(ledger.LedgerId, "D", out var id) || id == Guid.Empty)
+            throw new InvalidDataException("Allocation launch ledger mismatch.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/allocation/start",
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    coordinator_instance_id = binding.CoordinatorInstanceId,
+                    catalog_id = binding.CatalogId,
+                    allocation_id = allocation.Envelope.AllocationId,
+                    ledger_id = ledger.LedgerId
+                }), deadline.Token, binding.ProfileId).ConfigureAwait(false);
+            var confirmed = CoordinatorAllocation.Read(response.Bytes, transport.Endpoint.AbsoluteUri, binding, clientId,
+                allocation.Envelope.Snapshot.Program.Configuration, checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds()));
+            if (confirmed.Fingerprint != allocation.Fingerprint)
+                throw new InvalidDataException("Allocation changed during launch.");
+            deadline.Token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
+    }
 }
 
 /// <summary>Persisted intake, not a hardware permit. One pairing scope retains one
