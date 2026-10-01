@@ -183,12 +183,22 @@ public sealed class SimulatorSequence : SequenceItem
             var program = new DirectorProgram(1, assignment, equipment, [programTarget],
                 Enumerable.Range(0, 3).Select(i => new ExposureRecipe($"recipe-{i}", 1000, $"filter-{i}", new(1, 1), null, null, 0, null)).ToImmutableArray(),
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
+            if (coordinator is { ActivateSimulatorPlan: true })
+            {
+                Step("Activating and pulling the isolated server's simulator plan");
+                program = await coordinator.ActivateAndReadProgramAsync(Path.Combine(run, "program-preview"), equipment,
+                    equipmentReader.ReadFilterNames(equipmentBinding, equipment), programTarget, lifetime.Token);
+                assignment = program.Assignment;
+                programTarget = program.Targets.Single();
+                await coordinator.ReportStatusAsync(programTarget, "simulator_outage_test", lifetime.Token);
+                await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+            }
             PlannerState State() => new(rigId, equipment.Id, NowMs(), started + 180000,
                 PlannerSafety.Safe, true, false, new(0, 0));
             var geometryReader = new NinaGeometrySnapshot(constraintReader, equipmentReader);
             // Explicit synthetic EOP values for this isolated simulator fixture,
             // not a production orientation source or a zero-valued fallback.
-            var geometryInputs = new NinaGeometryInputs(1, 89, new(0, 0, 0, started, started + 180001),
+            var geometryInputs = new NinaGeometryInputs(1, 89, new(0, 0, 0, started, assignment.ExpiresAtMs + 1),
                 assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, 20, 89, 0)).ToImmutableArray());
             NinaDispatchSnapshot DispatchSnapshot()
             {
@@ -310,8 +320,12 @@ public sealed class SimulatorSequence : SequenceItem
                 throw new InvalidDataException("Restarted ledger lost identity or pending progress.");
             if (coordinator is not null)
             {
+                await coordinator.EndOutageAsync(root, lifetime.Token);
+                await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, false, lifetime.Token);
                 Step("Delivering capture receipts to the isolated coordinator");
                 checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "checkin"), runtime, ledger, lifetime.Token);
+                await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
+                await coordinator.ReportStatusAsync(programTarget, "pending_assessment", lifetime.Token);
             }
             await Revalidate(lifetime.Token);
             if (equipmentReader.Read(equipmentBinding).Id != equipment.Id)
@@ -354,7 +368,11 @@ public sealed class SimulatorSequence : SequenceItem
             if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
             await Cleanup("Stopping sidecar", runtime.StopAsync);
-            if (coordinator is not null) await Cleanup("Revoking test pairing", () => coordinator.DisposeAsync().AsTask());
+            if (coordinator is not null)
+            {
+                await Cleanup("Restoring isolated server after outage", () => coordinator.EndOutageAsync(root, cleanup.Token));
+                await Cleanup("Revoking test pairing", () => coordinator.DisposeAsync().AsTask());
+            }
             var result = new
             {
                 passed = errors.Count == 0 && captures.Count == 3,
@@ -362,7 +380,12 @@ public sealed class SimulatorSequence : SequenceItem
                 ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,
                 ipc = RuntimeContract.ProtocolVersion,
-                scope = "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
+                scope = coordinator is { ActivateSimulatorPlan: true }
+                    ? "server-plan-native-dispatch-simulator-not-production-container"
+                    : "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
+                programRevision = coordinator?.ProgramRevision,
+                serverOutage = coordinator?.ExerciseOutage ?? false,
+                liveStatusVerified = coordinator?.LiveStatusVerified ?? false,
                 steps,
                 evaluations,
                 operations,

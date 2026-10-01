@@ -15,6 +15,18 @@ namespace PsfGuard.Director.Tests;
 public sealed class NinaEquipmentTests
 {
     [Fact]
+    public void FilterLabelsKeepNativeIdsAndRequireTheSameEquipmentSnapshot()
+    {
+        var f = new Fixture();
+        var reader = new NinaEquipmentSnapshot(f.Profiles.Object, f.CameraMediator.Object, f.WheelMediator.Object);
+        var configuration = reader.Read(f.Binding);
+        Assert.Equal("L", reader.ReadFilterNames(f.Binding, configuration)["filter-l"]);
+        Assert.Throws<InvalidOperationException>(() => reader.ReadFilterNames(f.Binding, configuration with { Id = "old" }));
+        f.Filters[0].Name = "Red";
+        Assert.Throws<InvalidOperationException>(() => reader.ReadFilterNames(f.Binding, configuration));
+    }
+
+    [Fact]
     public void SnapshotCopiesCapabilitiesAndUsesExplicitStableMappings()
     {
         var f = new Fixture();

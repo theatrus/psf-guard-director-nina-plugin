@@ -1,5 +1,53 @@
 # Real N.I.N.A. smoke test
 
+## Server-plan outage test
+
+Build PSF Guard with the [stable program-preview handoff](https://github.com/theatrus/psf-guard/pull/606) and build this plugin's
+development ZIP, then run:
+
+```powershell
+./tools/run-server-plan-smoke.ps1 -PsfGuardExe C:/test/psf-guard-cli.exe `
+    -NinaDirectory C:/test/NINA `
+    -PluginZip ./artifacts/PSFGuardDirector-0.1.0.0-dev.zip
+```
+
+This requires Python's standard `sqlite3` module to seed a profile in the new
+empty catalog, plus the existing OmniSim drivers. The script creates a unique
+temporary server directory, registry, meta database and catalog, verifies the
+loopback listener belongs to its process, and starts an isolated NINA profile.
+It does not use any existing PSF Guard registry or NINA profile.
+
+The test-only operator client reports actual native equipment and filter labels,
+saves framing/plan drafts, and applies activation for three one-frame goals.
+The real paired preview client pulls and caches the returned program twice.
+The harness stops the server; the probe verifies a connection failure, captures
+three FITS frames and restarts its durable sidecar entirely offline. After the
+server restarts, it checks unchanged program identity, delivers the capture
+receipts, resumes its cursor and replays duplicates. A fresh program must show
+exactly one pending image per goal. Paired status reports must be visible in the
+server's live rig inventory before and after the outage. Cleanup revokes the
+test credential, removes it from the vault, parks/disconnects the simulators,
+and closes the owned processes. Results and server logs remain for inspection.
+
+The non-secret fixture flags `ActivateSimulatorPlan` and `ExerciseOutage` are
+explicit opt-ins. Never supply them against a live server. This proves the
+server-plan/native-capture/check-in path, not a production session container:
+safety and Earth orientation remain explicit synthetic test inputs, pointing
+uses the simulator's current coordinates, and no slew, autofocus, guiding,
+flip or unattended safety recovery is claimed. A program preview remains
+inspection data, not acquisition authorization.
+
+On 2026-09-30 the combined test passed on nightly #64 (`3.3.0.1064`) with
+runtime 0.7.0 / IPC 8 and the PSF Guard handoff correction. It saved three
+correlated FITS images, completed seven native preparation operations and six
+inherited exposure hooks, retained progress across a sidecar restart during
+the server outage, and acknowledged all six reservation/save events after
+reconnect. A sender restart delivered no new events; duplicate replay did not
+increase pending credit. Both paired live-status reports appeared in the rig
+inventory, and cleanup reported no errors. Evidence:
+`artifacts/nina-smoke-7261dfdeeefc410f9ea6000620b3a350/probe/171d2afc78294858b3de51be0e3d6c89/result.json`.
+All 575 plugin tests passed. No production acquisition release was enabled.
+
 ## Paired capture receipt smoke
 
 `-CoordinatorFixture <absolute-json-path>` extends `-AscomSequence` with a
@@ -26,15 +74,15 @@ session container. The isolated NINA instance was closed normally afterwards.
 
 ## Host setup
 
-Use the official N.I.N.A. 3.3 nightly #58 or #59 in a separate application
+Use the official N.I.N.A. 3.3 nightly #64 in a separate application
 directory. Do not install it over an existing N.I.N.A. installation. The official
 [nightly bundle](https://f002.backblazeb2.com/file/ninasetup/Nightlies/3.3.0.1058/NINASetupBundle_3.3.0.1058.zip)
 contains a WiX bundle with an embedded MSI. Extract the bundle, then use an MSI
 administrative extraction (`msiexec /a ... /qn TARGETDIR=...`) to unpack the app.
 The test launcher takes the resulting directory containing `NINA.exe`.
 Check the [official download page](https://nighttime-imaging.eu/download/) before
-a new test campaign. On 2026-09-27 its latest nightly was #59 (`3.3.0.1059`).
-The launcher explicitly allows both reviewed hosts, while the plugin keeps #58
+a new test campaign. On 2026-09-30 its latest nightly was #64 (`3.3.0.1064`).
+The launcher allows #58, #59 and #64, while the plugin keeps #58
 as its minimum API baseline. The #59 SOFA, NOVAS and JPLEPH files match the pinned
 test dependencies exactly. Review newer host contracts before adding them to
 this allowlist; a minimum-version declaration alone is not compatibility evidence.

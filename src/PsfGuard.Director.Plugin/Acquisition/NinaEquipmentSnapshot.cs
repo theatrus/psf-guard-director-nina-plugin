@@ -17,6 +17,13 @@ internal sealed record NinaEquipmentBinding(Guid ProfileId, string RigId, string
 internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMediator camera, IFilterWheelMediator wheel,
     ITelescopeMediator? telescope = null)
 {
+    internal ImmutableDictionary<string, string> ReadFilterNames(NinaEquipmentBinding binding, DirectorConfiguration expected)
+    {
+        if (Read(binding).Id != expected.Id)
+            throw new InvalidOperationException("Equipment changed before exporting filter labels.");
+        return binding.Filters.ToImmutableDictionary(f => f.Id, f => f.ExpectedName ?? f.Id, StringComparer.Ordinal);
+    }
+
     internal DirectorConfiguration Read(NinaEquipmentBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
