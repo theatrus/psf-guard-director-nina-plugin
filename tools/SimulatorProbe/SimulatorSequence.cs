@@ -213,8 +213,26 @@ public sealed class SimulatorSequence : SequenceItem
             var program = new DirectorProgram(1, assignment, equipment, [programTarget],
                 Enumerable.Range(0, 3).Select(i => new ExposureRecipe($"recipe-{i}", 1000, $"filter-{i}", new(1, 1), null, null, 0, null)).ToImmutableArray(),
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
+            DirectorAcquisition? publicService = null;
             if (coordinator is { ActivateSimulatorPlan: true })
             {
+                if (coordinator.PublicAcquisition)
+                {
+                    var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
+                    settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
+                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
+                    { LocalStateRoot = Path.Combine(run, "public-state") };
+                    sessionContainer = new DirectorSessionContainer(publicService);
+                    sessionContainer.Options.MaximumAltitude = 89;
+                    sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
+                        sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                    Step("Reporting native equipment with acquisition disabled");
+                    if (!sessionContainer.ReportEquipmentCommand.CanExecute(null)) throw new InvalidDataException("Native report button was disabled.");
+                    await sessionContainer.ReportEquipmentAsync();
+                    if (sessionContainer.Options.EnableAcquisition || AcquisitionLease.IsActive
+                        || sessionContainer.Display.Phase != "Equipment reported; awaiting operator review")
+                        throw new InvalidDataException("Equipment report incorrectly enabled acquisition or retained ownership.");
+                }
                 Step("Activating and pulling the isolated server's simulator plan");
                 program = await coordinator.ActivateAndReadProgramAsync(Path.Combine(run, "program-preview"), equipment,
                     equipmentReader.ReadFilterNames(equipmentBinding, equipment), programTarget, lifetime.Token);
@@ -228,9 +246,9 @@ public sealed class SimulatorSequence : SequenceItem
                 Step("Running the public Director Session acquisition path");
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                var service = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
+                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
-                sessionContainer = new DirectorSessionContainer(service);
+                sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
                 sessionContainer.Options.MaximumAltitude = 89;
                 sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
@@ -569,6 +587,7 @@ public sealed class SimulatorSequence : SequenceItem
                 allocationId = coordinator?.AllocationId,
                 serverOutage = coordinator?.ExerciseOutage ?? false,
                 liveStatusVerified = coordinator?.LiveStatusVerified ?? false,
+                equipmentReviewVerified = coordinator?.EquipmentReviewVerified ?? false,
                 steps,
                 evaluations,
                 operations,

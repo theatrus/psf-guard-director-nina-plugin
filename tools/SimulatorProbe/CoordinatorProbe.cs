@@ -25,6 +25,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool PublicUnsafe { get; private init; }
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
+    internal bool EquipmentReviewVerified { get; private set; }
     internal Guid? AllocationId => allocation?.Envelope.AllocationId;
     private CoordinatorAllocation? allocation;
     private string? allocationRoot;
@@ -93,26 +94,83 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     {
         if (!ActivateSimulatorPlan) throw new InvalidOperationException("Server plan fixture was not explicitly enabled.");
         var binding = pairing.Binding;
-        await OperatorAsync(HttpMethod.Put, $"rigs/{RigId}/equipment", new
+        if (PublicAcquisition)
         {
-            binding.CoordinatorInstanceId,
-            binding.CatalogId,
-            configuration,
-            filterNames,
-            optics = new
+            using var reportsResponse = await operatorClient.GetAsync($"api/director/v1/rigs/{RigId}/equipment-reports", token);
+            reportsResponse.EnsureSuccessStatusCode();
+            using var reports = JsonDocument.Parse(await reportsResponse.Content.ReadAsByteArrayAsync(token));
+            var report = reports.RootElement.GetProperty("data").EnumerateArray().Single();
+            if (report.GetProperty("client_id").GetGuid() != pairing.ClientId || !report.GetProperty("accepted_revision").ValueKind.Equals(JsonValueKind.Null)
+                || report.GetProperty("configuration").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id)
+                throw new InvalidDataException("Native equipment report did not match the paired simulator.");
+            using var beforeResponse = await operatorClient.GetAsync("api/director/v1/catalogs/director-simulator/rig/profile", token);
+            beforeResponse.EnsureSuccessStatusCode();
+            using var before = JsonDocument.Parse(await beforeResponse.Content.ReadAsByteArrayAsync(token));
+            if (before.RootElement.GetProperty("data").GetProperty("profile").GetProperty("configuration").ValueKind != JsonValueKind.Null)
+                throw new InvalidDataException("Reporting equipment silently changed the active rig setup.");
+            var manual = await OperatorAsync(HttpMethod.Put, "catalogs/director-simulator/rig/profile", new
             {
-                sensor_width_px = 1280,
-                sensor_height_px = 1024,
-                pixel_size_um = 3.76,
-                focal_length_mm = 250.0,
-                aperture_mm = (double?)null,
-                rotation = new { mode = "fixed", angle_degrees = 0.0 }
-            },
-            site = (object?)null,
-            horizon = (object?)null,
-            limits = (object?)null,
-            reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        }, token);
+                expected_revision = 0,
+                optics = new
+                {
+                    value = new
+                    {
+                        sensor_width_px = 1280,
+                        sensor_height_px = 1024,
+                        pixel_size_um = 3.76,
+                        focal_length_mm = 250.0,
+                        aperture_mm = (double?)null,
+                        rotation = new { mode = "fixed", angle_degrees = 0.0 }
+                    },
+                    source = new { kind = "manual" }
+                },
+                site = (object?)null,
+                horizon = (object?)null,
+                sky_quality = (object?)null,
+                limits = new
+                {
+                    value = new
+                    {
+                        minimum_altitude_degrees = 20.0,
+                        maximum_altitude_degrees = 90.0,
+                        meridian_exclusion = new { before_ms = 0, after_ms = 0 }
+                    },
+                    source = new { kind = "manual" }
+                }
+            }, token);
+            var accepted = await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/equipment-reports/{pairing.ClientId:D}/accept", new
+            {
+                binding.CoordinatorInstanceId,
+                binding.CatalogId,
+                report_id = report.GetProperty("report_id").GetGuid(),
+                expected_revision = manual.GetProperty("profile").GetProperty("revision").GetUInt64()
+            }, token);
+            if (accepted.GetProperty("configuration").GetProperty("value").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id
+                || accepted.GetProperty("optics").GetRawText() != manual.GetProperty("profile").GetProperty("optics").GetRawText())
+                throw new InvalidDataException("Review changed manual optics or accepted the wrong native configuration.");
+            EquipmentReviewVerified = true;
+        }
+        else
+            await OperatorAsync(HttpMethod.Put, $"rigs/{RigId}/equipment", new
+            {
+                binding.CoordinatorInstanceId,
+                binding.CatalogId,
+                configuration,
+                filterNames,
+                optics = new
+                {
+                    sensor_width_px = 1280,
+                    sensor_height_px = 1024,
+                    pixel_size_um = 3.76,
+                    focal_length_mm = 250.0,
+                    aperture_mm = (double?)null,
+                    rotation = new { mode = "fixed", angle_degrees = 0.0 }
+                },
+                site = (object?)null,
+                horizon = (object?)null,
+                limits = (object?)null,
+                reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            }, token);
         var project = Guid.NewGuid();
         await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
         await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/framing", new
