@@ -21,6 +21,7 @@ using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using PsfGuard.Director.Plugin;
 using PsfGuard.Director.Plugin.Acquisition;
+using PsfGuard.Director.Plugin.Sequencer;
 using PsfGuard.Director.Runtime;
 
 [assembly: Guid("a8f3b6dd-a195-40f8-9de3-208304473d53")]
@@ -88,6 +89,10 @@ public sealed class SimulatorSequence : SequenceItem
         var evaluations = new List<PlannerDecision>();
         var operations = new List<PreparationCompletion>();
         var exposureHooks = new List<string>();
+        var sessionHookEvents = new List<string>();
+        NinaSessionHooks? sessionHooks = null;
+        DirectorSessionContainer? sessionContainer = null;
+        NinaTargetContainer? sessionTarget = null;
         LedgerIdentity? ledger = null;
         CoordinatorProbe? coordinator = null;
         CoordinatorCheckpointResult? checkpoint = null;
@@ -127,6 +132,8 @@ public sealed class SimulatorSequence : SequenceItem
         }
         try
         {
+            Step("Rendering Director session editors in the native NINA host");
+            await SessionUiProbe.RenderAsync(run);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
             var rigId = coordinator?.RigId ?? "ascom-smoke";
@@ -193,6 +200,24 @@ public sealed class SimulatorSequence : SequenceItem
                 await coordinator.ReportStatusAsync(programTarget, "simulator_outage_test", lifetime.Token);
                 await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
             }
+            sessionContainer = new DirectorSessionContainer();
+            sessionContainer.Report(DirectorSessionDisplay.Empty with
+            {
+                Phase = "Isolated simulator session",
+                Rig = rigId,
+                Target = programTarget.Name,
+                ProgramRevision = coordinator?.ProgramRevision ?? "Local fixture",
+                Safety = "Synthetic simulator evidence",
+                Connectivity = coordinator?.ExerciseOutage == true ? "Offline test" : "Connected test"
+            });
+            sessionContainer.AttachNewParent(Parent);
+            foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
+                sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
+            sessionHooks = new NinaSessionHooks(sessionContainer, TimeProvider.System);
+            await sessionHooks.WaitAsync(_ => Task.CompletedTask, progress, lifetime.Token);
+            sessionTarget = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
+            sessionTarget.AttachNewParent(sessionContainer);
+            await sessionHooks.SelectTargetAsync(programTarget.Id, sessionTarget, progress, lifetime.Token);
             PlannerState State() => new(rigId, equipment.Id, NowMs(), started + 180000,
                 PlannerSafety.Safe, true, false, new(0, 0));
             var geometryReader = new NinaGeometrySnapshot(constraintReader, equipmentReader);
@@ -247,7 +272,7 @@ public sealed class SimulatorSequence : SequenceItem
                     var block = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
                     var issuedItem = nativeItems.Create(next, program, equipmentBinding, nativeDispatch.Pending(next, block.ValidateContext));
                     var item = issuedItem.Item;
-                    block.AttachNewParent(Parent);
+                    block.AttachNewParent(sessionContainer);
                     block.Add(item);
                     Step($"Executing native {operation.Operation.GetType().Name}");
                     try { await block.Run(progress, lifetime.Token); }
@@ -265,6 +290,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding
                     ?? throw new InvalidDataException("New capture binding is missing.");
                 Step($"Capturing simulator exposure {captures.Count + 1}/3");
+                sessionContainer.Report(sessionContainer.Display with { Goal = selected.GoalId, Operation = $"Exposure {captures.Count + 1}/3" });
                 var hookBlock = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
                 var checkCapture = nativeDispatch.Capture(preparationId, reservation, () =>
                 {
@@ -278,7 +304,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var exposureItem = new NinaExposureItem(boundCapture, reservation, binding, equipmentBinding,
                     checkCapture);
                 var exposureBlock = new NINA.Sequencer.Container.SequentialContainer();
-                hookBlock.AttachNewParent(Parent);
+                hookBlock.AttachNewParent(sessionContainer);
                 hookBlock.Add(exposureBlock);
                 exposureBlock.Add(exposureItem);
                 var hook = new ExposureHook(exposureItem, programTarget, after => exposureHooks.Add($"{(after ? "after" : "before")}:{captureId}"));
@@ -309,7 +335,12 @@ public sealed class SimulatorSequence : SequenceItem
                 Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId,
                     checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
                 captures.Add(evidence);
+                await sessionHooks.ExposureSavedAsync(captureId, progress, lifetime.Token);
             }
+            await sessionHooks.FinishAsync(progress, lifetime.Token);
+            var expectedSlots = new[] { "BeforeWait", "AfterWait", "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" };
+            if (!sessionHookEvents.SequenceEqual(expectedSlots) || sessionHooks.Receipts.Any(receipt => !receipt.Completed))
+                throw new InvalidOperationException("Director session hook cadence did not match confirmed captures. Pending assessment is not target completion.");
             var savedEvents = Require(await runtime.ReadEventsAsync(0, token: lifetime.Token));
             if (savedEvents.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Saved) != 3)
                 throw new InvalidDataException("The Rust ledger does not contain three saved captures.");
@@ -326,7 +357,16 @@ public sealed class SimulatorSequence : SequenceItem
                 checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "checkin"), runtime, ledger, lifetime.Token);
                 await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
                 await coordinator.ReportStatusAsync(programTarget, "pending_assessment", lifetime.Token);
+                sessionContainer.Report(sessionContainer.Display with
+                {
+                    Connectivity = "Connected test",
+                    QueueDepth = "0",
+                    LastCheckIn = DateTimeOffset.UtcNow.ToString("u"),
+                    WaitReason = "Pending assessment",
+                    Operation = "Batch check-in completed"
+                });
             }
+            await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
             await Revalidate(lifetime.Token);
             if (equipmentReader.Read(equipmentBinding).Id != equipment.Id)
                 throw new InvalidOperationException("Simulator capability identity changed during capture.");
@@ -347,6 +387,9 @@ public sealed class SimulatorSequence : SequenceItem
         finally
         {
             profiles.ProfileChanged -= ProfileChanged;
+            sessionTarget?.AttachNewParent(null);
+            sessionTarget?.NighttimeData.Ticker.Stop();
+            sessionContainer?.AttachNewParent(null);
             // Cleanup uses verified connected identities, never the newly selected
             // profile, and continues after one cleanup operation fails.
             async Task Cleanup(string step, Func<Task> action)
@@ -390,6 +433,8 @@ public sealed class SimulatorSequence : SequenceItem
                 evaluations,
                 operations,
                 exposureHooks,
+                sessionHookEvents,
+                sessionHookReceipts = sessionHooks?.Receipts,
                 ledger,
                 checkpoint,
                 equipment,
@@ -414,6 +459,20 @@ public sealed class SimulatorSequence : SequenceItem
 
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
+
+    private sealed class SessionHookMarker(string slot, List<string> events) : SequenceItem
+    {
+        public override object Clone() => new SessionHookMarker(slot, events);
+        public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (slot is not ("BeforeWait" or "AfterWait")
+                && NINA.Sequencer.Utility.ItemUtility.FindDeepSkyObjectContainer(Parent) is not NinaTargetContainer)
+                throw new InvalidOperationException("Director target hook lost its native target context.");
+            events.Add(slot);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class ExposureHook(NinaExposureItem exposure, DirectorTarget expected, Action<bool> observe) : NINA.Sequencer.Trigger.SequenceTrigger
     {

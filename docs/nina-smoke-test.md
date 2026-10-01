@@ -376,3 +376,19 @@ both the Rust delayed-reader and plugin disconnect regressions fail with the
 old behavior and pass with the new versioned handshake.
 This remains fixture-driven preview evidence, not
 the server-assignment or production acquisition acceptance gate.
+
+### Session editor and hook boundary check (2026-09-30)
+
+NINA 3.3 nightly #64 loaded the exported Director Session template and rendered
+all four tabs at 640 and 1000 pixels. The probe resolves NINA's actual MEF-loaded
+type rather than the test plugin's separate assembly-load-context copy. It
+checks all 25 policy editors, their selected values, bounds and nonblank output.
+Screenshots are retained beside `result.json` as `session-{width}-{tab}.png`.
+
+The isolated server-plan run captured three FITS images, ran eight session-slot
+boundaries, survived server outage and sidecar restart, and replayed capture
+receipts without duplicate credit. The terminal pending-assessment state did
+not fire After Target Complete. All 587 plugin tests passed; the package build,
+format check and diff whitespace check passed. This validates configuration UI,
+hook bookkeeping and the internal simulator path, not production arming or
+automatic equipment-policy execution.

@@ -89,7 +89,7 @@ internal sealed class NinaInstructionSlots
         return clone;
     }
 
-    private static void CopyExecutionSettings(ISequenceItem source, ISequenceItem clone)
+    internal static void CopyExecutionSettings(ISequenceItem source, ISequenceItem clone)
     {
         if (ReferenceEquals(source, clone))
             throw new InvalidOperationException("Native instructions must clone without sharing execution state.");
@@ -101,6 +101,7 @@ internal sealed class NinaInstructionSlots
         if (source is not ISequenceContainer original) return;
         if (clone is not ISequenceContainer copied)
             throw new InvalidOperationException("Cloning changed the native container type.");
+        copied.IsExpanded = original.IsExpanded;
         var originals = original.GetItemsSnapshot().ToArray();
         var copies = copied.GetItemsSnapshot().ToArray();
         if (originals.Length != copies.Length)
