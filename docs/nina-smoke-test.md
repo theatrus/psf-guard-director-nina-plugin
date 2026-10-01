@@ -1,5 +1,31 @@
 # Real N.I.N.A. smoke test
 
+## Automatic workload test
+
+Build a schema-18 PSF Guard server and the development plugin package, then run
+the command below with `-PublicAcquisition -AutomaticWorkloads`. The isolated
+operator commissions one exact reviewed client/profile/configuration and active
+project, but does not POST allocation admission. The paired client persists and
+retries its request UUID; the real public Session then acquires three FITS
+frames, acknowledges all six reservation/save events, parks, and seals the
+workload. The next request waits for pending quality assessment without issuing
+duplicate work. The probe cancels that wait and verifies replay refusal and the
+seven-slot hook/save boundaries. This variant is connected; use the separate
+public outage and Unsafe variants below for those regressions.
+
+The 2026-10-01 run passed on NINA `3.3.0.1064`, ASCOM OmniSim and runtime
+0.7.0 / IPC 8. Evidence:
+`artifacts/nina-smoke-cbe57faf5bac406b9190296622b6d77c/probe/f0ad8754c4e64883bb38317ef51621b8/result.json`.
+It reports `automatic_workload_verified: true`, six acknowledged events, three
+correlated saved files, native equipment review and live status. The full serial
+plugin suite passed 662 tests. This proves automatic intake/clean release for
+one prepared target, not multi-target execution, grade feedback or crash recovery.
+The manual public offline regression also passed with the same final package:
+`artifacts/nina-smoke-4666d02721da4e43a04abf22ef4e03bf/probe/361ff629cd34499c89101d41cd73e2ad/result.json`.
+The separate Unsafe regression passed with native exposure abort, park and no
+restart after recovery:
+`artifacts/nina-smoke-7c71d07f32824db2ad90a361cb18c9a6/probe/19c7d9d9df534be499856e6869be6c52/result.json`.
+
 ## Server-plan outage test
 
 The September 30 local-evidence increment passed on NINA `3.3.0.1064` with

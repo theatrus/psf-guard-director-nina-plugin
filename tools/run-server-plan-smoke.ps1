@@ -7,10 +7,12 @@ param(
     [string]$Python = 'python',
     [switch]$PublicAcquisition,
     [switch]$PublicUnsafe,
+    [switch]$AutomaticWorkloads,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
 if ($PublicUnsafe -and !$PublicAcquisition) { throw 'PublicUnsafe requires PublicAcquisition.' }
+if ($AutomaticWorkloads -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'AutomaticWorkloads requires a safe PublicAcquisition run.' }
 $root = Join-Path $env:TEMP "director-server-plan-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $root, "$root/images" | Out-Null
 $exe = Join-Path $root 'psf-guard-cli.exe'
@@ -58,7 +60,7 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
-        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=$true; PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe } |
+        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AutomaticWorkloads=[bool]$AutomaticWorkloads } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -87,10 +89,11 @@ try {
     }
     if (!$result) { throw "No simulator result; inspect $($started.TestRoot)" }
     $evidence = Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json
-    if (!$evidence.passed -or !$stopped -or !$resumed -or !$evidence.program_revision -or !$evidence.live_status_verified) {
+    if (!$evidence.passed -or (!$AutomaticWorkloads -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
         throw "Server-plan smoke failed; inspect $($result.FullName)"
     }
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
+    if ($AutomaticWorkloads -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {

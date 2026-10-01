@@ -73,7 +73,8 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
     public ICommand ReportEquipmentCommand => reportEquipmentCommand;
     public string SessionStatus => Display.Phase;
-    public string Readiness => Options.EnableAcquisition ? "Prepared target; online one-shot allocation admission required" : AcquisitionGate;
+    public string Readiness => !Options.EnableAcquisition ? AcquisitionGate : Options.AutomaticWorkloads
+        ? "Prepared target; commissioned automatic workloads" : "Prepared target; online one-shot allocation admission required";
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
     private bool CanReportEquipment()
