@@ -24,7 +24,7 @@ public sealed class ReleaseManifestTests
     }
 
     [Fact]
-    public void RegistryTemplateMatchesCompiledPluginAndCannotClaimAcquisition()
+    public void RegistryTemplateMatchesCompiledPluginAndLabelsNarrowExperimentalMode()
     {
         var template = JsonNode.Parse(File.ReadAllText(Path.Combine(ProcessTests.BundleDirectory, "packaging", "manifest.template.json")))!;
         var assembly = typeof(DirectorPlugin).Assembly;
@@ -40,7 +40,9 @@ public sealed class ReleaseManifestTests
             Assert.Equal(metadata[key], template[key]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], template["Descriptions"]!["ShortDescription"]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
-        Assert.Contains("Acquisition is not yet available", metadata["ShortDescription"]);
+        Assert.Contains("Experimental", metadata["ShortDescription"]);
+        Assert.Contains("prepared-target", metadata["ShortDescription"]);
+        Assert.Contains("Automatic scheduling and restart/resume are not yet available", template["Descriptions"]!["LongDescription"]!.GetValue<string>());
         Assert.Null(template["Channel"]);
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "experimental");
         Assert.Null(template["Installer"]);

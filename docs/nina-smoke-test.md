@@ -407,6 +407,38 @@ old behavior and pass with the new versioned handshake.
 This remains fixture-driven preview evidence, not
 the server-assignment or production acquisition acceptance gate.
 
+### Public prepared-target acceptance (2026-09-30)
+
+The actual public Director Session ran in NINA 3.3.0.1064 with ASCOM OmniSim,
+the pinned runtime 0.7.0 / IPC 8 and an isolated schema-16 PSF Guard server.
+No TS plugin was installed. Operator admission, vault pairing, one-shot launch,
+Rust selection/budgets, native unpark with verified sidereal tracking,
+filter/readout preparation, three correlated FITS saves, session hook cadence,
+server outage and six-event batch check-in passed. A fresh container could not
+launch the consumed allocation again. Evidence:
+`artifacts/nina-smoke-26e8d445090842318d8829bd332cbef1/probe/dc9645187dc84d9b911b10f92edd0976/result.json`.
+
+A separate public run used 30-second exposures and made the native safety
+monitor unsafe after the camera began exposing. The public owner, without the
+probe canceling its lifetime, aborted exposure, parked, released ownership and
+stayed stopped after monitor recovery. Evidence:
+`artifacts/nina-smoke-3188d92612854001b43afacb8981da5a/probe/6f8c11d82e4445fa81e5906389524f32/result.json`.
+
+All 641 plugin tests passed in serial test-collection mode. The package build,
+format check and diff whitespace check passed. Review fixes cover tracking
+confirmation, launch/acknowledgement validation, clock-initialization cleanup,
+interruption locking, complete teardown attempts and bounded terminal status.
+
+Run these with `run-server-plan-smoke.ps1 -PublicAcquisition`, then with
+`-PublicAcquisition -PublicUnsafe`. Each invocation creates fresh disposable
+profiles, catalog, registry, pairing and allocation. The test closes only its
+owned NINA/server processes and retains evidence below `artifacts/`.
+
+This validates one prepared target, not automatic centering, focus, guiding,
+dithering, meridian flips, multi-target scheduling, resume, successor grants,
+grade feedback or coexistence with every third-party plugin. A claimed launch
+cannot be refunded after a failure. Preserve journals for reconciliation.
+
 ### Session editor and hook boundary check (2026-09-30)
 
 NINA 3.3 nightly #64 loaded the exported Director Session template and rendered

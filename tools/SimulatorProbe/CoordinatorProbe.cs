@@ -14,18 +14,22 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
     internal bool ActivateSimulatorPlan { get; private init; }
     internal string? ProgramRevision { get; private set; }
     internal bool ExerciseOutage { get; private init; }
+    internal bool PublicAcquisition { get; private init; }
+    internal bool PublicUnsafe { get; private init; }
+    internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
     internal Guid? AllocationId => allocation?.Envelope.AllocationId;
     private CoordinatorAllocation? allocation;
     private string? allocationRoot;
     private string? previewRevision;
+    private bool outageRequested;
     private readonly string statusSession = Guid.NewGuid().ToString("D");
     private static readonly JsonSerializerOptions Wire = new()
     {
@@ -61,7 +65,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe };
         }
         catch
         {
@@ -151,7 +155,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 bin = 1,
                 readout_mode = 0
             },
-            exposure_seconds = 1.0,
+            exposure_seconds = PublicUnsafe ? 30.0 : 1.0,
             panel_ids = Array.Empty<string>(),
             enabled = true
         }).ToArray();
@@ -169,7 +173,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
             || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != 3
-            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != 1000)
+            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != 1)
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;
@@ -212,6 +216,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     {
         if (!ExerciseOutage) return;
         if (!ActivateSimulatorPlan) throw new InvalidOperationException("Outage testing requires the server plan fixture.");
+        outageRequested = true;
         await File.WriteAllTextAsync(Path.Combine(root, "stop-server.request"), "ready", token);
         await WaitForMarker(root, "server-stopped", token);
         using var client = new CoordinatorAllocationClient(endpoint, Credential);
@@ -226,9 +231,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
 
     internal async Task EndOutageAsync(string root, CancellationToken token)
     {
-        if (!ExerciseOutage) return;
+        if (!ExerciseOutage || !outageRequested) return;
         await File.WriteAllTextAsync(Path.Combine(root, "start-server.request"), "ready", token);
         await WaitForMarker(root, "server-started", token);
+        outageRequested = false;
     }
 
     internal async Task VerifyProgramAsync(string root, DirectorConfiguration configuration, bool delivered, CancellationToken token)

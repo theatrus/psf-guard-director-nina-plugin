@@ -98,6 +98,7 @@
                     <TabControl>
                         <TabItem Header="Session">
                             <StackPanel Margin="8" DataContext="{Binding Options}">
+                                <CheckBox Content="Enable prepared-target acquisition" IsChecked="{Binding EnableAcquisition}" Margin="0,0,0,10" />
                                 <Expander Header="Session" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

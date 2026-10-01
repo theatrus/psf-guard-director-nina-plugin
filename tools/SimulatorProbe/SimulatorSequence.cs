@@ -221,7 +221,86 @@ public sealed class SimulatorSequence : SequenceItem
                 assignment = program.Assignment;
                 programTarget = program.Targets.Single();
                 await coordinator.ReportStatusAsync(programTarget, "simulator_outage_test", lifetime.Token);
-                await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+                if (!coordinator.PublicAcquisition) await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+            }
+            if (coordinator is { PublicAcquisition: true })
+            {
+                Step("Running the public Director Session acquisition path");
+                var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
+                settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
+                var service = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
+                { LocalStateRoot = Path.Combine(run, "public-state") };
+                sessionContainer = new DirectorSessionContainer(service);
+                sessionContainer.Options.EnableAcquisition = true;
+                sessionContainer.Options.MaximumAltitude = 89;
+                sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
+                    sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                sessionContainer.AttachNewParent(Parent);
+                foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
+                    sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
+                // The public session must own safety cancellation, not this probe.
+                safetyCancellation.Dispose();
+                var executing = sessionContainer.Execute(progress, lifetime.Token);
+                try
+                {
+                    while (!executing.IsCompleted && sessionContainer.Display.Phase != "Acquiring") await Task.Delay(50, lifetime.Token);
+                    if (executing.IsCompleted) await executing;
+                    await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+                    if (coordinator.PublicUnsafe)
+                    {
+                        using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        while (!camera.GetInfo().IsExposing && !executing.IsCompleted) await Task.Delay(50, dispatchDeadline.Token);
+                        if (executing.IsCompleted || !camera.GetInfo().IsExposing) throw new InvalidDataException("Public safety test never entered native exposure.");
+                        safetySimulator.IsSafe = false;
+                        try { await executing.WaitAsync(TimeSpan.FromSeconds(15)); throw new InvalidDataException("Unsafe public session completed successfully."); }
+                        catch (OperationCanceledException) when (interlock.Interrupted.IsCancellationRequested) { }
+                        if (!telescope.GetInfo().AtPark || camera.GetInfo().IsExposing || AcquisitionLease.IsActive)
+                            throw new InvalidDataException("Unsafe public session did not abort, park and release ownership.");
+                        safetySimulator.IsSafe = true;
+                        using (var fresh = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                            while (!safety.GetInfo().IsSafe) await Task.Delay(100, fresh.Token);
+                        if (interlock.Read().Safety == PlannerSafety.Safe || !executing.IsCompleted || lifetime.IsCancellationRequested)
+                            throw new InvalidDataException("Safety recovery revived the public session or the probe caused cancellation.");
+                        unsafeCancellationVerified = true;
+                        ledger = service.LastLedger;
+                        Step("Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
+                        return;
+                    }
+                    await executing;
+                }
+                finally { if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } } }
+                ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
+                foreach (var file in Directory.GetFiles(Path.Combine(service.LastRunDirectory!, "journal"), "*.json", SearchOption.AllDirectories))
+                {
+                    var capture = CaptureJournal.Read(file);
+                    if (capture.Phase != CapturePhase.Saved || !File.Exists(capture.SavedPath)) throw new InvalidDataException("Public capture lacks a saved file.");
+                    var restored = await imageFactory.CreateFromFile(capture.SavedPath, 16, false, lifetime.Token);
+                    if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h => h.Key == NinaCaptureAdapter.CaptureIdHeader
+                        && h.Value.Trim() == capture.Intent.CaptureId.ToString("D"))) throw new InvalidDataException("Public FITS capture identity missing.");
+                    captures.Add(capture);
+                }
+                await coordinator.EndOutageAsync(root, lifetime.Token);
+                await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
+                await reopened.StartAsync(rigId, lifetime.Token);
+                var eop = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
+                var g = new NinaGeometrySnapshot(constraintReader, equipmentReader).Read(constraintBinding, equipmentBinding,
+                    new(1, 89, eop.Orientation, assignment.Goals.Select(x => new DirectorGoalLimits(x.Id, 20, 89, 0)).ToImmutableArray()));
+                var state = new PlannerState(rigId, equipment.Id, NowMs(), assignment.ExpiresAtMs, PlannerSafety.Safe, true, false, new(0, 0));
+                if (Require(await reopened.OpenGeometryAsync(program, g.Constraints, state, lifetime.Token)) != ledger) throw new InvalidDataException("Public ledger identity changed.");
+                checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "public-checkin"), reopened, ledger, lifetime.Token);
+                await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
+                await coordinator.ReportStatusAsync(programTarget, "public_acquisition_complete", lifetime.Token);
+                var retry = new DirectorSessionContainer(service);
+                retry.Options.EnableAcquisition = true;
+                retry.Options.MaximumAltitude = 89;
+                retry.Options.SlewCenter = retry.Options.Focus = retry.Options.Guiding = retry.Options.Dither = retry.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
+                catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
+                Step("Public acquisition saved three frames; server refused a second launch");
+                if (!sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
+                    throw new InvalidDataException("Public session hooks did not follow confirmed save boundaries.");
+                await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                return;
             }
             sessionContainer = new DirectorSessionContainer();
             sessionContainer.Report(DirectorSessionDisplay.Empty with
@@ -478,12 +557,12 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && captures.Count == 3,
+                passed = errors.Count == 0 && (coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
                 ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,
                 ipc = RuntimeContract.ProtocolVersion,
-                scope = coordinator is { ActivateSimulatorPlan: true }
+                scope = coordinator is { PublicAcquisition: true } ? "public-director-session-server-allocation-native-capture" : coordinator is { ActivateSimulatorPlan: true }
                     ? "server-plan-native-dispatch-simulator-not-production-container"
                     : "durable-rust-geometry-native-dispatch-fixture-not-production-container-or-server",
                 programRevision = coordinator?.ProgramRevision,

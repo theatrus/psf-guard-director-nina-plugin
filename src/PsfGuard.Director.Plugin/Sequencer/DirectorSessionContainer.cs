@@ -14,23 +14,29 @@ namespace PsfGuard.Director.Plugin.Sequencer;
 [Export(typeof(ISequenceItem))]
 [Export(typeof(ISequenceContainer))]
 [ExportMetadata("Name", "Director Session")]
-[ExportMetadata("Description", "Experimental Director session configuration. Acquisition is not yet armed.")]
+[ExportMetadata("Description", "Experimental Director prepared-target acquisition with native sequence hooks.")]
 [ExportMetadata("Icon", "TelescopeSVG")]
 [ExportMetadata("Category", "PSF Guard Director")]
 [JsonObject(MemberSerialization.OptIn)]
 public sealed class DirectorSessionContainer : SequentialContainer
 {
-    internal const string AcquisitionGate = "Acquisition unavailable: commissioned safety, Earth orientation and durable assignment admission are not connected yet.";
+    internal const string AcquisitionGate = "Enable prepared-target acquisition to run this session.";
+    private readonly DirectorAcquisition? acquisition;
+    private readonly object executionLock = new();
+    private CancellationTokenSource? executionCancellation;
+    private Task? execution;
     private DirectorSessionOptions options = new();
     private NinaInstructionSlots slots = new();
 
-    [ImportingConstructor]
     public DirectorSessionContainer()
     {
         Name = "Director Session";
         options.PropertyChanged += SettingsChanged;
         AttachSlots();
     }
+
+    [ImportingConstructor]
+    public DirectorSessionContainer(DirectorAcquisition acquisition) : this() => this.acquisition = acquisition;
 
     [JsonProperty(Required = Required.Always, ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public DirectorSessionOptions Options
@@ -58,7 +64,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public IReadOnlyList<SequentialContainer> InstructionBlocks => Enum.GetValues<NinaInstructionSlot>().Select(slot => slots[slot]).ToArray();
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
     public string SessionStatus => Display.Phase;
-    public string Readiness => AcquisitionGate;
+    public string Readiness => Options.EnableAcquisition ? "Prepared target; online one-shot allocation admission required" : AcquisitionGate;
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
     internal void Report(DirectorSessionDisplay display)
@@ -68,12 +74,64 @@ public sealed class DirectorSessionContainer : SequentialContainer
         RaisePropertyChanged(nameof(SessionStatus));
     }
 
-    // A saved sequence cannot manufacture an acquisition permit. The simulator
-    // exercises the same editable slots through internal, explicitly bound calls.
     public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        throw new InvalidOperationException(AcquisitionGate);
+        if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
+        lock (executionLock)
+        {
+            if (execution is { IsCompleted: false }) throw new InvalidOperationException("Director session is already running.");
+            executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var cancellation = executionCancellation;
+            execution = Task.Run(async () =>
+            {
+                var conditions = GetConditionsSnapshot();
+                var triggers = GetTriggersSnapshot();
+                Exception? executionError = null;
+                try
+                {
+                    Iterations = 0;
+                    foreach (var condition in conditions) { condition.SequenceBlockInitialize(); condition.SequenceBlockStarted(); }
+                    foreach (var trigger in triggers) { trigger.SequenceBlockInitialize(); trigger.SequenceBlockStarted(); }
+                    await (acquisition ?? throw new InvalidOperationException("Director acquisition services unavailable.")).ExecuteAsync(this, progress, cancellation.Token);
+                    foreach (var condition in conditions) condition.SequenceBlockFinished();
+                    foreach (var trigger in triggers) trigger.SequenceBlockFinished();
+                }
+                catch (Exception error) { executionError = error; throw; }
+                finally
+                {
+                    var cleanupErrors = new List<Exception>();
+                    try
+                    {
+                        foreach (var condition in conditions)
+                            try { condition.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
+                        foreach (var trigger in triggers)
+                            try { trigger.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
+                    }
+                    finally { lock (executionLock) { executionCancellation = null; cancellation.Dispose(); } }
+                    if (cleanupErrors.Count != 0)
+                    {
+                        if (executionError is not null) cleanupErrors.Insert(0, executionError);
+                        throw new AggregateException("Director session teardown failed.", cleanupErrors);
+                    }
+                }
+            }, CancellationToken.None);
+            return execution;
+        }
+    }
+
+    public override async Task Interrupt()
+    {
+        Task? pending;
+        CancellationTokenSource? cancellation;
+        lock (executionLock) { cancellation = executionCancellation; pending = execution; }
+        try { cancellation?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        if (pending is not null)
+        {
+            try { await pending; }
+            catch (OperationCanceledException) { }
+        }
     }
 
     public override bool Validate()
@@ -85,17 +143,22 @@ public sealed class DirectorSessionContainer : SequentialContainer
             if (!block.Validate()) issues.Add($"{block.Name} contains invalid instructions.");
         try { NinaHookAdmission.Validate(InstructionBlocks, this); }
         catch (InvalidOperationException error) { issues.Add(error.Message); }
-        issues.Add(AcquisitionGate);
+        issues.AddRange(DirectorAcquisition.PolicyIssues(Options));
+        if (Options.EnableAcquisition && acquisition is null) issues.Add("Director acquisition services unavailable.");
+        if (Options.EnableAcquisition && Attempts != 1) issues.Add("Director acquisition requires one attempt; allocation launches cannot be retried.");
         if (!valid) issues.Add("A session trigger or condition is invalid.");
         Issues = new ObservableCollection<string>(issues);
         RaisePropertyChanged(nameof(Issues));
         RaisePropertyChanged(nameof(ConfigurationIssues));
-        return false;
+        RaisePropertyChanged(nameof(Readiness));
+        return issues.Count == 0;
     }
 
     public override object Clone()
     {
-        var clone = new DirectorSessionContainer { Options = Options.Clone(), Slots = Slots.Clone() };
+        var clone = acquisition is null ? new DirectorSessionContainer() : new DirectorSessionContainer(acquisition);
+        clone.Options = Options.Clone();
+        clone.Slots = Slots.Clone();
         clone.CopyMetaData(this);
         clone.Attempts = Attempts;
         clone.ErrorBehavior = ErrorBehavior;

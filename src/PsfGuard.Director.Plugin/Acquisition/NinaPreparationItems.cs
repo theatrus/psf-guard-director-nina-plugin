@@ -61,8 +61,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
             if (command.Operation is PreparationOperation.Unpark)
             {
                 var mount = telescope!.GetInfo();
-                if (!mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.AtPark || mount.Slewing)
-                    throw new InvalidOperationException("NINA did not report the bound telescope unparked and idle.");
+                if (!mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.AtPark || mount.Slewing || !mount.TrackingEnabled)
+                    throw new InvalidOperationException("NINA did not report the bound telescope unparked, idle and tracking.");
             }
             if (command.Operation is PreparationOperation.SwitchFilter && local.FilterWheelDeviceId is not null)
             {
@@ -75,7 +75,14 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         item = command.Operation switch
         {
             PreparationOperation.Unpark when telescope is not null && local.TelescopeDeviceId is not null =>
-                new IssuedUnpark(telescope, fence) { Name = "Director unpark" },
+                new IssuedUnpark(telescope, fence, () =>
+                {
+                    var mount = telescope.GetInfo();
+                    if (JsonSerializer.Serialize(equipment.Read(local)) != JsonSerializer.Serialize(program.Configuration)
+                        || !mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.AtPark || mount.Slewing)
+                        throw new InvalidOperationException("The bound telescope changed during startup.");
+                })
+                { Name = "Director unpark and track" },
             PreparationOperation.SwitchFilter filter when filter.FilterId == recipe.FilterId =>
                 CreateFilter(fence, local.Filters.Single(f => f.Id == filter.FilterId)),
             PreparationOperation.SetReadoutMode readout when readout.Mode == recipe.ReadoutMode && program.Configuration.ReadoutModes.Contains(readout.Mode) =>
@@ -105,12 +112,30 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
             fence.ExecuteAsync(() => base.Execute(progress, token), token);
     }
 
-    private sealed class IssuedUnpark(ITelescopeMediator telescope, NinaOperationFence fence) : UnparkScope(telescope)
+    private sealed class IssuedUnpark : UnparkScope
     {
+        private readonly ITelescopeMediator telescope;
+        private readonly NinaOperationFence fence;
+        private readonly Action checkContext;
+        internal IssuedUnpark(ITelescopeMediator telescope, NinaOperationFence fence, Action checkContext) : base(telescope)
+        { this.telescope = telescope; this.fence = fence; this.checkContext = checkContext; }
         public override int Attempts { get => 1; set => RequireSingleAttempt(value); }
         public override object Clone() => throw new NotSupportedException("Issued Director operations cannot be cloned.");
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) =>
-            fence.ExecuteAsync(() => base.Execute(progress, token), token);
+            fence.ExecuteAsync(async () =>
+            {
+                await base.Execute(progress, token);
+                token.ThrowIfCancellationRequested();
+                checkContext();
+                await new SetTracking(telescope).Execute(progress, token);
+                using var confirmation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                confirmation.CancelAfter(TimeSpan.FromSeconds(5));
+                while (!telescope.GetInfo().TrackingEnabled)
+                {
+                    checkContext();
+                    await Task.Delay(100, confirmation.Token);
+                }
+            }, token);
     }
 
     private sealed class IssuedFixedFilter(NinaOperationFence fence) : SequenceItem

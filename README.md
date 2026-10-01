@@ -16,7 +16,10 @@ and safe execution boundaries.
 
 The architecture and acceptance gates live in
 [PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md).
-This repository is not a stable plugin release and has no acquisition support yet.
+This repository is experimental, not a stable scheduler release. The public
+Director Session supports bounded acquisition of one already prepared target.
+See [prepared-target mode](docs/native-capture.md#public-prepared-target-mode-experimental)
+for setup, safety requirements and limitations.
 
 ## Runtime preview
 
@@ -34,7 +37,7 @@ rig's runtime. Pairing is not permission to acquire.
 The read-only coordinator client validates and caches program previews against
 an explicit database/rig/profile binding. A separate capture checkpoint client
 delivers durable ledger evidence in bounded batches and resumes after restart.
-Neither is yet a production background session or target executor; see
+The prepared-target session uses these clients for capture check-in; see
 [coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
 Separate allocation intake now accepts an operator-issued first allocation for
 the exact paired client, persists it for explicit offline use, and refuses changed
@@ -42,11 +45,12 @@ or expired grants. It cannot admit or renew a grant itself; see
 [issued allocations](docs/native-capture.md#issued-allocation-intake).
 There is no Chatstronomy adapter yet.
 
-The Advanced Sequencer now offers **Director Session**, a configuration preview
+The Advanced Sequencer offers **Director Session**, an experimental container
 with seven TS-style instruction slots, native trigger/condition editors, grouped
 local-policy fields, and a status view. It saves and clones configuration, not
-credentials or acquisition authority. Running it reports an explicit readiness
-error until production admission, safety and orientation sources are wired.
+credentials or acquisition authority. Acquisition is off by default. Enabling
+it requires an online one-shot allocation launch, fresh native safety evidence,
+dated NINA Earth-orientation data and the explicit prepared-target policies.
 See [session configuration](docs/native-capture.md#session-configuration-preview)
 for what is implemented and what remains gated.
 
@@ -95,13 +99,15 @@ hook is not part of the plugin bundle.
 
 The [native capture adapter](docs/native-capture.md) implements journaled capture,
 processing, and correlated save completion behind an internal interface. It is
-not yet exposed as a production sequencer action and cannot be started from
-the plugin settings. The runtime library now exposes typed planning evaluation;
+used by the experimental Director Session and cannot be started from
+the plugin settings. The runtime library exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. The optional server-plan smoke activates and pulls an actual PSF Guard
 program, captures during a server outage and verifies restart, batch check-in
 and duplicate replay. Both probes use NINA's native safety simulator and dated,
-read-only Earth-orientation cache, not production acquisition authorization.
+read-only Earth-orientation cache. `-PublicAcquisition` tests the actual public
+container, one-shot authorization, offline captures and replay refusal;
+`-PublicAcquisition -PublicUnsafe` tests an unsafe interruption during exposure.
 
 The runtime host also exposes the sidecar's durable capture and preparation
 ledgers through IPC 8 (runtime 0.7.0). It can request read-only, ledger-backed
@@ -112,13 +118,13 @@ child exit, so Windows cannot discard an unread reply during teardown.
 Storage is opt-in for callers with an existing private state directory. It
 supports reservations, observed outcomes, lookup, and bounded event replay;
 restarts retain unresolved attempts, preparation operations, and saved-image pending credit. The native
-capture adapter and settings preview do not yet use this ledger. See the
+public session uses this ledger; the runtime settings preview does not. See the
 [ledger integration boundary](docs/native-capture.md#durable-ledger-host).
 
 The typed program API binds immutable targets, exposure recipes, and equipment
 capabilities to durable execution. It rejects changed capture evidence and
 preparation settings while keeping selection policy in Rust. These APIs are
-development groundwork, not an acquisition-ready NINA container.
+shared foundations for the prepared-target session, not a complete automatic scheduler.
 
 The typed geometry API opens a separate geometry-bound ledger with the complete
 site, Earth-orientation validity, horizon, altitude limits, and meridian policy.
@@ -129,8 +135,8 @@ replacement windows. Old program-only calls cannot bypass geometry mode.
 The internal native geometry exporter now joins NINA's complete
 horizon/site snapshot with the matching equipment fingerprint for this client.
 The local orientation reader and continuous safety interlock are tested in the
-native probe. Production dispatch, immutable allocation admission, and the full
-server acceptance gate still need to be connected.
+native probe and public prepared-target session. Automatic multi-target dispatch,
+resume and successor allocation accounting remain unfinished.
 
 The two dispatch-check APIs recheck an issued preparation command or reserved
 capture after native before-hooks. They preserve the original command, attempt
@@ -141,8 +147,8 @@ and rechecks wall-clock validity after native evidence, so a late successful
 reply cannot start equipment. The runtime pin uses the reviewed and merged head
 of PSF Guard PR #518, built by the three-platform Director CI. A changed runtime head requires a
 reviewed pin update. The isolated native simulator sequence uses session-bound post-hook
-checks; production container adoption and full-stack acceptance remain separate
-work.
+checks. The public prepared-target increment has native host/server acceptance;
+the complete acquisition lifecycle remains separate work.
 
 ## Preview releases
 
