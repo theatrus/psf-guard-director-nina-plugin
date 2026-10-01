@@ -36,6 +36,10 @@ an explicit database/rig/profile binding. A separate capture checkpoint client
 delivers durable ledger evidence in bounded batches and resumes after restart.
 Neither is yet a production background session or target executor; see
 [coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
+Separate allocation intake now accepts an operator-issued first allocation for
+the exact paired client, persists it for explicit offline use, and refuses changed
+or expired grants. It cannot admit or renew a grant itself; see
+[issued allocations](docs/native-capture.md#issued-allocation-intake).
 There is no Chatstronomy adapter yet.
 
 The Advanced Sequencer now offers **Director Session**, a configuration preview

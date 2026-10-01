@@ -22,6 +22,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal string? ProgramRevision { get; private set; }
     internal bool ExerciseOutage { get; private init; }
     internal bool LiveStatusVerified { get; private set; }
+    internal Guid? AllocationId => allocation?.Envelope.AllocationId;
+    private CoordinatorAllocation? allocation;
+    private string? allocationRoot;
+    private string? previewRevision;
     private readonly string statusSession = Guid.NewGuid().ToString("D");
     private static readonly JsonSerializerOptions Wire = new()
     {
@@ -168,8 +172,36 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != 1000)
             || second.Envelope.Program.Targets.Length != 1)
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
-        ProgramRevision = second.Envelope.Revision;
-        return second.Envelope.Program;
+        previewRevision = second.Envelope.Revision;
+        var admission = new
+        {
+            binding.CoordinatorInstanceId,
+            binding.CatalogId,
+            allocation_id = Guid.NewGuid(),
+            client_id = pairing.ClientId,
+            preview_revision = previewRevision
+        };
+        await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
+        // Repeat operator admission models a lost successful HTTP response.
+        await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
+        using var allocations = new CoordinatorAllocationClient(endpoint, Credential);
+        allocation = await allocations.ReadAsync(binding, pairing.ClientId, configuration, token);
+        allocationRoot = root;
+        var allocationCache = new CoordinatorAllocationCache(root, endpoint, binding, pairing.ClientId, configuration);
+        allocationCache.Store(allocation, NowMs());
+        VerifyCachedAllocation(configuration);
+        if (allocation.Envelope.Snapshot.Program.Assignment.Id == second.Envelope.Program.Assignment.Id)
+            throw new InvalidDataException("Allocation reused the preview's assignment identity.");
+        ProgramRevision = allocation.Envelope.Snapshot.Revision;
+        return allocation.Envelope.Snapshot.Program;
+    }
+
+    private static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    private void VerifyCachedAllocation(DirectorConfiguration configuration)
+    {
+        var cached = new CoordinatorAllocationCache(allocationRoot!, endpoint, pairing.Binding, pairing.ClientId, configuration).Read(NowMs());
+        if (allocation is null || cached?.Fingerprint != allocation.Fingerprint)
+            throw new InvalidDataException("Offline allocation did not retain the issued identity and budgets.");
     }
 
     private ValueTask<string?> Credential(CancellationToken _) => ValueTask.FromResult<string?>(
@@ -182,13 +214,14 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         if (!ActivateSimulatorPlan) throw new InvalidOperationException("Outage testing requires the server plan fixture.");
         await File.WriteAllTextAsync(Path.Combine(root, "stop-server.request"), "ready", token);
         await WaitForMarker(root, "server-stopped", token);
-        using var client = new CoordinatorProgramClient(endpoint, Credential);
+        using var client = new CoordinatorAllocationClient(endpoint, Credential);
         try
         {
-            await client.ReadPreviewAsync(pairing.Binding, configuration, token: token);
+            await client.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);
             throw new InvalidDataException("The isolated server was still reachable during the outage.");
         }
         catch (CoordinatorIntakeException error) when (error.Failure == CoordinatorIntakeFailure.Transport) { }
+        VerifyCachedAllocation(configuration);
     }
 
     internal async Task EndOutageAsync(string root, CancellationToken token)
@@ -204,11 +237,16 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var client = new CoordinatorProgramClient(endpoint, Credential);
         var preview = await client.ReadAndCachePreviewAsync(pairing.Binding, configuration,
             new CoordinatorPreviewCache(root, endpoint, pairing.Binding, configuration), token);
-        if (!delivered && preview.Envelope.Revision != ProgramRevision)
+        if (!delivered && preview.Envelope.Revision != previewRevision)
             throw new InvalidDataException("Server restart changed unchanged program identity.");
-        if (delivered && (preview.Envelope.Revision == ProgramRevision || preview.Envelope.Program.Assignment.Goals.Length != 3
+        if (delivered && (preview.Envelope.Revision == previewRevision || preview.Envelope.Program.Assignment.Goals.Length != 3
             || preview.Envelope.Program.Assignment.Goals.Any(g => g.Pending != 1 || g.Accepted != 0)))
             throw new InvalidDataException("Server did not retain exactly one pending capture per goal after duplicate delivery.");
+        using var allocations = new CoordinatorAllocationClient(endpoint, Credential);
+        var current = await allocations.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);
+        if (current.Fingerprint != allocation?.Fingerprint)
+            throw new InvalidDataException("Server restart or receipt delivery changed the issued allocation.");
+        VerifyCachedAllocation(configuration);
     }
 
     internal async Task ReportStatusAsync(DirectorTarget target, string reason, CancellationToken token)
@@ -222,9 +260,11 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 pairing.Binding.CatalogId,
                 session_id = statusSession,
                 reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                program_revision = ProgramRevision,
+                program_revision = previewRevision,
                 status = new
                 {
+                    allocation_id = AllocationId,
+                    allocation_revision = ProgramRevision,
                     phase = "waiting",
                     wait_reason = reason,
                     target_name = target.Name,
@@ -242,6 +282,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var ack = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
         if (!ack.RootElement.GetProperty("data").GetProperty("accepted").GetBoolean())
             throw new InvalidDataException("Coordinator did not accept the simulator status.");
+        if (reason == "simulator_outage_test" && ack.RootElement.GetProperty("data").GetProperty("program_changed").GetBoolean())
+            throw new InvalidDataException("Allocation identity caused a false plan-change hint.");
         using var listed = await operatorClient.GetAsync("api/director/v1/rigs/status", token);
         listed.EnsureSuccessStatusCode();
         using var statuses = JsonDocument.Parse(await listed.Content.ReadAsByteArrayAsync(token));
@@ -280,17 +322,17 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         }
         using (var client = new CoordinatorCheckpointClient(root, endpoint, pairing.Binding, ledger, Credential))
         {
-            var result = await client.DeliverAsync(Events, programRevision: ProgramRevision, maxPages: 1, token: token);
+            var result = await client.DeliverAsync(Events, programRevision: previewRevision, maxPages: 1, token: token);
             if (result.DeliveredEvents != 6) throw new InvalidDataException("Expected three reservation/save receipt pairs.");
         }
         using (var restarted = new CoordinatorCheckpointClient(root, endpoint, pairing.Binding, ledger, Credential))
         {
-            var result = await restarted.DeliverAsync(Events, programRevision: ProgramRevision, token: token);
+            var result = await restarted.DeliverAsync(Events, programRevision: previewRevision, token: token);
             if (!result.CaughtUp || result.AcknowledgedThrough != 6 || result.DeliveredEvents != 0)
                 throw new InvalidDataException("Checkpoint restart did not retain its cursor.");
         }
         using var replay = new CoordinatorCheckpointClient(Path.Combine(root, "replay"), endpoint, pairing.Binding, ledger, Credential);
-        var duplicate = await replay.DeliverAsync(Events, programRevision: ProgramRevision, token: token);
+        var duplicate = await replay.DeliverAsync(Events, programRevision: previewRevision, token: token);
         if (!duplicate.CaughtUp || duplicate.AcknowledgedThrough != 6 || duplicate.DeliveredEvents != 6)
             throw new InvalidDataException("Coordinator did not acknowledge idempotent replay.");
         return duplicate;
