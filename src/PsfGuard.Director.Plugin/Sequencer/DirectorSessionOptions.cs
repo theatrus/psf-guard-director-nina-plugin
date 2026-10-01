@@ -23,6 +23,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private DirectorOperationOwner startup, slewCenter, focus, guiding, dither, meridianFlip, shutdown;
     private bool enableAcquisition;
     [JsonProperty] public bool EnableAcquisition { get => enableAcquisition; set => Set(ref enableAcquisition, value); }
+    private bool automaticWorkloads;
+    [JsonProperty] public bool AutomaticWorkloads { get => automaticWorkloads; set => Set(ref automaticWorkloads, value); }
 
     [JsonProperty] public double MaximumHours { get => maximumHours; set => Set(ref maximumHours, value); }
     [JsonProperty] public double MinimumAltitude { get => minimumAltitude; set => Set(ref minimumAltitude, value); }

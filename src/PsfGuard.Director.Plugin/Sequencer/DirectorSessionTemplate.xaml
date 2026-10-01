@@ -100,7 +100,14 @@
                     <TabControl>
                         <TabItem Header="Session">
                             <StackPanel Margin="8" DataContext="{Binding Options}">
-                                <CheckBox Content="Enable prepared-target acquisition" IsChecked="{Binding EnableAcquisition}" Margin="0,0,0,10" />
+                                <Grid Margin="8,0,8,10">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                    <TextBlock Text="Enable prepared-target acquisition" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding EnableAcquisition}" AutomationProperties.Name="Enable prepared-target acquisition" VerticalAlignment="Center" Margin="0,5" />
+                                    <TextBlock Grid.Row="1" Text="Automatic workloads" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                    <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding AutomaticWorkloads}" AutomationProperties.Name="Automatic workloads" VerticalAlignment="Center" Margin="0,5" />
+                                </Grid>
                                 <Expander Header="Session" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

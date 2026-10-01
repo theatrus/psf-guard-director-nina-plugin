@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -23,6 +23,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
     internal bool PublicUnsafe { get; private init; }
+    internal bool AutomaticWorkloads { get; private init; }
+    internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
     internal bool EquipmentReviewVerified { get; private set; }
@@ -66,7 +68,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads };
         }
         catch
         {
@@ -243,9 +245,36 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             client_id = pairing.ClientId,
             preview_revision = previewRevision
         };
-        await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
-        // Repeat operator admission models a lost successful HTTP response.
-        await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
+        if (AutomaticWorkloads)
+        {
+            await OperatorAsync(HttpMethod.Put, $"rigs/{RigId}/workload-policy", new
+            {
+                coordinator_instance_id = binding.CoordinatorInstanceId,
+                expected_revision = 0,
+                policy = new
+                {
+                    rig_id = binding.RigId,
+                    catalog_id = binding.CatalogId,
+                    client_id = pairing.ClientId,
+                    profile_id = binding.ProfileId,
+                    profile_revision = second.Envelope.Rig.ProfileRevision,
+                    configuration_id = configuration.Id,
+                    project_ids = new[] { project },
+                    enabled = true,
+                    revision = 1
+                }
+            }, token);
+            using var work = new CoordinatorWorkloadClient(Path.Combine(Path.GetDirectoryName(root)!, "public-state"), endpoint, binding, pairing.ClientId, configuration, Credential);
+            allocation = (await work.RequestAsync(token)).Allocation ?? throw new InvalidDataException("Commissioned work was not issued.");
+            if ((await work.RequestAsync(token)).Allocation?.Fingerprint != allocation.Fingerprint)
+                throw new InvalidDataException("Automatic request retry changed its immutable grant.");
+        }
+        else
+        {
+            await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
+            // Repeat operator admission models a lost successful HTTP response.
+            await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/allocation", admission, token);
+        }
         using var allocations = new CoordinatorAllocationClient(endpoint, Credential);
         allocation = await allocations.ReadAsync(binding, pairing.ClientId, configuration, token);
         allocationRoot = root;
@@ -259,6 +288,31 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     }
 
     private static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    internal async Task VerifyAutomaticWorkloadAsync(string root, DirectorConfiguration configuration, CancellationToken token)
+    {
+        using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential);
+        var waiting = await client.RequestAsync(token);
+        if (waiting.Allocation is not null || waiting.RetryAfterSeconds != 30)
+            throw new InvalidDataException("Pending assessment authorized duplicate acquisition.");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
+        request.Headers.Authorization = new("Bearer", pairing.Token);
+        request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
+        request.Content = JsonContent.Create(new
+        {
+            coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,
+            catalog_id = pairing.Binding.CatalogId,
+            request_id = AllocationId,
+            configuration_id = configuration.Id,
+            execution_mode = "prepared_target_v1"
+        });
+        using var response = await operatorClient.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
+        var data = document.RootElement.GetProperty("data");
+        if (data.GetProperty("state").GetString() != "released" || data.GetProperty("workload").GetProperty("terminal_sequence").GetUInt64() != 6)
+            throw new InvalidDataException("Automatic session did not seal its six capture events.");
+        AutomaticWorkloadVerified = true;
+    }
     private void VerifyCachedAllocation(DirectorConfiguration configuration)
     {
         var cached = new CoordinatorAllocationCache(allocationRoot!, endpoint, pairing.Binding, pairing.ClientId, configuration).Read(NowMs());

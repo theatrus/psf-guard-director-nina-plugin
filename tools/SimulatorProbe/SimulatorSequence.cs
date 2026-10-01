@@ -250,6 +250,7 @@ public sealed class SimulatorSequence : SequenceItem
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
+                sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.MaximumAltitude = 89;
                 sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
                     sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
@@ -258,7 +259,8 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 // The public session must own safety cancellation, not this probe.
                 safetyCancellation.Dispose();
-                var executing = sessionContainer.Execute(progress, lifetime.Token);
+                using var publicLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                var executing = sessionContainer.Execute(progress, publicLifetime.Token);
                 try
                 {
                     while (!executing.IsCompleted && sessionContainer.Display.Phase != "Acquiring") await Task.Delay(50, lifetime.Token);
@@ -284,7 +286,20 @@ public sealed class SimulatorSequence : SequenceItem
                         Step("Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
                         return;
                     }
-                    await executing;
+                    if (coordinator.AutomaticWorkloads)
+                    {
+                        using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                        while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for eligible work or quality assessment")
+                            await Task.Delay(100, waitingDeadline.Token);
+                        if (executing.IsCompleted) await executing;
+                        if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
+                        publicLifetime.Cancel();
+                        try { await executing; throw new InvalidDataException("Automatic session ignored cancellation."); }
+                        catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
+                    }
+                    else await executing;
                 }
                 finally { if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } } }
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
@@ -588,6 +603,7 @@ public sealed class SimulatorSequence : SequenceItem
                 serverOutage = coordinator?.ExerciseOutage ?? false,
                 liveStatusVerified = coordinator?.LiveStatusVerified ?? false,
                 equipmentReviewVerified = coordinator?.EquipmentReviewVerified ?? false,
+                automaticWorkloadVerified = coordinator?.AutomaticWorkloadVerified ?? false,
                 steps,
                 evaluations,
                 operations,

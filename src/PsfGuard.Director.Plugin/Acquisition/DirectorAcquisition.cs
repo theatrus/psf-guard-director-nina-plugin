@@ -119,10 +119,20 @@ public sealed class DirectorAcquisition
 
     internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        using var owner = new AcquisitionLease(LocalStateRoot);
+        using var session = CancellationTokenSource.CreateLinkedTokenSource(token);
+        session.CancelAfter(TimeSpan.FromHours(container.Options.MaximumHours));
+        do
+        {
+            if (!await ExecuteAllocationAsync(container, progress, owner, session.Token)) break;
+        } while (container.Options.AutomaticWorkloads);
+    }
+
+    private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner, CancellationToken token)
+    {
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
-        using var owner = new AcquisitionLease(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var settings = new PluginOptionsAccessor(profiles, PluginId);
         using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
@@ -153,8 +163,37 @@ public sealed class DirectorAcquisition
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
-        Report("Reading issued allocation", "Online");
-        var allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
+        using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential, connection.AllowInsecureHttp);
+        CoordinatorAllocation allocation;
+        if (options.AutomaticWorkloads)
+        {
+            while (true)
+            {
+                lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
+                if (profiles.ActiveProfile.Id != profile || equipmentReader.Read(equipmentBinding).Id != configuration.Id
+                    || constraintsReader.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision
+                    || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
+                    throw new InvalidOperationException("Workload request context changed.");
+                try
+                {
+                    Report("Requesting commissioned work", "Online");
+                    var result = await workloads.RequestAsync(lifetime.Token);
+                    if (result.Allocation is not null) { allocation = result.Allocation; break; }
+                    Report("Waiting for eligible work or quality assessment", "Online");
+                    await Task.Delay(TimeSpan.FromSeconds(result.RetryAfterSeconds), lifetime.Token);
+                }
+                catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+                {
+                    Report("Offline; waiting for workload authority", "Offline");
+                    await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
+                }
+            }
+        }
+        else
+        {
+            Report("Reading issued allocation", "Online");
+            allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
+        }
         var program = allocation.Envelope.Snapshot.Program;
         if (program.Targets.Length != 1 || program.Targets[0].PositionAngleMas is not null
             || program.Configuration.EnableSlewCenter || program.Configuration.DitherEvery != 0
@@ -181,6 +220,8 @@ public sealed class DirectorAcquisition
         CoordinatorCheckpointClient? checkpoint = null;
         CoordinatorSessionReporter? telemetry = null;
         Exception? executionError = null;
+        var released = false;
+        var terminalFailed = false;
         try
         {
             await runtime.StartAsync(rig, lifetime.Token);
@@ -306,17 +347,37 @@ public sealed class DirectorAcquisition
             if (telemetryTask is not null) await telemetryTask;
             context?.AttachNewParent(null);
             context?.NighttimeData.Ticker.Stop();
-            checkpoint?.Dispose();
             if (launched)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
                 var parked = false;
-                try { await Park(cleanup.Token); parked = true; }
+                try
+                {
+                    await Park(cleanup.Token); parked = true;
+                    if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
+                    {
+                        if (Require(await runtime.FindUnresolvedAttemptAsync(cleanup.Token)).Attempt is not null
+                            || Require(await runtime.FindActivePreparationAsync(cleanup.Token)).Record is not null)
+                            throw new InvalidOperationException("Unresolved operations prevent terminal workload release.");
+                        try
+                        {
+                            var final = await checkpoint!.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
+                                allocation.Envelope.PreviewRevision, maxPages: 256, token: cleanup.Token);
+                            if (!final.CaughtUp) throw new InvalidOperationException("Capture feed is not fully delivered; workload remains outstanding.");
+                            await workloads.ReleaseAsync(allocation, LastLedger!, final.AcknowledgedThrough, cleanup.Token);
+                            released = true;
+                        }
+                        catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+                        { Report("Parked; terminal check-in pending; no successor authorized", "Offline"); }
+                    }
+                }
                 catch (Exception error) when (executionError is not null)
                 { throw new AggregateException("Director acquisition and shutdown failed.", executionError, error); }
+                catch { terminalFailed = true; throw; }
                 finally
                 {
-                    var phase = !parked ? "Shutdown failed" : executionError is null ? "Finished; parked" : "Stopped; parked; reconciliation required";
+                    var phase = !parked ? "Shutdown failed" : terminalFailed || executionError is not null ? "Stopped; parked; reconciliation required"
+                        : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
                     Report(phase, container.Display.Connectivity);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
@@ -324,10 +385,12 @@ public sealed class DirectorAcquisition
                         catch (Exception error) { Logger.Error(error); }
                     }
                     telemetry?.Dispose();
+                    checkpoint?.Dispose();
                 }
             }
-            else telemetry?.Dispose();
+            else { telemetry?.Dispose(); checkpoint?.Dispose(); }
         }
+        return released;
 
         static ulong Now() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         void Check()

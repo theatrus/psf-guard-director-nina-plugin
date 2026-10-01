@@ -2,6 +2,31 @@
 
 ## Public prepared-target mode (experimental)
 
+### Automatic workload intake
+
+Enable **Automatic workloads** after the operator
+reviews equipment and commissions a workload policy on PSF Guard (meta schema
+18). This is an API-only commissioning step for now; see the server's Director
+management guide. It selects the exact pairing/profile/configuration and active
+projects, not a second rig database.
+
+Director persists a request UUID before contacting the coordinator and retries
+the same request after lost replies. It executes the shared Rust core's choices
+within the issued grant. After successful hooks, capture delivery and parking,
+it checks there are no unresolved operations, seals the workload and requests
+another. Pending quality assessment produces a visible, bounded wait, not more
+captures. Each grant still uses one-shot launch; an ambiguous launch response
+must not be retried.
+
+Offline acquisition can continue within an already running grant, but offline
+completion leaves it outstanding with local receipts. Failed shutdown, capture
+or preparation uncertainty, changed configuration and revoked credentials stop
+renewal. Keep the local state for reconciliation. There is no automatic restart
+recovery, rejected-image feedback or attempt-budget increase yet. Manual
+allocations cannot be switched into this release protocol retroactively.
+This mode still requires one prepared target and the ownership settings below;
+it does not add automatic multi-target centering/focus/guiding/flip defaults.
+
 `Director Session` can opt in to prepared-target acquisition. It requires the
 server's one-shot allocation-start API, online first launch, a connected safe
 monitor, matching commissioned equipment/site/horizon, and dated NINA IERS

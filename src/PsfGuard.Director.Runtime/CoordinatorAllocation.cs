@@ -34,7 +34,8 @@ public sealed class CoordinatorAllocation
                 || envelope.ClientId != clientId || envelope.ProfileId != binding.ProfileId
                 || envelope.CoordinatorInstanceId != binding.CoordinatorInstanceId || envelope.CatalogId != binding.CatalogId
                 || envelope.RigId != binding.RigId) throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
-            var assignment = envelope.Snapshot.Program.Assignment;
+            var assignment = envelope.Snapshot?.Program?.Assignment ?? throw new InvalidDataException();
+            if (envelope.Snapshot.Program.Configuration is null || envelope.Snapshot.Rig is null) throw new InvalidDataException();
             if (assignment.Id != $"allocation-{envelope.AllocationId:D}" || envelope.PreviewRevision.Length != 64
                 || envelope.PreviewRevision.Any(c => !char.IsAsciiHexDigitLower(c))
                 || envelope.AdmittedAtMs < envelope.Snapshot.IssuedAtMs || envelope.AdmittedAtMs > now

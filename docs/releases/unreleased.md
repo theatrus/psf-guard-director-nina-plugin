@@ -1,5 +1,10 @@
 # Unreleased
 
+- Add opt-in automatic commissioned workload intake to Director Session, with
+  durable request retries, clean parked terminal check-in, and a bounded wait
+  for eligible work or quality assessment. Successors cannot refill spent
+  attempt budgets. The prepared-target and restart/recovery limits still apply.
+
 - Add a Report equipment button to Director Session. It sends connected device
   capabilities and the session's constraint fingerprint for operator review,
   without enabling acquisition or overwriting the rig's manual setup.
