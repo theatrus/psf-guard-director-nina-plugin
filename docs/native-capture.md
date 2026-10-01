@@ -571,12 +571,11 @@ unsafe/weather interruption and third-party plugin triggers must coexist with
 automatic defaults without allowing a default and a configured hook to perform
 the same operation twice.
 
-Only the internal slot configuration/lifecycle is implemented here. The public
-TS-compatible UI, automatic operation policy, server assignment intake, offline
-session/recovery owner, live status and batch telemetry are not implemented by
-this helper. Local tests cover native sequencing and target lookup, JSON,
-cloning, conditions, swallowed failures and cancellation. They are not a real
-NINA/server acceptance run and do not certify every third-party instruction.
+The public configuration editor and internal session-boundary bookkeeping are
+now implemented; see the next section. Automatic operation policy, production
+assignment admission and offline recovery remain separate work. Local tests
+cover native sequencing and target lookup, JSON, cloning, conditions, swallowed
+failures and cancellation. They do not certify every third-party instruction.
 
 `NinaTargetContainer` supplies NINA's public `IDeepSkyObjectContainer` contract
 to nested preparation and exposure items, including inherited trigger contexts.
@@ -595,12 +594,69 @@ Horizon validity remains the boundary owner's responsibility. The constraint
 reader reloads the full file and compares its revision. A valid reload replaces
 NINA's horizon object, so object identity is not a content-change signal. The
 target keeps its original display horizon; an actual content change must stop
-dispatch and rebuild the context. This is not a production session container or
-proof that every third-party trigger honors the native target contract.
+dispatch and rebuild the context. This transient context is not a production
+session owner or proof that every third-party trigger honors the native target
+contract.
 
 Target tests use pinned SOFA, NOVAS, and ephemeris test dependencies, fetched by
 `tools/fetch-nina-test-dependencies.ps1` with SHA-256 verification. They are not
 distributed in the plugin archive; the installed NINA host owns those files.
+
+## Session configuration preview
+
+`Director Session` is a public Advanced Sequencer container, separate from Sync
+and TS. It exports both native item/container contracts and its own WPF template.
+It intentionally fails validation and execution before running its configured
+hooks: production admission, real safety and Earth-orientation sources are not
+connected. There is no hidden checkbox or saved sequence field that bypasses
+this gate. The simulator invokes the internal adapters explicitly and is not
+shipped in the plugin archive.
+
+The editor saves versioned local requests in four groups:
+
+- Session duration, instruction deadline and image-save deadline.
+- Required monitor or attended policy, NINA horizon or fixed minimum, altitude
+  bounds, before/after-meridian avoidance, and park-on-wait.
+- Director or sequence ownership for startup, slew/center, autofocus, guiding,
+  dithering, meridian flip and shutdown; dither exposure interval.
+- Offline continuation, start/end/target check-ins, batch interval, and live
+  status with its independent interval.
+
+Except for the internal hook deadline, these are saved requests for the future
+production owner, not active equipment or background-network settings. Attended
+mode is not saved consent to bypass safety. Sequence ownership means an explicit
+native instruction/trigger policy, not silently disabling an operation. The
+future owner must validate capability and resolve each operation to exactly one
+owner before arming. Planner priority/filter policy stays in the shared core and
+project/rig/site defaults, not a second C# scheduler.
+
+The seven named instruction editors use NINA items, triggers and conditions.
+Top-level session triggers/conditions have a separate tab. Named slots cannot be
+removed or reordered. Nested instruction containers use NINA's standalone
+container editor; this is still available in #64 but marked obsolete in favor
+of the outer hierarchical sequencer view. Saved TS JSON is not auto-converted.
+Runtime target context comes from an immutable `NinaTargetContainer`; the editor
+does not fabricate a target to make target-dependent validation pass.
+
+`NinaSessionHooks` takes a configuration snapshot. It runs entry once per target
+visit, post-exposure only for a new confirmed-save ID, departure slots when
+switching/waiting/finishing, and completion only on an explicit core-confirmed
+completion. Pending grading never means target completion. Wait hooks surround
+successful waits; cancellation/failure ends the hook session rather than running
+normal completion hooks as emergency cleanup. Safety cleanup remains separate.
+Hook outcomes retain monotonic durations for future preparation telemetry.
+
+Native `IExposureItem` instructions are refused recursively in slots and native
+trigger runners, including inherited triggers. Arbitrary third-party code can
+hide mediator calls; this check does not certify every external plugin. Hooks
+are awaited through cooperative cancellation, never abandoned while another
+hardware action starts. Failed/skipped native children, timeout, duplicate save
+IDs and detached target context stop subsequent hook boundaries.
+
+The Status tab has rig, project, target, goal, operation, revision, connection,
+safety, queue, last check-in and wait-reason observations. They are never saved
+in sequences or cloned as authority. The simulator feeds actual test observations;
+the public production status service is not connected yet.
 
 ## Recovery and validation limits
 

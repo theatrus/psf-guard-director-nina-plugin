@@ -38,6 +38,14 @@ Neither is yet a production background session or target executor; see
 [coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
 There is no Chatstronomy adapter yet.
 
+The Advanced Sequencer now offers **Director Session**, a configuration preview
+with seven TS-style instruction slots, native trigger/condition editors, grouped
+local-policy fields, and a status view. It saves and clones configuration, not
+credentials or acquisition authority. Running it reports an explicit readiness
+error until production admission, safety and orientation sources are wired.
+See [session configuration](docs/native-capture.md#session-configuration-preview)
+for what is implemented and what remains gated.
+
 ## Development
 
 Use .NET SDK 10 and the existing authenticated `gh` CLI:

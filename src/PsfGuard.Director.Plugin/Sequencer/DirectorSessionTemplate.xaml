@@ -1,0 +1,228 @@
+<ResourceDictionary x:Class="PsfGuard.Director.Plugin.Sequencer.DirectorSessionTemplate"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:PsfGuard.Director.Plugin.Sequencer"
+    xmlns:behaviors="clr-namespace:NINA.Sequencer.Behaviors;assembly=NINA.Sequencer"
+    xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
+    xmlns:nina="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
+    xmlns:seq="clr-namespace:NINA.Sequencer.SequenceItem;assembly=NINA.Sequencer"
+    xmlns:container="clr-namespace:NINA.Sequencer.Container;assembly=NINA.Sequencer"
+    xmlns:mini="clr-namespace:NINA.View.Sequencer.MiniSequencer;assembly=NINA.Sequencer">
+    <DataTemplate x:Key="DirectorHookEditor">
+        <Expander IsExpanded="{Binding IsExpanded}" HorizontalContentAlignment="Stretch" Margin="0,0,0,12">
+            <Expander.Header>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Command="{Binding DisableEnableCommand}" Style="{DynamicResource StandardButton}" Width="28" Height="28" ToolTip="Enable or disable instruction slot">
+                        <Path Data="{DynamicResource PowerSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                    </Button>
+                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                </DockPanel>
+            </Expander.Header>
+            <StackPanel Margin="8">
+                <GroupBox Header="Instructions" Margin="0,4">
+                    <ItemsControl ItemsSource="{Binding Items}" MinHeight="48" Background="{DynamicResource BackgroundBrush}">
+                        <ItemsControl.Resources>
+                            <DataTemplate DataType="{x:Type seq:SequenceItem}"><nina:SequenceBlockView /></DataTemplate>
+                            <DataTemplate DataType="{x:Type container:SequenceContainer}"><nina:SequenceContainerView /></DataTemplate>
+                        </ItemsControl.Resources>
+                        <i:Interaction.Behaviors>
+                            <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
+                            <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Container.ISequenceContainer;NINA.Sequencer.SequenceItem.ISequenceItem;NINA.Sequencer.TemplatedSequenceContainer" OnDropCommand="DropIntoCommand" />
+                        </i:Interaction.Behaviors>
+                    </ItemsControl>
+                </GroupBox>
+                <Expander Header="Triggers and conditions" HorizontalContentAlignment="Stretch">
+                    <StackPanel>
+                        <GroupBox Header="Triggers" Margin="0,4">
+                            <ItemsControl ItemsSource="{Binding Triggers}" MinHeight="40" Background="{DynamicResource BackgroundBrush}">
+                                <i:Interaction.Behaviors>
+                                    <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
+                                    <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Trigger.ISequenceTrigger" OnDropCommand="DropIntoTriggersCommand" />
+                                </i:Interaction.Behaviors>
+                                <ItemsControl.ItemTemplate><DataTemplate><mini:MiniTrigger /></DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </GroupBox>
+                        <GroupBox Header="Conditions" Margin="0,4">
+                            <ItemsControl ItemsSource="{Binding Conditions}" MinHeight="40" Background="{DynamicResource BackgroundBrush}">
+                                <i:Interaction.Behaviors>
+                                    <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
+                                    <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Conditions.ISequenceCondition" OnDropCommand="DropIntoConditionsCommand" />
+                                </i:Interaction.Behaviors>
+                                <ItemsControl.ItemTemplate><DataTemplate><mini:MiniCondition /></DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </GroupBox>
+                    </StackPanel>
+                </Expander>
+            </StackPanel>
+        </Expander>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type local:DirectorSessionContainer}">
+        <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Margin="0,8">
+            <i:Interaction.Behaviors>
+                <behaviors:DragOverBehavior AllowDragCenter="False" DragAboveSize="25" DragBelowSize="15" />
+            </i:Interaction.Behaviors>
+            <Expander IsExpanded="{Binding IsExpanded}" HorizontalContentAlignment="Stretch">
+                <Expander.Header>
+                    <DockPanel LastChildFill="True">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding DisableEnableCommand}" ToolTip="Enable or disable session" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource PowerSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding ResetProgressCommand}" ToolTip="Reset display progress" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource RefreshSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding MoveUpCommand}" ToolTip="Move session up" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource ArrowUpSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding MoveDownCommand}" ToolTip="Move session down" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource ArrowDownSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding AddCloneToParentCommand}" ToolTip="Duplicate session" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource CopySVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                            <Button Style="{DynamicResource StandardButton}" Command="{Binding DetachCommand}" ToolTip="Remove session" Width="28" Height="28" Margin="4,0">
+                                <Path Data="{DynamicResource TrashCanSVG}" Fill="{DynamicResource ButtonForegroundBrush}" Width="14" Height="14" Stretch="Uniform" />
+                            </Button>
+                        </StackPanel>
+                        <TextBlock Text="{Binding Name}" FontWeight="Bold" VerticalAlignment="Center">
+                            <i:Interaction.Behaviors><behaviors:DragDropBehavior /></i:Interaction.Behaviors>
+                        </TextBlock>
+                    </DockPanel>
+                </Expander.Header>
+                <StackPanel Margin="12">
+                    <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6" />
+                    <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <ItemsControl ItemsSource="{Binding ConfigurationIssues}" Margin="0,0,0,8">
+                        <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TabControl>
+                        <TabItem Header="Session">
+                            <StackPanel Margin="8" DataContext="{Binding Options}">
+                                <Expander Header="Session" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="Maximum duration (hours)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding MaximumHours, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum duration (hours)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="1" Text="Instruction timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding HookTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Instruction timeout (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="2" Text="Image-save timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SaveTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image-save timeout (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                    </Grid>
+                                </Expander>
+                                <Expander Header="Safety and visibility" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="Safety policy" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.SafetyPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Safety}" AutomationProperties.Name="Safety policy" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="1" Text="Horizon" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.HorizonPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Horizon}" AutomationProperties.Name="Horizon" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="2" Text="Minimum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MinimumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minimum altitude (degrees)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="3" Text="Maximum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum altitude (degrees)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="4" Text="Avoid before meridian (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding MeridianBeforeMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Avoid before meridian (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="5" Text="Avoid after meridian (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Avoid after meridian (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="6" Text="Park during waits" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="6" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
+                                    </Grid>
+                                </Expander>
+                                <Expander Header="Operation ownership" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="Connect / cool / unpark" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Startup}" AutomationProperties.Name="Connect / cool / unpark" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="1" Text="Slew and center" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding SlewCenter}" AutomationProperties.Name="Slew and center" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="2" Text="Autofocus" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Focus}" AutomationProperties.Name="Autofocus" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="3" Text="Guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Guiding}" AutomationProperties.Name="Guiding" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="4" Text="Dither" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Dither}" AutomationProperties.Name="Dither" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="5" Text="Dither every exposures" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding DitherEveryExposures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Dither every exposures" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="6" Text="Meridian flip" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding MeridianFlip}" AutomationProperties.Name="Meridian flip" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="7" Text="Park / warm / disconnect" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Shutdown}" AutomationProperties.Name="Park / warm / disconnect" MaxWidth="320" Margin="0,3" />
+                                    </Grid>
+                                </Expander>
+                                <Expander Header="Check-ins and status" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="Continue authorized work offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue authorized work offline" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="1" Text="Check in at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Check in at session start" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="2" Text="Check in at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Check in at session end" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="3" Text="Check in on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Check in on target change" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="4" Text="Check-in interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Check-in interval (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="5" Text="Report live status" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                    </Grid>
+                                </Expander>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="Instructions">
+                            <ItemsControl ItemsSource="{Binding InstructionBlocks}" ItemTemplate="{StaticResource DirectorHookEditor}" Margin="8" />
+                        </TabItem>
+                        <TabItem Header="Triggers and conditions">
+                            <StackPanel Margin="8">
+                                <GroupBox Header="Triggers" Margin="0,0,0,12">
+                                    <ItemsControl ItemsSource="{Binding Triggers}" MinHeight="64" Background="{DynamicResource BackgroundBrush}">
+                                        <i:Interaction.Behaviors>
+                                            <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
+                                            <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Trigger.ISequenceTrigger" OnDropCommand="DropIntoTriggersCommand" />
+                                        </i:Interaction.Behaviors>
+                                        <ItemsControl.ItemTemplate><DataTemplate><mini:MiniTrigger /></DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </GroupBox>
+                                <GroupBox Header="Conditions">
+                                    <ItemsControl ItemsSource="{Binding Conditions}" MinHeight="64" Background="{DynamicResource BackgroundBrush}">
+                                        <i:Interaction.Behaviors>
+                                            <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
+                                            <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Conditions.ISequenceCondition" OnDropCommand="DropIntoConditionsCommand" />
+                                        </i:Interaction.Behaviors>
+                                        <ItemsControl.ItemTemplate><DataTemplate><mini:MiniCondition /></DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </GroupBox>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="Status">
+                            <Grid Margin="8" DataContext="{Binding Display}">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Rig database" Margin="0,5" /><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Rig}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="1" Text="Project" Margin="0,5" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Project}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="2" Text="Target" Margin="0,5" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Target}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="3" Text="Goal" Margin="0,5" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Goal}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="4" Text="Operation" Margin="0,5" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Operation}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="5" Text="Program revision" Margin="0,5" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ProgramRevision}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="6" Text="Coordinator" Margin="0,5" /><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Connectivity}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="7" Text="Local safety" Margin="0,5" /><TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Safety}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="8" Text="Queued events" Margin="0,5" /><TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding QueueDepth}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="9" Text="Last check-in" Margin="0,5" /><TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding LastCheckIn}" TextWrapping="Wrap" Margin="0,5" />
+                                <TextBlock Grid.Row="10" Text="Wait reason" Margin="0,5" /><TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding WaitReason}" TextWrapping="Wrap" Margin="0,5" />
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </StackPanel>
+            </Expander>
+        </Border>
+    </DataTemplate>
+</ResourceDictionary>
