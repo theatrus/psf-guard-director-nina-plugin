@@ -2,7 +2,7 @@
 
 ## Server-plan outage test
 
-Build PSF Guard with the stable program-preview handoff and build this plugin's
+Build PSF Guard with the [stable program-preview handoff](https://github.com/theatrus/psf-guard/pull/606) and build this plugin's
 development ZIP, then run:
 
 ```powershell
