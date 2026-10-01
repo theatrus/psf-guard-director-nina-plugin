@@ -29,6 +29,7 @@ public sealed class SimulatorProbeTests
     [InlineData("filter")]
     [InlineData("focuser")]
     [InlineData("guider")]
+    [InlineData("safety")]
     [InlineData("output")]
     [InlineData("pattern")]
     [InlineData("profile")]
@@ -42,6 +43,7 @@ public sealed class SimulatorProbeTests
             case "filter": f.Profile.FilterWheelSettings.Id = "ASCOM.Real.FilterWheel"; break;
             case "focuser": f.Profile.FocuserSettings.Id = "ASCOM.Real.Focuser"; break;
             case "guider": f.Profile.GuiderSettings.GuiderName = "PHD2"; break;
+            case "safety": f.Profile.SafetyMonitorSettings.Id = "ASCOM.Real.SafetyMonitor"; break;
             case "output": f.Profile.ImageFileSettings.FilePath = Path.GetTempPath(); break;
             case "pattern": f.Profile.ImageFileSettings.FilePattern = "../escape"; break;
             case "profile": f.Profile.Name = "Live profile"; break;

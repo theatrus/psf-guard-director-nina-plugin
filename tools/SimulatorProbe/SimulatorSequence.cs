@@ -19,6 +19,7 @@ using NINA.Profile.Interfaces;
 using NINA.Sequencer.SequenceItem;
 using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
+using NINA.WPF.Base.Model.Equipment.MySafetyMonitor.Simulator;
 using PsfGuard.Director.Plugin;
 using PsfGuard.Director.Plugin.Acquisition;
 using PsfGuard.Director.Plugin.Sequencer;
@@ -46,6 +47,7 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly ICameraMediator camera;
     private readonly ITelescopeMediator telescope;
     private readonly IFilterWheelMediator filters;
+    private readonly ISafetyMonitorMediator safety;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -54,13 +56,14 @@ public sealed class SimulatorSequence : SequenceItem
 
     [ImportingConstructor]
     public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
-        IFilterWheelMediator filters, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
+        IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
         IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime)
     {
         this.profiles = profiles;
         this.camera = camera;
         this.telescope = telescope;
         this.filters = filters;
+        this.safety = safety;
         this.imaging = imaging;
         this.saves = saves;
         this.history = history;
@@ -70,7 +73,7 @@ public sealed class SimulatorSequence : SequenceItem
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, imaging, saves, history, imageFactory, nighttime);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -78,7 +81,7 @@ public sealed class SimulatorSequence : SequenceItem
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         var root = ValidateEnvironment();
-        if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected)
+        if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected || safety.GetInfo().Connected)
             throw new InvalidOperationException("Start the probe with all simulator devices disconnected.");
         var profileId = profiles.ActiveProfile.Id;
         var run = Path.Combine(root, "probe", Guid.NewGuid().ToString("N"));
@@ -100,6 +103,10 @@ public sealed class SimulatorSequence : SequenceItem
         NinaConstraints? constraints = null;
         NinaConstraints? editedConstraints = null;
         DirectorConstraints? geometryConstraints = null;
+        NinaOrientationEvidence? orientation = null;
+        NinaSafetyInterlock? interlock = null;
+        CancellationTokenRegistration safetyCancellation = default;
+        var unsafeCancellationVerified = false;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -123,6 +130,8 @@ public sealed class SimulatorSequence : SequenceItem
         {
             cancellation.ThrowIfCancellationRequested();
             CheckProfile();
+            if (interlock is not null && interlock.Read().Safety != PlannerSafety.Safe)
+                throw new InvalidOperationException("Native safety evidence is not safe and fresh.");
             if (profiles.ActiveProfile.Id != profileId || runtime.Status.State != RuntimeState.Ready
                 || camera.GetInfo().DeviceId != "ASCOM.OmniSim.Camera" || !camera.GetInfo().Connected
                 || telescope.GetInfo().DeviceId != "ASCOM.OmniSim.Telescope" || !telescope.GetInfo().Connected
@@ -139,6 +148,20 @@ public sealed class SimulatorSequence : SequenceItem
             var rigId = coordinator?.RigId ?? "ascom-smoke";
             await runtime.StartAsync(rigId, lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
+            Step("Connecting native NINA safety simulator");
+            await safety.Rescan();
+            CheckProfile();
+            if (!await safety.Connect() || safety.GetDevice() is not SafetyMonitorSimulator safetySimulator)
+                throw new IOException("Native safety simulator connection failed.");
+            interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
+            safetySimulator.IsSafe = true;
+            using (var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+            {
+                fresh.CancelAfter(TimeSpan.FromSeconds(15));
+                while (interlock.Read().Safety != PlannerSafety.Safe) await Task.Delay(100, fresh.Token);
+            }
+            interlock.Arm();
+            safetyCancellation = interlock.Interrupted.Register(() => lifetime.Cancel());
             Step("Connecting ASCOM OmniSim camera, telescope and filter wheel");
             await camera.Rescan();
             CheckProfile();
@@ -207,7 +230,7 @@ public sealed class SimulatorSequence : SequenceItem
                 Rig = rigId,
                 Target = programTarget.Name,
                 ProgramRevision = coordinator?.ProgramRevision ?? "Local fixture",
-                Safety = "Synthetic simulator evidence",
+                Safety = "Native safety simulator: safe",
                 Connectivity = coordinator?.ExerciseOutage == true ? "Offline test" : "Connected test"
             });
             sessionContainer.AttachNewParent(Parent);
@@ -218,12 +241,16 @@ public sealed class SimulatorSequence : SequenceItem
             sessionTarget = new NinaTargetContainer(profiles, profileId, programTarget, nighttime.Calculate(), TimeProvider.System);
             sessionTarget.AttachNewParent(sessionContainer);
             await sessionHooks.SelectTargetAsync(programTarget.Id, sessionTarget, progress, lifetime.Token);
+            // This fixture retains a three-minute conditions horizon. Fresh
+            // monitor evidence is an additional continuous prerequisite, not a
+            // prediction that the weather will remain safe for three minutes.
             PlannerState State() => new(rigId, equipment.Id, NowMs(), started + 180000,
-                PlannerSafety.Safe, true, false, new(0, 0));
+                interlock.Read().Safety, true, false, new(0, 0));
             var geometryReader = new NinaGeometrySnapshot(constraintReader, equipmentReader);
-            // Explicit synthetic EOP values for this isolated simulator fixture,
-            // not a production orientation source or a zero-valued fallback.
-            var geometryInputs = new NinaGeometryInputs(1, 89, new(0, 0, 0, started, assignment.ExpiresAtMs + 1),
+            Step("Reading dated Earth-orientation evidence from NINA's local cache");
+            orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs,
+                assignment.ExpiresAtMs, lifetime.Token);
+            var geometryInputs = new NinaGeometryInputs(1, 89, orientation.Orientation,
                 assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, 20, 89, 0)).ToImmutableArray());
             NinaDispatchSnapshot DispatchSnapshot()
             {
@@ -381,12 +408,43 @@ public sealed class SimulatorSequence : SequenceItem
                 || profiles.ActiveProfile.AstrometrySettings.Horizon.GetAltitude(100.0001) != 85
                 || equipmentReader.Read(equipmentBinding with { ConstraintRevision = editedConstraints.Revision }).Id == equipment.Id)
                 throw new InvalidOperationException("Same-path horizon edit did not reach NINA and the equipment identity.");
+            Step("Checking unsafe native-monitor cancellation and recovery latch");
+            var nativeWait = new NINA.Sequencer.SequenceItem.Utility.WaitForTimeSpan { Time = 120 };
+            nativeWait.AttachNewParent(sessionContainer);
+            var waiting = nativeWait.Run(progress, lifetime.Token);
+            try
+            {
+                if (waiting.IsCompleted || nativeWait.Status != NINA.Core.Enum.SequenceEntityStatus.RUNNING)
+                    throw new InvalidOperationException("The native wait did not start.");
+                safetySimulator.IsSafe = false;
+                try { await waiting.WaitAsync(TimeSpan.FromSeconds(15)); }
+                catch (OperationCanceledException) when (interlock.Interrupted.IsCancellationRequested) { }
+                if (nativeWait.Status == NINA.Core.Enum.SequenceEntityStatus.FINISHED)
+                    throw new InvalidOperationException("Unsafe interruption incorrectly completed the native wait.");
+            }
+            finally
+            {
+                lifetime.Cancel();
+                try { await waiting; }
+                catch (OperationCanceledException) { }
+                nativeWait.AttachNewParent(null);
+            }
+            if (!interlock.Interrupted.IsCancellationRequested)
+                throw new InvalidOperationException("Unsafe monitor did not interrupt the session.");
+            safetySimulator.IsSafe = true;
+            using (var recoveryDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                while (!safety.GetInfo().IsSafe) await Task.Delay(100, recoveryDeadline.Token);
+            if (interlock.Read().Safety == PlannerSafety.Safe || !lifetime.IsCancellationRequested)
+                throw new InvalidOperationException("Monitor recovery revived interrupted work.");
+            unsafeCancellationVerified = true;
             Step("Three captures saved with correlated receipts");
         }
         catch (Exception error) { errors.Add(error); Logger.Error(error); }
         finally
         {
             profiles.ProfileChanged -= ProfileChanged;
+            safetyCancellation.Dispose();
+            interlock?.Dispose();
             sessionTarget?.AttachNewParent(null);
             sessionTarget?.NighttimeData.Ticker.Stop();
             sessionContainer?.AttachNewParent(null);
@@ -410,6 +468,8 @@ public sealed class SimulatorSequence : SequenceItem
                 await Cleanup("Disconnecting simulator filter wheel", filters.Disconnect);
             if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
+            if (safety.GetInfo().Connected && safety.GetInfo().DeviceId == SafetySimulatorId)
+                await Cleanup("Disconnecting native safety simulator", safety.Disconnect);
             await Cleanup("Stopping sidecar", runtime.StopAsync);
             if (coordinator is not null)
             {
@@ -441,6 +501,8 @@ public sealed class SimulatorSequence : SequenceItem
                 constraints,
                 editedConstraints,
                 geometryConstraints,
+                orientation,
+                unsafeCancellationVerified,
                 captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
                 errors = errors.Select(e => e.ToString())
             };
@@ -502,6 +564,8 @@ public sealed class SimulatorSequence : SequenceItem
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_TOKEN"), CoreUtil.APPLICATIONTEMPPATH, profiles.ActiveProfile);
 
+    private const string SafetySimulatorId = "613EC0FF-87D7-4475-9352-F6F6EB1CDE75";
+
     internal static string ValidateEnvironment(string? root, string? token, string applicationRoot, IProfile profile)
     {
         if (root is null || !Path.IsPathFullyQualified(root) || !Guid.TryParseExact(token, "N", out _)
@@ -520,7 +584,7 @@ public sealed class SimulatorSequence : SequenceItem
             || profile.FocuserSettings.Id != "No_Device" || profile.RotatorSettings.Id != "No_Device"
             || profile.GuiderSettings.GuiderName != "No_Guider"
             || profile.DomeSettings.Id != "No_Device" || profile.SwitchSettings.Id != "No_Device"
-            || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != "No_Device"
+            || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
             || profile.WeatherDataSettings.Id != "No_Device")
             throw new InvalidOperationException("The probe requires its simulator-only test profile.");
         return root;

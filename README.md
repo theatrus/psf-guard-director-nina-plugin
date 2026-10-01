@@ -96,8 +96,8 @@ the plugin settings. The runtime library now exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
 feedback. The optional server-plan smoke activates and pulls an actual PSF Guard
 program, captures during a server outage and verifies restart, batch check-in
-and duplicate replay. Both probes use explicit simulator-only safety and
-orientation inputs, not production acquisition authorization.
+and duplicate replay. Both probes use NINA's native safety simulator and dated,
+read-only Earth-orientation cache, not production acquisition authorization.
 
 The runtime host also exposes the sidecar's durable capture and preparation
 ledgers through IPC 8 (runtime 0.7.0). It can request read-only, ledger-backed
@@ -124,8 +124,9 @@ preserves its original binding across restarts; the C# client never computes
 replacement windows. Old program-only calls cannot bypass geometry mode.
 The internal native geometry exporter now joins NINA's complete
 horizon/site snapshot with the matching equipment fingerprint for this client.
-Production dispatch, an Earth-orientation data source, and the full server
-acceptance gate still need to be connected.
+The local orientation reader and continuous safety interlock are tested in the
+native probe. Production dispatch, immutable allocation admission, and the full
+server acceptance gate still need to be connected.
 
 The two dispatch-check APIs recheck an issued preparation command or reserved
 capture after native before-hooks. They preserve the original command, attempt
