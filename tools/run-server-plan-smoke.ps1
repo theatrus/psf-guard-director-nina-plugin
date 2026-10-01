@@ -90,6 +90,7 @@ try {
     if (!$evidence.passed -or !$stopped -or !$resumed -or !$evidence.program_revision -or !$evidence.live_status_verified) {
         throw "Server-plan smoke failed; inspect $($result.FullName)"
     }
+    if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {

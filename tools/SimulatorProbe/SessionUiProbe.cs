@@ -37,6 +37,11 @@ internal static class SessionUiProbe
             var host = new Border { Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
             System.Windows.Documents.TextElement.SetForeground(host, (Brush)Application.Current.FindResource("PrimaryBrush"));
             Layout();
+            var reportButton = Descendants(host).OfType<Button>().SingleOrDefault(button => Equals(button.Content, "Report equipment"))
+                ?? throw new InvalidOperationException("Director equipment report button was not rendered.");
+            if (reportButton.Command is null || reportButton.IsEnabled || reportButton.Style != Application.Current.FindResource("StandardButton")
+                || reportButton.ActualWidth < 80)
+                throw new InvalidOperationException("Equipment report button lost its native style, binding or idle-service guard.");
             var tabs = Descendants(host).OfType<TabControl>().Single();
             for (var tab = 0; tab < 4; tab++)
             {

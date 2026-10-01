@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Runtime.Serialization;
+using System.Windows.Input;
 using Newtonsoft.Json;
 using NINA.Core.Enum;
 using NINA.Core.Model;
@@ -27,10 +28,17 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private Task? execution;
     private DirectorSessionOptions options = new();
     private NinaInstructionSlots slots = new();
+    private readonly AsyncCommand reportEquipmentCommand;
+    private bool reportingEquipment;
 
     public DirectorSessionContainer()
     {
         Name = "Director Session";
+        reportEquipmentCommand = new(ReportEquipmentAsync, CanReportEquipment, error =>
+        {
+            NINA.Core.Utility.Logger.Error(error);
+            Report(Display with { Phase = "Equipment report failed; check pairing, connected devices and session settings", Operation = "" });
+        });
         options.PropertyChanged += SettingsChanged;
         AttachSlots();
     }
@@ -63,9 +71,28 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public SequentialContainer AfterTargetComplete => slots.AfterTargetComplete;
     public IReadOnlyList<SequentialContainer> InstructionBlocks => Enum.GetValues<NinaInstructionSlot>().Select(slot => slots[slot]).ToArray();
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
+    public ICommand ReportEquipmentCommand => reportEquipmentCommand;
     public string SessionStatus => Display.Phase;
     public string Readiness => Options.EnableAcquisition ? "Prepared target; online one-shot allocation admission required" : AcquisitionGate;
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
+
+    private bool CanReportEquipment()
+    {
+        lock (executionLock) return acquisition is not null && !PsfGuard.Director.Runtime.AcquisitionLease.IsActive && !reportingEquipment && execution is not { IsCompleted: false }
+            && Options.ValidateSettings().Count == 0 && DirectorAcquisition.PolicyIssues(Options, false).Count == 0;
+    }
+
+    internal async Task ReportEquipmentAsync()
+    {
+        lock (executionLock)
+        {
+            if (!CanReportEquipment()) throw new InvalidOperationException("Equipment reporting requires an idle session with supported settings.");
+            reportingEquipment = true;
+        }
+        reportEquipmentCommand.Refresh();
+        try { await acquisition!.ReportEquipmentAsync(this, CancellationToken.None); }
+        finally { lock (executionLock) reportingEquipment = false; reportEquipmentCommand.Refresh(); }
+    }
 
     internal void Report(DirectorSessionDisplay display)
     {
@@ -80,6 +107,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
         lock (executionLock)
         {
+            if (reportingEquipment) throw new InvalidOperationException("Wait for the equipment report before starting acquisition.");
             if (execution is { IsCompleted: false }) throw new InvalidOperationException("Director session is already running.");
             executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
             var cancellation = executionCancellation;
@@ -108,7 +136,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
                         foreach (var trigger in triggers)
                             try { trigger.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
                     }
-                    finally { lock (executionLock) { executionCancellation = null; cancellation.Dispose(); } }
+                    finally { lock (executionLock) { executionCancellation = null; cancellation.Dispose(); } reportEquipmentCommand.Refresh(); }
                     if (cleanupErrors.Count != 0)
                     {
                         if (executionError is not null) cleanupErrors.Insert(0, executionError);
@@ -195,5 +223,5 @@ public sealed class DirectorSessionContainer : SequentialContainer
         foreach (var block in InstructionBlocks) block.AttachNewParent(this);
     }
 
-    private void SettingsChanged(object? sender, PropertyChangedEventArgs args) => Validate();
+    private void SettingsChanged(object? sender, PropertyChangedEventArgs args) { Validate(); reportEquipmentCommand.Refresh(); }
 }

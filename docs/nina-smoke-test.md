@@ -439,6 +439,27 @@ dithering, meridian flips, multi-target scheduling, resume, successor grants,
 grade feedback or coexistence with every third-party plugin. A claimed launch
 cannot be refunded after a failure. Preserve journals for reconciliation.
 
+### Reviewed equipment handoff (2026-10-01)
+
+The public simulator path now reports connected equipment through the actual
+Director Session entry point while acquisition is disabled. It verifies the
+button's command guard, exact paired profile, and absence of an active
+configuration before review. Operator acceptance preserves manual optics,
+then activation, allocation and one-shot native acquisition proceed normally.
+The exported NINA template renders the new native-style button at 640 and 1000
+pixels; service-free instances cannot run it.
+
+NINA 3.3.0.1064, ASCOM OmniSim, runtime 0.7.0 / IPC 8 and an isolated schema-17
+PSF Guard server passed the complete public path: three FITS saves, server
+outage, six-event check-in and replay refusal. Evidence:
+`artifacts/nina-smoke-8a29c4867441426fa5448c05f06dae75/probe/a691ca4fc9e54ff3ad0a8f5758a01fba/result.json`.
+The separate unsafe run passed exposure abort, park, ownership release and
+no automatic restart after safety recovery:
+`artifacts/nina-smoke-b288369ce2de4011a7d64fa02d75d663/probe/029180ed7d8d43efa92979f4d18835ca/result.json`.
+Both runs verified explicit equipment review, and all 652 automated plugin
+tests passed in serial test-collection mode. This adds setup evidence, not an
+operator review UI, acquisition-ready automatic scheduling, or recovery grants.
+
 ### Session editor and hook boundary check (2026-09-30)
 
 NINA 3.3 nightly #64 loaded the exported Director Session template and rendered

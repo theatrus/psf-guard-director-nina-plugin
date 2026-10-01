@@ -109,6 +109,14 @@ read-only Earth-orientation cache. `-PublicAcquisition` tests the actual public
 container, one-shot authorization, offline captures and replay refusal;
 `-PublicAcquisition -PublicUnsafe` tests an unsafe interruption during exposure.
 
+Director Session also has **Report equipment**, available with acquisition
+disabled once the session uses supported prepared-target policies. Connect the
+configured devices first. The command reports the exact native profile and
+session constraint fingerprint, using the existing vault pairing. PSF Guard
+stages this evidence for explicit operator review; reporting does not change
+active setup or authorize acquisition. The review endpoints are implemented,
+but the rig setup review UI and allocation admission UI are still pending.
+
 The runtime host also exposes the sidecar's durable capture and preparation
 ledgers through IPC 8 (runtime 0.7.0). It can request read-only, ledger-backed
 planning, discover interrupted work, report native-operation receipts, and

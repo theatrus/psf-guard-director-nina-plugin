@@ -1,5 +1,9 @@
 # Unreleased
 
+- Add a Report equipment button to Director Session. It sends connected device
+  capabilities and the session's constraint fingerprint for operator review,
+  without enabling acquisition or overwriting the rig's manual setup.
+
 - Add an experimental Director Session to the Advanced Sequencer, with
   seven TS-style instruction slots, native triggers and conditions, grouped
   local-policy settings, and a status view. Configuration can be saved and

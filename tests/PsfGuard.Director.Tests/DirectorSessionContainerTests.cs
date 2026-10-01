@@ -24,6 +24,20 @@ public sealed class DirectorSessionContainerTests
     private static readonly IProgress<ApplicationStatus> Progress = new Progress<ApplicationStatus>();
 
     [Fact]
+    public async Task EquipmentReportingCannotRunWithoutNativeServicesOrSerializeAuthority()
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.SlewCenter = session.Options.Focus = session.Options.Guiding = session.Options.Dither =
+            session.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+        Assert.Empty(DirectorAcquisition.PolicyIssues(session.Options, false));
+        Assert.False(session.Options.EnableAcquisition);
+        Assert.False(session.ReportEquipmentCommand.CanExecute(null));
+        await Assert.ThrowsAsync<InvalidOperationException>(session.ReportEquipmentAsync);
+        Assert.False(session.ReportEquipmentCommand.CanExecute(null));
+        Assert.DoesNotContain("ReportEquipmentCommand", JsonConvert.SerializeObject(session, Settings));
+    }
+
+    [Fact]
     public void SessionIsExportedAsANativeContainerAndItem()
     {
         var exports = typeof(DirectorSessionContainer).GetCustomAttributes(typeof(ExportAttribute), false).Cast<ExportAttribute>();

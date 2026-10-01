@@ -92,6 +92,8 @@
                 <StackPanel Margin="12">
                     <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6" />
                     <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
+                        HorizontalAlignment="Left" Margin="0,0,0,12" Padding="12,6" />
                     <ItemsControl ItemsSource="{Binding ConfigurationIssues}" Margin="0,0,0,8">
                         <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>

@@ -45,16 +45,76 @@ public sealed class DirectorAcquisition
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
     }
 
-    internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options)
+    internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options, bool requireEnabled = true)
     {
         var issues = new List<string>();
-        if (!options.EnableAcquisition) issues.Add("Enable prepared-target acquisition to run this session.");
+        if (requireEnabled && !options.EnableAcquisition) issues.Add("Enable prepared-target acquisition to run this session.");
         if (options.Safety != DirectorSafetyPolicy.RequireMonitor) issues.Add("Public acquisition requires a connected safety monitor.");
         if (new[] { options.SlewCenter, options.Focus, options.Guiding, options.Dither, options.MeridianFlip }.Any(x => x != DirectorOperationOwner.Sequence))
             issues.Add("Prepared-target mode requires sequence ownership for centering, autofocus, guiding, dithering and meridian flips.");
         if (options.Startup != DirectorOperationOwner.Director || options.Shutdown != DirectorOperationOwner.Director)
             issues.Add("Prepared-target mode requires Director startup and shutdown (unpark/park).");
         return issues;
+    }
+
+    internal async Task ReportEquipmentAsync(DirectorSessionContainer container, CancellationToken token)
+    {
+        var options = container.Options.Clone();
+        var issues = options.ValidateSettings().Concat(PolicyIssues(options, false)).ToArray();
+        if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
+        using var owner = new AcquisitionLease(LocalStateRoot);
+        var profile = profiles.ActiveProfile.Id;
+        var settings = new PluginOptionsAccessor(profiles, PluginId);
+        using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
+            () => settings.GetValueString("CoordinatorUrl", ""), _ => { },
+            readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""));
+        var endpoint = connection.ResolvedEndpoint ?? throw new InvalidOperationException("Configure and pair a Director coordinator first.");
+        var pairing = connection.ReadPairing() ?? throw new InvalidOperationException("Pairing credentials are unavailable. Re-pair first.");
+        ValueTask<string?> Credential(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var current = DirectorCredentialStore.Read(endpoint, profile);
+            if (profiles.ActiveProfile.Id != profile || current?.ClientId != pairing.ClientId || current.Binding != pairing.Binding)
+                throw new InvalidOperationException("Pairing or profile changed while reporting equipment.");
+            return ValueTask.FromResult<string?>(current.Token);
+        }
+        using var constraints = new NinaConstraintSnapshot(profiles);
+        var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, pairing.Binding.RigId.ToString("D"), constraints);
+        var reader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
+        var names = reader.ReadFilterNames(equipmentBinding, configuration);
+        using var client = new CoordinatorEquipmentClient(endpoint, Credential, connection.AllowInsecureHttp);
+        container.Report(container.Display with { Phase = "Reporting equipment", Operation = "Equipment report" });
+        var ack = await client.ReportAsync(pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names,
+            checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), token);
+        await Credential(token);
+        if (constraints.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision || reader.Read(equipmentBinding).Id != configuration.Id
+            || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
+            throw new InvalidOperationException("Equipment report was received, but local settings changed. Report the current setup again.");
+        container.Report(container.Display with
+        {
+            Phase = ack.AcceptedRevision is null ? "Equipment reported; awaiting operator review" : "Equipment report already reviewed",
+            Rig = pairing.Binding.RigId.ToString("D"),
+            Operation = "",
+            Connectivity = "Online"
+        });
+    }
+
+    private (NinaConstraintBinding Constraints, NinaEquipmentBinding Equipment, DirectorConfiguration Configuration) ReadNativeEquipment(
+        DirectorSessionOptions options, Guid profile, string rig, NinaConstraintSnapshot constraintsReader)
+    {
+        var horizon = options.Horizon == DirectorHorizonPolicy.NinaProfile ? profiles.ActiveProfile.AstrometrySettings.HorizonFilePath : null;
+        var constraints = new NinaConstraintBinding(profile,
+            options.Horizon == DirectorHorizonPolicy.NinaProfile ? NinaHorizonMode.RequiredFile : NinaHorizonMode.FixedMinimum,
+            horizon, options.MinimumAltitude,
+            new(checked((ulong)(options.MeridianBeforeMinutes * 60000)), checked((ulong)(options.MeridianAfterMinutes * 60000))));
+        var native = constraintsReader.Refresh(constraints);
+        var wheel = profiles.ActiveProfile.FilterWheelSettings.Id;
+        var equipment = new NinaEquipmentBinding(profile, rig, native.Revision,
+            profiles.ActiveProfile.CameraSettings.Id, wheel == "No_Device" ? null : wheel,
+            wheel == "No_Device" ? [new("fixed-filter", null, null)] : profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters
+                .Select(f => new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(),
+            false, 0, profiles.ActiveProfile.TelescopeSettings.Id);
+        return (constraints, equipment, new NinaEquipmentSnapshot(profiles, camera, filters, telescope).Read(equipment));
     }
 
     internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, CancellationToken token)
@@ -90,20 +150,8 @@ public sealed class DirectorAcquisition
         interlock.Arm();
         using var safetyCancellation = interlock.Interrupted.Register(lifetime.Cancel);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
-        var horizon = options.Horizon == DirectorHorizonPolicy.NinaProfile ? profiles.ActiveProfile.AstrometrySettings.HorizonFilePath : null;
-        var constraintBinding = new NinaConstraintBinding(profile,
-            options.Horizon == DirectorHorizonPolicy.NinaProfile ? NinaHorizonMode.RequiredFile : NinaHorizonMode.FixedMinimum,
-            horizon, options.MinimumAltitude,
-            new(checked((ulong)(options.MeridianBeforeMinutes * 60000)), checked((ulong)(options.MeridianAfterMinutes * 60000))));
-        var nativeConstraints = constraintsReader.Refresh(constraintBinding);
-        var wheel = profiles.ActiveProfile.FilterWheelSettings.Id;
-        var equipmentBinding = new NinaEquipmentBinding(profile, rig, nativeConstraints.Revision,
-            profiles.ActiveProfile.CameraSettings.Id, wheel == "No_Device" ? null : wheel,
-            wheel == "No_Device" ? [new("fixed-filter", null, null)] : profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters
-                .Select(f => new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(),
-            false, 0, profiles.ActiveProfile.TelescopeSettings.Id);
+        var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
-        var configuration = equipmentReader.Read(equipmentBinding);
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         Report("Reading issued allocation", "Online");
         var allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
