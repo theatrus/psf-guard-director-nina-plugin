@@ -86,7 +86,10 @@ processing, and correlated save completion behind an internal interface. It is
 not yet exposed as a production sequencer action and cannot be started from
 the plugin settings. The runtime library now exposes typed planning evaluation;
 the test-only ASCOM sequence exercises Rust-selected capture and pending-image
-feedback. It still uses a local fixture assignment, not server authorization.
+feedback. The optional server-plan smoke activates and pulls an actual PSF Guard
+program, captures during a server outage and verifies restart, batch check-in
+and duplicate replay. Both probes use explicit simulator-only safety and
+orientation inputs, not production acquisition authorization.
 
 The runtime host also exposes the sidecar's durable capture and preparation
 ledgers through IPC 8 (runtime 0.7.0). It can request read-only, ledger-backed
