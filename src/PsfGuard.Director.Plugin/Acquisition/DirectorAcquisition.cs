@@ -237,6 +237,7 @@ public sealed class DirectorAcquisition
         Exception? reportingError = null;
         var released = false;
         var terminalFailed = false;
+        var mountShutdown = new NinaMountShutdown();
         try
         {
             await runtime.StartAsync(rig, lifetime.Token);
@@ -530,7 +531,7 @@ public sealed class DirectorAcquisition
             }
             finally { block.Remove(item); block.AttachNewParent(null); block.NighttimeData.Ticker.Stop(); }
         }
-        Task Park(CancellationToken ct) => NinaMountShutdown.ParkAsync(profiles, profile, telescope,
+        Task Park(CancellationToken ct) => mountShutdown.ParkAsync(profiles, profile, telescope,
             equipmentBinding.TelescopeDeviceId!, enclosure.Read, enclosure.Interrupted, progress, ct);
         async Task WatchdogAsync()
         {

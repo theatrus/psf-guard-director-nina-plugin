@@ -7,8 +7,9 @@ using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.Plugin.Acquisition;
 
-internal static class NinaMountShutdown
+internal sealed class NinaMountShutdown
 {
+    private bool parkFailed;
     private static TelescopeInfo ReadMount(IProfileService profiles, Guid profileId, ITelescopeMediator telescope, string deviceId)
     {
         var info = telescope.GetInfo();
@@ -35,9 +36,10 @@ internal static class NinaMountShutdown
         if (errors.Count != 0) throw new AggregateException("Mount stop could not be confirmed.", errors);
     }
 
-    internal static async Task ParkAsync(IProfileService profiles, Guid profileId, ITelescopeMediator telescope, string deviceId,
+    internal async Task ParkAsync(IProfileService profiles, Guid profileId, ITelescopeMediator telescope, string deviceId,
         Func<NinaMotionEvidence> clearance, CancellationToken interrupted, IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        if (parkFailed) throw new InvalidOperationException("A prior park failed; automatic retry is blocked for this session.");
         if (ReadMount(profiles, profileId, telescope, deviceId).AtPark) return;
         using var motion = CancellationTokenSource.CreateLinkedTokenSource(token, interrupted);
         try
@@ -52,6 +54,7 @@ internal static class NinaMountShutdown
         }
         catch (Exception parkError)
         {
+            parkFailed = true;
             // A failed or timed-out park must not leave tracking/slewing running.
             try { Stop(profiles, profileId, telescope, deviceId); }
             catch (Exception stopError) { throw new AggregateException("Mount park and fallback stop failed.", parkError, stopError); }

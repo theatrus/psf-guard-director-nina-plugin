@@ -16,6 +16,8 @@ failed, cancelled or timed-out park also attempts both stop commands. Failures
 remain visible; Director never retries parking automatically or commands a
 replacement mount/profile. NINA's tracking setter returns the resulting state:
 `false` confirms tracking-off, rather than indicating command failure.
+The park-failure latch is shared by planned waits and terminal cleanup, so a
+failed wait park cannot cause another park attempt during shutdown.
 
 ## Enclosure Clearance
 

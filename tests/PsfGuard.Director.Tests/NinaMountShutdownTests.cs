@@ -73,6 +73,8 @@ public sealed class NinaMountShutdownTests
         else setup.ThrowsAsync(failure == "cancelled" ? new OperationCanceledException() : new IOException("park failed"));
         await Assert.ThrowsAnyAsync<Exception>(() => f.Park());
         f.VerifyStopped();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Park());
+        f.Telescope.Verify(t => t.ParkTelescope(It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Theory]
@@ -146,6 +148,7 @@ public sealed class NinaMountShutdownTests
         internal Mock<ITelescopeMediator> Telescope { get; } = new();
         internal TelescopeInfo Info { get; } = new() { Connected = true, DeviceId = "mount", TrackingEnabled = true };
         internal RecoveryMotion Motion = RecoveryMotion.Permitted;
+        private readonly NinaMountShutdown shutdown = new();
         internal Fixture()
         {
             Profile.SetupGet(p => p.Id).Returns(Id);
@@ -154,7 +157,7 @@ public sealed class NinaMountShutdownTests
             Telescope.Setup(t => t.SetTrackingEnabled(false)).Returns(false);
             Telescope.Setup(t => t.ParkTelescope(It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         }
-        internal Task Park(CancellationToken interrupted = default) => NinaMountShutdown.ParkAsync(Profiles.Object, Id, Telescope.Object,
+        internal Task Park(CancellationToken interrupted = default) => shutdown.ParkAsync(Profiles.Object, Id, Telescope.Object,
             "mount", () => new(Motion, "test clearance", 1000), interrupted, new Progress<ApplicationStatus>(), default);
         internal void Stop() => NinaMountShutdown.Stop(Profiles.Object, Id, Telescope.Object, "mount");
         internal void VerifyStopped()

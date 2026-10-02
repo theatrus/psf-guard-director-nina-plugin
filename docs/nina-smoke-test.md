@@ -8,13 +8,13 @@
 - `-PublicAcquisition -PublicUnsafe -AbortWithoutPark`: abort a 30-second
   exposure offline, stop slewing/tracking without parking, release local
   ownership and remain stopped after safety recovery. Check the final status.
-  Evidence: `artifacts/nina-smoke-1a2cdf70da52455c84607a283fddd87b/probe/1e4f4bc033d2485d9d65737fb3a0a6e0/result.json`.
+  Evidence: `artifacts/nina-smoke-14f233d427f547c7bb2e777b38558fa6/probe/8d82d09cbbea49078ef4391f66bb7b80/result.json`.
 - `-PublicAcquisition -PublicUnsafe`: the same interruption with the default
   park policy, including final parked status and no automatic restart.
-  Evidence: `artifacts/nina-smoke-36c7b2a6bf3547d3b1657482205975d9/probe/8b66aad32d20480986d5e00cdb47ce88/result.json`.
+  Evidence: `artifacts/nina-smoke-ffd25907d9f94c009adb1d655fb70a30/probe/cef5955904004c02a7418af1f485dc69/result.json`.
 - `-PublicAcquisition -EnclosureClosure`: shutter closure still overrides
   parking and stops acquisition/motion while offline and weather remains Safe.
-  Evidence: `artifacts/nina-smoke-353603bb6d2a45fdae9157fb1f33d2ab/probe/8c5891bcceac47a0a6ec9cd8374f49f8/result.json`.
+  Evidence: `artifacts/nina-smoke-c2bdd456d45043aba9147c937ca42ecb/probe/3c82acb132f542adab430a492b73dd76/result.json`.
 
 All 751 tests passed. `build-release.ps1` now completes development/release
 packaging with zero build warnings; `tools/test-preview-manifest.ps1` accepts
@@ -25,6 +25,8 @@ The new stop-only test exposed the old mock's incorrect tracking-return
 semantics. NINA returns the resulting state (`false` for tracking-off); the
 implementation and mocks now match that contract. Review also added fallback
 stopping after any park failure and replacement-device checks between commands.
+The final package reran all three native scenarios after adding a shared
+park-failure latch: terminal cleanup cannot retry a failed planned-wait park.
 
 ## Enclosure Clearance
 
