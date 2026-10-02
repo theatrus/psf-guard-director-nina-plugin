@@ -1,5 +1,47 @@
 # Native capture adapter
 
+## Live and Deferred Check-In
+
+Session **Capture delivery** selects Live (the default) or Deferred. Live sends
+bounded periodic and target-change batches during acquisition. Deferred keeps
+capture evidence local until session-end check-in, an explicit **Director Check
+In** sequence instruction, or **Check in** in plugin settings. Turn off
+**Check in at session end** for deliberate manual/end-of-night delivery. Live
+status telemetry is independent and is never backfilled as a current rig state.
+
+**Check in at session start** first delivers saved runs for the current pairing.
+The session duration limit includes this work. Session-end delivery drains the
+backlog in bounded pages; cancellation preserves the last acknowledged cursor.
+Automatic workloads always require terminal delivery before requesting another
+grant, regardless of the delivery mode or session-end checkbox.
+
+Each new acquisition records its original allocation, ledger identity, geometry
+and initial state beside the ledger before one-shot launch. Saved-run delivery
+reopens that exact ledger through the shared runtime; it never invokes allocation
+start, reservation or equipment commands. Historical expiry and changed current
+equipment do not prevent reporting the old evidence. Missing/truncated ledgers,
+changed identities or corrupt records stop delivery instead of creating new state.
+Run storage links are not followed. The acquisition lease excludes active sessions
+and concurrent saved-run delivery. Put **Director Check In** before or after the
+Session, not in its instruction slots; live target check-ins cover those boundaries.
+
+After successful native parking and verification that no capture/preparation is
+unresolved, automatic workloads persist a clean-completion receipt. If the server
+is offline, a later check-in can confirm that terminal release. It records a past
+completion, not current mount/rig telemetry, and never advances a newer pending
+request. Ordinary workload intake reconciles the released request on its next
+call. Aborted, uncertain or uncleanly shut-down runs cannot use this path to gain
+fresh authority. A lost reply is retried with the same ledger/cursor, not a second
+capture. Confirmed releases are recorded locally to avoid repeated release calls.
+
+Scope is exact coordinator origin/instance, catalog, rig, NINA profile and paired
+client. Re-pairing as a new client does not silently adopt another client's runs.
+The archive is not a credential store. Only runs created with this feature have
+the required check-in record; older prototype runs need explicit reconciliation.
+This path delivers capture evidence, not image files, historical live telemetry,
+grade revisions or automatic restart authority. Persistent observing-night
+recovery and default focus/guiding/centering/flip policies remain separate work.
+
 ## Abort Policy
 
 Director Session > Session > Safety and visibility > **On abort** selects

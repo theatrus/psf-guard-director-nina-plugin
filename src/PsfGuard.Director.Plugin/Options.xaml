@@ -20,6 +20,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <TextBlock Grid.Row="0" Text="Profile" Margin="0,4,16,8" />
             <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProfileName}" TextWrapping="Wrap" Margin="0,4,0,8" />
@@ -55,6 +56,18 @@
                     </Button>
                 </WrapPanel>
                 <TextBlock Text="{Binding PairingStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,16,0,0">
+                <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />
+                <WrapPanel>
+                    <Button Command="{Binding CheckInCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6">
+                        <TextBlock Text="Check in" Style="{StaticResource ActionLabel}" />
+                    </Button>
+                    <Button Command="{Binding CancelCheckInCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,0,8" Padding="12,6">
+                        <TextBlock Text="Cancel" Style="{StaticResource ActionLabel}" />
+                    </Button>
+                </WrapPanel>
+                <TextBlock Text="{Binding CheckInStatus}" TextWrapping="Wrap" />
             </StackPanel>
         </Grid>
     </DataTemplate>

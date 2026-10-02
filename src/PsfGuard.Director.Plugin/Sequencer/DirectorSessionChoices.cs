@@ -4,6 +4,8 @@ public sealed record DirectorChoice<T>(T Value, string Label);
 
 public static class DirectorSessionChoices
 {
+    public static IReadOnlyList<DirectorChoice<DirectorCheckInMode>> CheckInModes { get; } =
+        [new(DirectorCheckInMode.Live, "Live"), new(DirectorCheckInMode.Deferred, "Deferred")];
     public static IReadOnlyList<DirectorChoice<DirectorAbortPolicy>> AbortPolicies { get; } =
         [new(DirectorAbortPolicy.ParkMount, "Park mount (clearance required)"),
          new(DirectorAbortPolicy.StopMount, "Stop slew and tracking (no park)")];

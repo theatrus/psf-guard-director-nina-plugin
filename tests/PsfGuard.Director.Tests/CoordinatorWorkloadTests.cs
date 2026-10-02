@@ -10,6 +10,71 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class CoordinatorWorkloadTests
 {
+    [Theory]
+    [InlineData("not-released")]
+    [InlineData("ledger")]
+    [InlineData("cursor")]
+    [InlineData("allocation")]
+    public async Task ArchivedReleaseRequiresExactTerminalAcknowledgement(string fault)
+    {
+        var root = Root();
+        var grant = Grant(Guid.NewGuid());
+        var allocation = CoordinatorAllocation.Read(CoordinatorAllocation.Wrap(grant), Endpoint.AbsoluteUri, Binding, Client, Configuration, Now);
+        var a = grant.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), a.Id, a.Revision, a.RigId, a.ConfigurationId);
+        using var client = Create(root, new(_ => Task.FromResult(Response(new
+        {
+            allocation = fault == "allocation" ? Grant(Guid.NewGuid()) : grant,
+            released = fault != "not-released",
+            ledger_id = fault == "ledger" ? Guid.NewGuid() : Guid.Parse(ledger.LedgerId),
+            terminal_sequence = fault == "cursor" ? 7 : 6
+        }))));
+        try
+        {
+            var error = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.ConfirmArchivedReleaseAsync(allocation, ledger, 6));
+            Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement, error.Failure);
+            Assert.Empty(Directory.GetFiles(root, "workload-request-*.json"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task ArchivedReleaseDoesNotReplaceOrAdvanceANewerRequest()
+    {
+        var root = Root();
+        Guid requestId = default;
+        var grant = Grant(Guid.NewGuid());
+        var historical = CoordinatorAllocation.Read(CoordinatorAllocation.Wrap(grant), Endpoint.AbsoluteUri, Binding, Client, Configuration, Now);
+        var assignment = grant.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), assignment.Id, assignment.Revision, assignment.RigId, assignment.ConfigurationId);
+        using var client = Create(root, new(async request =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+            if (request.RequestUri!.AbsolutePath.EndsWith("/release"))
+            {
+                Assert.Equal(grant.AllocationId, body.GetProperty("allocation_id").GetGuid());
+                Assert.True(body.GetProperty("operations_quiescent").GetBoolean());
+                Assert.True(body.GetProperty("parked").GetBoolean());
+                return Response(new { allocation = grant, released = true, ledger_id = Guid.Parse(ledger.LedgerId), terminal_sequence = 6 });
+            }
+            var id = body.GetProperty("request_id").GetGuid();
+            if (requestId == Guid.Empty) requestId = id; else Assert.Equal(requestId, id);
+            return Response(new { request_id = id, state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+        }));
+        try
+        {
+            await client.RequestAsync();
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var before = await File.ReadAllTextAsync(path);
+            await Assert.ThrowsAsync<InvalidDataException>(() => client.ReleaseAsync(historical, ledger, 6));
+            await client.ConfirmArchivedReleaseAsync(historical, ledger, 6);
+            await client.ConfirmArchivedReleaseAsync(historical, ledger, 6);
+            Assert.Equal(before, await File.ReadAllTextAsync(path));
+            await client.RequestAsync();
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private const ulong Now = 1790409600000;
     private static readonly Guid Client = Guid.NewGuid();
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now); }

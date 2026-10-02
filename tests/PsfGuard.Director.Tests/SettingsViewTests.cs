@@ -67,11 +67,12 @@ public sealed class SettingsViewTests
                 host.UpdateLayout();
                 Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
                 var buttons = Descendants(host).OfType<Button>().ToArray();
-                Assert.Equal(4, buttons.Length);
+                Assert.Equal(6, buttons.Length);
                 Assert.Equal(state != "Ready", buttons[0].IsEnabled);
                 Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                 foreach (var button in buttons)
                 {
+                    Assert.NotNull(button.Command);
                     Assert.Same(resources["StandardButton"], button.Style);
                     var label = Assert.IsType<TextBlock>(button.Content);
                     Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(label.Foreground).Color);
@@ -127,6 +128,9 @@ public sealed class SettingsViewTests
         public string AcquisitionStatus => "Not armed";
         public ICommand StartRuntimeCommand { get; } = new StubCommand(state != "Ready");
         public ICommand StopRuntimeCommand { get; } = new StubCommand(state != "Stopped");
+        public ICommand CheckInCommand { get; } = new StubCommand(state != "Ready");
+        public ICommand CancelCheckInCommand { get; } = new StubCommand(false);
+        public string CheckInStatus => "Checked in 128 runs; 16000 events; 4 workloads released";
     }
 
     public sealed class ConnectionViewModel

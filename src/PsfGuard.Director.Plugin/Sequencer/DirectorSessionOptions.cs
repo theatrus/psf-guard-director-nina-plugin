@@ -9,6 +9,7 @@ public enum DirectorSafetyPolicy { RequireMonitor, Attended }
 public enum DirectorHorizonPolicy { NinaProfile, MinimumAltitude }
 public enum DirectorEnclosurePolicy { Unconfigured, OpenAir, RequireOpenShutter }
 public enum DirectorAbortPolicy { ParkMount, StopMount }
+public enum DirectorCheckInMode { Live, Deferred }
 
 // Requested local policy, not an issued program or permission to operate equipment.
 [JsonObject(MemberSerialization.OptIn)]
@@ -26,6 +27,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     [JsonProperty] public DirectorEnclosurePolicy Enclosure { get => enclosure; set => Set(ref enclosure, value); }
     private DirectorAbortPolicy onAbort = DirectorAbortPolicy.ParkMount;
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
+    private DirectorCheckInMode checkInMode;
+    [JsonProperty] public DirectorCheckInMode CheckInMode { get => checkInMode; set => Set(ref checkInMode, value); }
     private DirectorOperationOwner startup, slewCenter, focus, guiding, dither, meridianFlip, shutdown;
     private bool enableAcquisition;
     [JsonProperty] public bool EnableAcquisition { get => enableAcquisition; set => Set(ref enableAcquisition, value); }
@@ -85,6 +88,7 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
         if (!Enum.IsDefined(Safety) || !Enum.IsDefined(Horizon)) issues.Add("Unknown safety or horizon policy.");
         if (!Enum.IsDefined(Enclosure)) issues.Add("Unknown enclosure clearance policy.");
         if (!Enum.IsDefined(OnAbort)) issues.Add("Unknown abort policy.");
+        if (!Enum.IsDefined(CheckInMode)) issues.Add("Unknown check-in mode.");
         if (new[] { Startup, SlewCenter, Focus, Guiding, Dither, MeridianFlip, Shutdown }.Any(value => !Enum.IsDefined(value)))
             issues.Add("Unknown operation owner.");
         return issues;

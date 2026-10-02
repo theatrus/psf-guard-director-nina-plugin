@@ -265,6 +265,11 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.Options.EnableAcquisition = true;
                 sessionContainer.Options.Enclosure = coordinator.EnclosureClosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
                 sessionContainer.Options.OnAbort = coordinator.AbortWithoutPark ? DirectorAbortPolicy.StopMount : DirectorAbortPolicy.ParkMount;
+                if (coordinator.DeferredCheckIn)
+                {
+                    sessionContainer.Options.CheckInMode = DirectorCheckInMode.Deferred;
+                    sessionContainer.Options.CheckInAtEnd = false;
+                }
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
@@ -347,7 +352,7 @@ public sealed class SimulatorSequence : SequenceItem
                         try { await executing; throw new InvalidDataException("Moon wait ignored cancellation."); }
                         catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
                     }
-                    else if (coordinator.AutomaticWorkloads)
+                    else if (coordinator.AutomaticWorkloads && !coordinator.OfflineWorkloadRelease)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                         waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
@@ -374,6 +379,23 @@ public sealed class SimulatorSequence : SequenceItem
                     captures.Add(capture);
                 }
                 await coordinator.EndOutageAsync(root, lifetime.Token);
+                if (coordinator.DeferredCheckIn && Directory.GetFiles(service.LastRunDirectory!, "capture-cursor-*.json").Length != 0)
+                    throw new InvalidDataException("Deferred mode delivered capture events before explicit check-in.");
+                var savedCheckIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
+                var delivered = await savedCheckIn.RunAsync(null, lifetime.Token);
+                if (delivered.Runs != 1 || !delivered.CaughtUp || delivered.AcknowledgedThrough != 6)
+                    throw new InvalidDataException("Saved-run check-in did not deliver the original six ledger events.");
+                if (coordinator.OfflineWorkloadRelease)
+                {
+                    if (delivered.ReleasedWorkloads != 1) throw new InvalidDataException("Completed offline workload was not released during check-in.");
+                    await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
+                    Step("Completed offline workload released after reconnect; next request waits for quality without duplicating acquisition");
+                }
+                var repeat = await savedCheckIn.RunAsync(null, lifetime.Token);
+                if (repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
+                    throw new InvalidDataException("Saved-run check-in did not preserve its acknowledgement cursor.");
+                await new DirectorCheckInItem(savedCheckIn).Execute(progress, lifetime.Token);
+                Step("Saved-run batch check-in and sequencer action replayed no hardware or acknowledged events");
                 await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
                 await reopened.StartAsync(rigId, lifetime.Token);
                 var eop = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
@@ -382,6 +404,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var state = new PlannerState(rigId, equipment.Id, NowMs(), assignment.ExpiresAtMs, PlannerSafety.Safe, true, false, new(0, 0));
                 if (Require(await reopened.OpenGeometryAsync(program, g.Constraints, state, lifetime.Token)) != ledger) throw new InvalidDataException("Public ledger identity changed.");
                 checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "public-checkin"), reopened, ledger, lifetime.Token);
+                await reopened.StopAsync();
                 await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
                 await coordinator.ReportStatusAsync(programTarget, "public_acquisition_complete", lifetime.Token);
                 var retry = new DirectorSessionContainer(service);

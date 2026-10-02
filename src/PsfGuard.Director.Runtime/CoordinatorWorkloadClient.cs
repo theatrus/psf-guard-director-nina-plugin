@@ -86,12 +86,24 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             || ledger.AssignmentRevision != allocation.Envelope.Snapshot.Program.Assignment.Revision || ledger.ConfigurationId != configuration.Id
             || ledger.RigId != binding.RigId.ToString("D") || !Guid.TryParseExact(ledger.LedgerId, "D", out var ledgerId) || ledgerId == Guid.Empty)
             throw new InvalidDataException("Terminal workload scope mismatch.");
-        Validate(allocation.Envelope, allocation.Envelope.AdmittedAtMs);
+        await ConfirmArchivedReleaseAsync(allocation, ledger, through, token).ConfigureAwait(false);
+        Advance(pending);
+    }
+
+    /// <summary>Confirm a durably completed/parked historical run. Does not advance
+    /// or overwrite a newer intake request; RequestAsync reconciles released history.</summary>
+    public async Task ConfirmArchivedReleaseAsync(CoordinatorAllocation allocation, LedgerIdentity ledger, ulong through, CancellationToken token = default)
+    {
+        var a = Validate(allocation.Envelope, allocation.Envelope.AdmittedAtMs);
+        if (a.Fingerprint != allocation.Fingerprint || ledger.AssignmentId != a.Envelope.Snapshot.Program.Assignment.Id
+            || ledger.AssignmentRevision != a.Envelope.Snapshot.Program.Assignment.Revision || ledger.ConfigurationId != configuration.Id
+            || ledger.RigId != binding.RigId.ToString("D") || !Guid.TryParseExact(ledger.LedgerId, "D", out var ledgerId) || ledgerId == Guid.Empty)
+            throw new InvalidDataException("Archived terminal workload scope mismatch.");
         var bytes = await Send("release", new
         {
             coordinator_instance_id = binding.CoordinatorInstanceId,
             catalog_id = binding.CatalogId,
-            allocation_id = pending.RequestId,
+            allocation_id = allocation.Envelope.AllocationId,
             ledger_id = ledgerId,
             terminal_sequence = through,
             operations_quiescent = true,
@@ -101,7 +113,6 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         if (!w.Released || w.LedgerId != ledgerId || w.TerminalSequence != through || w.Allocation is null
             || Validate(w.Allocation, w.Allocation.AdmittedAtMs).Fingerprint != allocation.Fingerprint)
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
-        Advance(pending);
     }
 
     private Pending ReadPending()

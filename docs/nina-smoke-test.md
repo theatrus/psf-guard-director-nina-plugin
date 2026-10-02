@@ -1,5 +1,39 @@
 # Real N.I.N.A. smoke test
 
+## Live and Deferred Check-In
+
+2026-10-02: the packaged plugin, runtime 0.9.0 / IPC 9, native NINA
+3.3.0.1064, ASCOM OmniSim and an isolated PSF Guard server passed:
+
+- `-PublicAcquisition -LocalTargetScheduling -DeferredCheckIn`: three captures
+  across two targets remain local with end check-in disabled. Explicit saved-run
+  delivery acknowledges six events, repeated delivery sends zero new events,
+  and the native Director Check In instruction succeeds. The original permit
+  still cannot launch again.
+  Evidence: `artifacts/nina-smoke-df62881bd09f40219642e86f3b366b29/probe/4ed5bbba7cc04f409b7a47edd961ddcb/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -OfflineWorkloadRelease`:
+  disconnect after admission, finish and park locally, then restore the server.
+  Saved-run check-in delivers the original ledger, confirms one historical
+  workload release and lets intake advance to waiting for quality assessment.
+  Repeating check-in does not repeat captures or release a newer workload.
+  Evidence: `artifacts/nina-smoke-59f76292fe6542bb9703f8343207d342/probe/1e45ac2dbada45a4bee005f22feb3b73/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance`: the ordinary
+  live/offline path still captures three images across two targets, honors the
+  Moon gate, waits parked and later delivers all six receipts without replay.
+  Evidence: `artifacts/nina-smoke-84f379be265049a59dcd1c92d56cccc8/probe/afe8d288e2c24c3791d92a0e3d7a6f19/result.json`.
+
+All 771 unit tests passed. Development packaging completed with zero warnings
+or errors; format verification, `git diff --check` and the preview-manifest guard passed. Native
+Session screenshots at 640/1000 px and settings at 360 px were visually reviewed.
+The twelve selectors bind correctly and fit their bounds. Review made initial
+backlog delivery count against the session time limit, removed queued progress
+callbacks that could overwrite a terminal status, and added malformed release
+acknowledgement tests. End-of-session delivery drains bounded pages rather than
+stopping after one batch.
+
+These tests cover capture evidence and clean terminal release, not grade pulls,
+timing/recovery journal delivery, automatic night restart or production equipment.
+
 ## Configurable Abort
 
 2026-10-02: the packaged plugin, runtime 0.9.0 / IPC 9, native NINA
