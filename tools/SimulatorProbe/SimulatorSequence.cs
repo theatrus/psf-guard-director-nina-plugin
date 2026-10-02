@@ -49,6 +49,7 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly IGuiderMediator guider;
     private readonly IFilterWheelMediator filters;
     private readonly ISafetyMonitorMediator safety;
+    private readonly IDomeMediator dome;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -58,7 +59,7 @@ public sealed class SimulatorSequence : SequenceItem
     [ImportingConstructor]
     public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider)
+        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -66,6 +67,7 @@ public sealed class SimulatorSequence : SequenceItem
         this.guider = guider;
         this.filters = filters;
         this.safety = safety;
+        this.dome = dome;
         this.imaging = imaging;
         this.saves = saves;
         this.history = history;
@@ -75,7 +77,7 @@ public sealed class SimulatorSequence : SequenceItem
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -83,7 +85,7 @@ public sealed class SimulatorSequence : SequenceItem
     public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         var root = ValidateEnvironment();
-        if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected || safety.GetInfo().Connected)
+        if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected || safety.GetInfo().Connected || dome.GetInfo().Connected)
             throw new InvalidOperationException("Start the probe with all simulator devices disconnected.");
         var profileId = profiles.ActiveProfile.Id;
         var run = Path.Combine(root, "probe", Guid.NewGuid().ToString("N"));
@@ -109,6 +111,7 @@ public sealed class SimulatorSequence : SequenceItem
         NinaSafetyInterlock? interlock = null;
         CancellationTokenRegistration safetyCancellation = default;
         var unsafeCancellationVerified = false;
+        var enclosureCancellationVerified = false;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -150,6 +153,14 @@ public sealed class SimulatorSequence : SequenceItem
             var rigId = coordinator?.RigId ?? "ascom-smoke";
             await runtime.StartAsync(rigId, lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
+            if (coordinator?.EnclosureClosure == true)
+            {
+                Step("Connecting and opening ASCOM OmniSim enclosure");
+                profiles.ActiveProfile.DomeSettings.Id = "ASCOM.OmniSim.Dome";
+                await dome.Rescan(); CheckProfile();
+                if (!await dome.Connect() || dome.GetInfo().DeviceId != "ASCOM.OmniSim.Dome") throw new IOException("Simulator enclosure connection failed.");
+                if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator enclosure did not open.");
+            }
             Step("Connecting native NINA safety simulator");
             await safety.Rescan();
             CheckProfile();
@@ -222,7 +233,7 @@ public sealed class SimulatorSequence : SequenceItem
                 {
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
+                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
@@ -248,10 +259,11 @@ public sealed class SimulatorSequence : SequenceItem
                 Step("Running the public Director Session acquisition path");
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime)
+                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
+                sessionContainer.Options.Enclosure = coordinator.EnclosureClosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
@@ -271,6 +283,32 @@ public sealed class SimulatorSequence : SequenceItem
                     while (!executing.IsCompleted && sessionContainer.Display.Phase != "Acquiring") await Task.Delay(50, lifetime.Token);
                     if (executing.IsCompleted) await executing;
                     await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+                    if (coordinator.EnclosureClosure)
+                    {
+                        using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        while (!camera.GetInfo().IsExposing && !executing.IsCompleted) await Task.Delay(50, dispatchDeadline.Token);
+                        if (executing.IsCompleted || !camera.GetInfo().IsExposing || telescope.GetInfo().AtPark)
+                            throw new InvalidDataException("Enclosure test never entered an unparked exposure.");
+                        Step("Closing simulator enclosure during public acquisition while weather remains safe");
+                        var closing = dome.CloseShutter(lifetime.Token);
+                        try
+                        {
+                            try { await executing.WaitAsync(TimeSpan.FromSeconds(15)); throw new InvalidDataException("Enclosure closure incorrectly completed acquisition."); }
+                            catch (AggregateException) when (sessionContainer.Display.Phase == "Stopped; enclosure blocks parking") { }
+                        }
+                        finally { if (!await closing) throw new IOException("Simulator enclosure did not close."); }
+                        if (telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled || telescope.GetInfo().Slewing
+                            || camera.GetInfo().IsExposing || AcquisitionLease.IsActive || !safety.GetInfo().IsSafe)
+                            throw new InvalidDataException("Enclosure stop failed to abort or incorrectly parked/changed weather safety.");
+                        if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator enclosure did not reopen.");
+                        await Task.Delay(1500, lifetime.Token);
+                        if (telescope.GetInfo().AtPark || camera.GetInfo().IsExposing || !executing.IsCompleted || AcquisitionLease.IsActive)
+                            throw new InvalidDataException("Enclosure reopening revived acquisition or parking.");
+                        enclosureCancellationVerified = true;
+                        ledger = service.LastLedger;
+                        Step("Enclosure closure aborted exposure, stopped mount motion, blocked parking and stayed stopped after reopening");
+                        return;
+                    }
                     if (coordinator.PublicUnsafe)
                     {
                         using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -342,6 +380,7 @@ public sealed class SimulatorSequence : SequenceItem
                 await coordinator.ReportStatusAsync(programTarget, "public_acquisition_complete", lifetime.Token);
                 var retry = new DirectorSessionContainer(service);
                 retry.Options.EnableAcquisition = true;
+                retry.Options.Enclosure = sessionContainer.Options.Enclosure;
                 retry.Options.MaximumAltitude = 89;
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 retry.Options.SlewCenter = retry.Options.Focus = retry.Options.Guiding = retry.Options.Dither = retry.Options.MeridianFlip = DirectorOperationOwner.Sequence;
@@ -587,9 +626,16 @@ public sealed class SimulatorSequence : SequenceItem
                 catch (Exception error) { errors.Add(error); Logger.Error(error); }
             }
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var clearForCleanup = !dome.GetInfo().Connected;
+            if (dome.GetInfo().Connected && dome.GetInfo().DeviceId == "ASCOM.OmniSim.Dome")
+                await Cleanup("Opening simulator enclosure for fixture cleanup", async () =>
+                {
+                    clearForCleanup = await dome.OpenShutter(cleanup.Token);
+                    if (!clearForCleanup) throw new IOException("Simulator enclosure failed to open for cleanup.");
+                });
             if (telescope.GetInfo().Connected && telescope.GetInfo().DeviceId == "ASCOM.OmniSim.Telescope")
             {
-                await Cleanup("Parking simulator", async () =>
+                if (clearForCleanup) await Cleanup("Parking simulator", async () =>
                 {
                     if (!await telescope.ParkTelescope(progress, cleanup.Token)) throw new IOException("Park failed.");
                 });
@@ -601,6 +647,8 @@ public sealed class SimulatorSequence : SequenceItem
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
             if (safety.GetInfo().Connected && safety.GetInfo().DeviceId == SafetySimulatorId)
                 await Cleanup("Disconnecting native safety simulator", safety.Disconnect);
+            if (dome.GetInfo().Connected && dome.GetInfo().DeviceId == "ASCOM.OmniSim.Dome")
+                await Cleanup("Disconnecting simulator enclosure", dome.Disconnect);
             await Cleanup("Stopping sidecar", runtime.StopAsync);
             if (coordinator is not null)
             {
@@ -609,7 +657,8 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
+                enclosureCancellationVerified,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
                 ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,
@@ -719,7 +768,7 @@ public sealed class SimulatorSequence : SequenceItem
             || profile.ImageFileSettings.FileType != NINA.Core.Enum.FileTypeEnum.FITS
             || profile.FocuserSettings.Id != "No_Device" || profile.RotatorSettings.Id != "No_Device"
             || profile.GuiderSettings.GuiderName != "No_Guider"
-            || profile.DomeSettings.Id != "No_Device" || profile.SwitchSettings.Id != "No_Device"
+            || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
             || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
             || profile.WeatherDataSettings.Id != "No_Device")
             throw new InvalidOperationException("The probe requires its simulator-only test profile.");

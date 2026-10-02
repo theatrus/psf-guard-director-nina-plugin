@@ -125,7 +125,7 @@
                                 <Expander Header="Safety and visibility" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                         <TextBlock Grid.Row="0" Text="Safety policy" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.SafetyPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Safety}" AutomationProperties.Name="Safety policy" MaxWidth="320" Margin="0,3" />
                                         <TextBlock Grid.Row="1" Text="Horizon" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
@@ -140,6 +140,9 @@
                                         <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Avoid after meridian (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="6" Text="Park during waits" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <CheckBox Grid.Row="6" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="7" Text="Enclosure clearance" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.EnclosurePolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Enclosure}" AutomationProperties.Name="Enclosure clearance" MaxWidth="320" Margin="0,3"
+                                            ToolTip="Open air requires no configured or connected dome. An enclosed setup requires a fresh fully-open shutter report; closure or loss of evidence stops acquisition and blocks parking." />
                                     </Grid>
                                 </Expander>
                                 <Expander Header="Operation ownership" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">

@@ -90,6 +90,7 @@ public sealed class DirectorSessionContainerTests
         session.Options.MeridianBeforeMinutes = 60;
         session.Options.MeridianAfterMinutes = 4;
         session.Options.Safety = DirectorSafetyPolicy.Attended;
+        session.Options.Enclosure = DirectorEnclosurePolicy.RequireOpenShutter;
         session.Options.Horizon = DirectorHorizonPolicy.MinimumAltitude;
         session.Options.Startup = session.Options.SlewCenter = session.Options.Focus = session.Options.Guiding =
             session.Options.Dither = session.Options.MeridianFlip = session.Options.Shutdown = DirectorOperationOwner.Sequence;

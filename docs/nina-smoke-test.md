@@ -1,5 +1,37 @@
 # Real N.I.N.A. smoke test
 
+## Enclosure Clearance
+
+2026-10-02: the public Session uses independent native enclosure clearance for
+acquisition and shutdown. The simulator fixture explicitly selects Open air;
+the `-PublicAcquisition -EnclosureClosure` variant configures only the ASCOM
+OmniSim dome, opens it, then closes it during a 30-second exposure with the
+server offline and the weather monitor still Safe. It verifies camera abort,
+slew-stop/tracking-off, no park and no restart after reopening. The test fixture
+then opens the simulator for its own final cleanup; Director never opens it.
+
+Final production code, runtime 0.9.0 / IPC 9, NINA 3.3.0.1064 and isolated local
+PSF Guard passed these native tests:
+
+- Enclosure closure:
+  `artifacts/nina-smoke-180d202ee1ae49e6923fdf907da894ed/probe/661b381debd8415aa981bbf2967ea73a/result.json`.
+- Weather Unsafe with independent open-air clearance, park and no restart:
+  `artifacts/nina-smoke-88bc993b0c984c688f563f594cb0f227/probe/6b6947a72ee54851b0d850064d1cc36a/result.json`.
+- Offline multi-target/Moon avoidance, three saves, six batch receipts and
+  server replay refusal:
+  `artifacts/nina-smoke-a0376354c9ae41f4934c34cf7eb0eeab/probe/765310a08bf8489c9fe3e66b03be507f/result.json`.
+
+The package built without warnings and all 742 tests passed. Full `dotnet format
+--verify-no-changes --no-restore` and `git diff --check` passed. Native template
+checks cover ten policy selectors, bounds and nonblank screenshots at 640/1000
+px; both widths were visually reviewed. All test instances closed normally.
+Review added explicit mount-stop cleanup and refusal of cached registration
+evidence. One intermediate multi-target probe failed because its second session
+omitted the new policy; the replay fixture now copies that policy and passed.
+
+These tests prove the local enclosure gate, not persistent observing-night
+admission, cloud classification or automatic recovery probes.
+
 ## Recovery Client Adoption
 
 2026-10-02: runtime 0.9.0 / IPC 9 / recovery contract 1 is pinned from
