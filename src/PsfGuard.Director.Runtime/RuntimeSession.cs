@@ -22,23 +22,28 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
     private int disposed;
     private string rigId = "";
     private readonly bool storageEnabled;
+    private readonly bool recoveryEnabled;
     private LedgerIdentity? ledgerIdentity;
     private PlannerAssignment? ledgerAssignment;
     internal bool IsReady => ready && Volatile.Read(ref disposed) == 0;
     internal int? ProcessId => process?.Id;
     internal int? ExitCode => process is { HasExited: true } ? process.ExitCode : null;
 
-    private RuntimeSession(Stream pipe, Process? process = null, RuntimeBundle? bundle = null, bool storageEnabled = false)
+    private RuntimeSession(Stream pipe, Process? process = null, RuntimeBundle? bundle = null, bool storageEnabled = false, bool recoveryEnabled = false)
     {
         this.pipe = pipe;
         this.process = process;
         this.bundle = bundle;
         this.storageEnabled = storageEnabled;
+        this.recoveryEnabled = recoveryEnabled;
     }
 
-    internal static async Task<RuntimeSession> StartAsync(string pluginDirectory, string rigId, CancellationToken token, string? storageDirectory = null)
+    internal static async Task<RuntimeSession> StartAsync(string pluginDirectory, string rigId, CancellationToken token, string? storageDirectory = null, string? recoveryDirectory = null)
     {
         storageDirectory = NormalizeStorageDirectory(storageDirectory);
+        recoveryDirectory = NormalizeStorageDirectory(recoveryDirectory);
+        if (recoveryDirectory is not null && (storageDirectory is null || string.Equals(storageDirectory, recoveryDirectory, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("Recovery requires a separate persistent per-rig directory and execution storage.", nameof(recoveryDirectory));
         var bundle = await RuntimeBundle.OpenAsync(pluginDirectory, token).ConfigureAwait(false);
         NamedPipeServerStream? pipe = null;
         RuntimeSession? session = null;
@@ -65,10 +70,15 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
                 info.ArgumentList.Add("--state-directory");
                 info.ArgumentList.Add(storageDirectory);
             }
+            if (recoveryDirectory is not null)
+            {
+                info.ArgumentList.Add("--recovery-directory");
+                info.ArgumentList.Add(recoveryDirectory);
+            }
             token.ThrowIfCancellationRequested();
             process = Process.Start(info) ?? throw new IOException("Director runtime did not start.");
             startupError = ReadBoundedErrorAsync(process.StandardError);
-            session = new RuntimeSession(pipe, process, bundle, storageDirectory is not null);
+            session = new RuntimeSession(pipe, process, bundle, storageDirectory is not null, recoveryDirectory is not null);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
             var connection = pipe.WaitForConnectionAsync(deadline.Token);
@@ -126,9 +136,9 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
         return new string(buffer, 0, length);
     }
 
-    internal static async Task<RuntimeSession> ConnectTestStreamAsync(Stream stream, string rigId, CancellationToken token, bool storageEnabled = false)
+    internal static async Task<RuntimeSession> ConnectTestStreamAsync(Stream stream, string rigId, CancellationToken token, bool storageEnabled = false, bool recoveryEnabled = false)
     {
-        var session = new RuntimeSession(stream, storageEnabled: storageEnabled);
+        var session = new RuntimeSession(stream, storageEnabled: storageEnabled, recoveryEnabled: recoveryEnabled);
         try
         {
             await session.HandshakeAsync(rigId, token).ConfigureAwait(false);
@@ -152,7 +162,8 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
         if (result.GetProperty("runtime_version").GetString() != RuntimeContract.RuntimeVersion ||
             result.GetProperty("engine_version").GetString() != RuntimeContract.EngineVersion ||
             result.GetProperty("contract_version").GetInt32() != RuntimeContract.ContractVersion ||
-            result.GetProperty("rig_id").GetString() != rigId || result.GetProperty("storage_enabled").GetBoolean() != storageEnabled)
+            result.GetProperty("rig_id").GetString() != rigId || result.GetProperty("storage_enabled").GetBoolean() != storageEnabled ||
+            result.GetProperty("recovery_enabled").GetBoolean() != recoveryEnabled || result.GetProperty("recovery_version").GetInt32() != RecoveryContract.Version)
             throw new InvalidDataException("Runtime identity or version mismatch.");
         this.rigId = rigId;
         ready = true;
@@ -167,7 +178,7 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            if (ledgerIdentity is not null) throw new InvalidOperationException("Use durable ledger accounting after opening a ledger.");
+            if (ledgerIdentity is not null || recoveryEnabled) throw new InvalidOperationException("Use durable ledger accounting after opening a ledger or enabling recovery.");
             return await EvaluateAdmittedAsync(request, encoded, token).ConfigureAwait(false);
         }
         finally { gate.Release(); }

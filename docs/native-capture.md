@@ -1,5 +1,34 @@
 # Native capture adapter
 
+## Session Recovery Client
+
+Runtime 0.9.0 / IPC 9 exposes recovery contract 1 through the managed runtime
+controller. The three-argument constructor takes the bundle, allocation ledger
+directory and a separate existing per-rig recovery directory. Two-argument
+callers, including the public NINA Session, keep recovery disabled. The managed
+client verifies both recovery mode and version in the handshake.
+
+Call `OpenRecoveryAsync` or `ReadRecoveryAsync` before applying events. The
+night identity and policy are immutable; revisions and event time cannot move
+backwards. `ApplyRecoveryAsync` transports shared-core decisions without
+reimplementing quality or retry policy. Only a newly applied begin event can
+return a matching probe/park suggestion with a bounded deadline and explicit
+motion clearance. It is not a hardware permit. Retry and restart readback
+never issue work. Cancellation after submission faults the session; reconnect
+and read persisted evidence instead of guessing whether the event committed.
+
+`ReadRecoveryEventsAsync` returns contiguous, bounded journal pages. Malformed,
+foreign, missing or changed state faults the connection. Typed domain errors
+remain visible without pretending the operation succeeded.
+
+Native integration remains pending. It must commission a policy and observing
+night, persist one per-rig recovery directory across allocations, supply fresh
+safety and **independent enclosure/mount-motion clearance**, classify compatible
+quality samples against a frozen reference, cancel/reconcile active native work,
+and dispatch each original suggestion once with fresh native checks. A safe
+weather monitor alone does not prove a roof is clear. Do not enable recovery
+by adding the directory argument to the public owner without those gates.
+
 ## Exposure Moon Avoidance
 
 Runtime 0.8 / engine 0.3 enforces the explicit Moon policy carried by each

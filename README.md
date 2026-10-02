@@ -120,7 +120,7 @@ active setup or authorize acquisition. The review endpoints are implemented,
 but the rig setup review UI and allocation admission UI are still pending.
 
 The runtime host also exposes the sidecar's durable capture and preparation
-ledgers through IPC 8 (runtime 0.8.0). It can request read-only, ledger-backed
+ledgers through IPC 9 (runtime 0.9.0). It can request read-only, ledger-backed
 planning, discover interrupted work, report native-operation receipts, and
 reserve a prepared capture after a fresh shared-core boundary check.
 Graceful shutdown reads the final reply and closes the pipe before waiting for
@@ -130,6 +130,14 @@ supports reservations, observed outcomes, lookup, and bounded event replay;
 restarts retain unresolved attempts, preparation operations, and saved-image pending credit. The native
 public session uses this ledger; the runtime settings preview does not. See the
 [ledger integration boundary](docs/native-capture.md#durable-ledger-host).
+
+The runtime client also supports opt-in recovery contract 1: admit a night,
+read its persistent state, submit revision-checked events and page its journal.
+Probe/park suggestions are accepted only for the exact newly committed request;
+replays and restart readback cannot issue work. **The public NINA Session does
+not enable this recovery mode yet.** Native enclosure-clearance evidence,
+commissioned policy, persistent session ownership and one-shot native dispatch
+remain required. See [session recovery](docs/native-capture.md#session-recovery-client).
 
 The typed program API binds immutable targets, exposure recipes, and equipment
 capabilities to durable execution. It rejects changed capture evidence and

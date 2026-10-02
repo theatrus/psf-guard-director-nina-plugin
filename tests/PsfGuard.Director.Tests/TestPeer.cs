@@ -12,31 +12,33 @@ internal sealed class TestPeer : IAsyncDisposable
     private readonly string fault;
     private readonly Func<JsonElement, JsonObject>? evaluation;
     private readonly Func<JsonElement, JsonObject>? ledger;
+    private readonly Func<JsonElement, JsonObject>? recovery;
     private Task? worker;
     internal TaskCompletionSource PingSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReservationSeen { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ShutdownDisconnected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal RuntimeSession Session { get; private set; } = null!;
 
-    private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation, Func<JsonElement, JsonObject>? ledger)
+    private TestPeer(NamedPipeServerStream server, string fault, Func<JsonElement, JsonObject>? evaluation, Func<JsonElement, JsonObject>? ledger, Func<JsonElement, JsonObject>? recovery)
     {
         this.server = server;
         this.fault = fault;
         this.evaluation = evaluation;
         this.ledger = ledger;
+        this.recovery = recovery;
     }
 
-    internal static async Task<TestPeer> CreateAsync(string fault, Func<JsonElement, JsonObject>? evaluation = null, Func<JsonElement, JsonObject>? ledger = null)
+    internal static async Task<TestPeer> CreateAsync(string fault, Func<JsonElement, JsonObject>? evaluation = null, Func<JsonElement, JsonObject>? ledger = null, Func<JsonElement, JsonObject>? recovery = null)
     {
         var name = "director-test-" + Guid.NewGuid().ToString("N");
         var peer = new TestPeer(new NamedPipeServerStream(name, PipeDirection.InOut, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault, evaluation, ledger);
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly), fault, evaluation, ledger, recovery);
         var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
             peer.worker = peer.ServeAsync();
             await client.ConnectAsync(peer.lifetime.Token);
-            peer.Session = await RuntimeSession.ConnectTestStreamAsync(client, "rig-test", peer.lifetime.Token, ledger is not null);
+            peer.Session = await RuntimeSession.ConnectTestStreamAsync(client, "rig-test", peer.lifetime.Token, ledger is not null, recovery is not null);
             return peer;
         }
         catch
@@ -58,7 +60,9 @@ internal sealed class TestPeer : IAsyncDisposable
             ["engine_version"] = fault == "handshake" ? "0.0.0" : RuntimeContract.EngineVersion,
             ["contract_version"] = RuntimeContract.ContractVersion,
             ["rig_id"] = "rig-test",
-            ["storage_enabled"] = fault == "storage" ? ledger is null : ledger is not null
+            ["storage_enabled"] = fault == "storage" ? ledger is null : ledger is not null,
+            ["recovery_enabled"] = fault == "recovery-mode" ? recovery is null : recovery is not null,
+            ["recovery_version"] = fault == "recovery-version" ? 999 : RecoveryContract.Version
         };
         await PipeProtocol.WriteAsync(server, Reply(hello, ready), lifetime.Token);
         while (!lifetime.IsCancellationRequested)
@@ -76,6 +80,13 @@ internal sealed class TestPeer : IAsyncDisposable
             if (fault == "stall") { await Task.Delay(Timeout.Infinite, lifetime.Token); return; }
             var payload = request.GetProperty("payload");
             var type = payload.GetProperty("type").GetString();
+            if (fault == "stall-recovery-apply" && type == "recovery"
+                && payload.GetProperty("operation").GetProperty("operation").GetProperty("action").GetString() == "apply")
+            {
+                ReservationSeen.TrySetResult();
+                await Task.Delay(Timeout.Infinite, lifetime.Token);
+                return;
+            }
             if (type == "ledger" && payload.GetProperty("operation").GetProperty("action").GetString() == "reserve")
             {
                 ReservationSeen.TrySetResult();
@@ -85,6 +96,8 @@ internal sealed class TestPeer : IAsyncDisposable
                 ? new JsonObject { ["type"] = "decision", ["response"] = evaluation(payload.GetProperty("request")) }
                 : type == "ledger" && ledger is not null
                     ? new JsonObject { ["type"] = "ledger", ["response"] = ledger(payload.GetProperty("operation")) }
+                    : type == "recovery" && recovery is not null
+                    ? new JsonObject { ["type"] = "recovery", ["response"] = recovery(payload.GetProperty("operation")) }
                     : new JsonObject { ["type"] = "pong" });
             switch (fault)
             {

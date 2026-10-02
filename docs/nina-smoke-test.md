@@ -1,5 +1,31 @@
 # Real N.I.N.A. smoke test
 
+## Recovery Client Adoption
+
+2026-10-02: runtime 0.9.0 / IPC 9 / recovery contract 1 is pinned from
+PSF Guard `59f9ed9cb088297e8f77f762ddfe3df929a55bf0`, successful build
+36977340197. The public NINA Session still launches with recovery disabled;
+this validates existing acquisition, not native quality-pause/recovery support.
+The official download page still lists nightly #64 (`3.3.0.1064`).
+
+The package built without warnings. All 712 tests passed, including real-sidecar
+quality hold/probe completion, stop/park persistence across restart, replay
+without issuance, malformed replies and interrupted submission. Whitespace and
+diff checks passed. Two full-stack runs used native NINA #64, ASCOM OmniSim,
+the packaged plugin and an isolated local PSF Guard server:
+
+- Offline multi-target priority, Moon avoidance, three saved images, six batch
+  acknowledgements and replay refusal:
+  `artifacts/nina-smoke-0a7bb85dfa0243baa0c562682d6fffc8/probe/c356ff4284044a42864f46deeee8d5a6/result.json`.
+- Unsafe exposure cancellation, park and no restart after returning Safe:
+  `artifacts/nina-smoke-b7b5dc5233af4b148a4fbc90b20c9984/probe/17963407d9974eb0bfb7f5b27f01349d/result.json`.
+
+Both runs verified native editor rendering, equipment review and live status.
+The isolated instances closed and revoked their test pairings. Review tightened
+snapshot monotonicity, exact enum decoding and one-shot issuance validation.
+Native commissioning, independent roof clearance and recovery dispatch remain
+the next implementation and simulator gate.
+
 ## Moon Avoidance Test
 
 Run `run-server-plan-smoke.ps1 -PublicAcquisition -LocalTargetScheduling
