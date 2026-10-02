@@ -1,5 +1,43 @@
 # Real N.I.N.A. smoke test
 
+## Local target scheduling test
+
+Run `run-server-plan-smoke.ps1 -PublicAcquisition -LocalTargetScheduling` with
+the isolated server and plugin package arguments below. The fixture activates
+two projects/targets with three goals. The second target has higher priority.
+The public Session must select it first, slew through NINA's inherited-coordinate
+instruction, save one image, close its target hooks and slew to the other target
+while the server is stopped. It saves the other two images locally, parks,
+then the probe restores the server and delivers six events without duplicate
+credit. Replay of the consumed allocation is refused.
+
+Add `-AutomaticWorkloads` for the connected variant: it commissions both active
+projects, requests `local_sequence_v1`, retries the same grant, releases after
+all captures/park/check-in, then waits for pending assessment without recapturing.
+Both variants verify target order from the saved capture journals and the exact
+nine hook boundaries. UI rendering checks four tabs at 640/1000 px with nine
+labeled switches. No TS plugin is installed or needed.
+
+2026-10-01 evidence on NINA 3.3.0.1064 / ASCOM OmniSim / runtime 0.7.0 / IPC 8:
+
+- Offline target switch:
+  `artifacts/nina-smoke-e3044959c41a443fadd28cd1ef03c6af/probe/321a8b087f0441a993b81b3a2b8933ed/result.json`.
+- Multi-target automatic intake/release:
+  `artifacts/nina-smoke-4987c2a7c0704d63aee495c083720fc3/probe/880554a1675f4bf391168426494ac077/result.json`.
+- Prepared-target unsafe cancellation, park and no restart after safe recovery:
+  `artifacts/nina-smoke-67d5437c2e7a4f529cde11604a2dcb27/probe/fb178c4799134650aff983c9f53bb531/result.json`.
+
+Both multi-target variants were rerun with the committed plugin package and
+PSF Guard rebased on main through `ebfd93f8`. Both passed. The server's Director
+suite passed 97 tests with one existing ignored benchmark; server build and
+library clippy with warnings denied also passed.
+
+The serial plugin suite passes 675 tests, including local selection after slow
+setup, one-shot/unknown setup results, outstanding mode stability and atomic
+background status updates. These tests do not establish automatic equipment
+policies, learned duration estimates, active-grant quality correction or
+offline cold-start/recovery authorization.
+
 ## Automatic workload test
 
 Build a schema-18 PSF Guard server and the development plugin package, then run

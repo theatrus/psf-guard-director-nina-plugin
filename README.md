@@ -17,8 +17,10 @@ and safe execution boundaries.
 The architecture and acceptance gates live in
 [PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md).
 This repository is experimental, not a stable scheduler release. The public
-Director Session supports bounded acquisition of one already prepared target.
-See [prepared-target mode](docs/native-capture.md#public-prepared-target-mode-experimental)
+Director Session supports opt-in local multi-target scheduling and the original
+prepared-target mode. Rust selects priority/visibility-feasible goals locally;
+native sequence hooks prepare each target without waiting on server check-ins.
+See [local scheduling](docs/native-capture.md#local-target-scheduling-experimental)
 for setup, safety requirements and limitations.
 
 ## Runtime preview
@@ -132,7 +134,7 @@ public session uses this ledger; the runtime settings preview does not. See the
 The typed program API binds immutable targets, exposure recipes, and equipment
 capabilities to durable execution. It rejects changed capture evidence and
 preparation settings while keeping selection policy in Rust. These APIs are
-shared foundations for the prepared-target session, not a complete automatic scheduler.
+shared foundations for local target scheduling, not a complete automatic scheduler.
 
 The typed geometry API opens a separate geometry-bound ledger with the complete
 site, Earth-orientation validity, horizon, altitude limits, and meridian policy.
@@ -143,8 +145,9 @@ replacement windows. Old program-only calls cannot bypass geometry mode.
 The internal native geometry exporter now joins NINA's complete
 horizon/site snapshot with the matching equipment fingerprint for this client.
 The local orientation reader and continuous safety interlock are tested in the
-native probe and public prepared-target session. Automatic multi-target dispatch,
-resume and successor allocation accounting remain unfinished.
+native probe and public session. Local multi-target dispatch and clean successor
+accounting are implemented; automatic equipment policies and uncertain-work
+resume remain unfinished.
 
 The two dispatch-check APIs recheck an issued preparation command or reserved
 capture after native before-hooks. They preserve the original command, attempt

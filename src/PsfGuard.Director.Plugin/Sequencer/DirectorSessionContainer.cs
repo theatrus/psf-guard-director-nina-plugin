@@ -15,15 +15,16 @@ namespace PsfGuard.Director.Plugin.Sequencer;
 [Export(typeof(ISequenceItem))]
 [Export(typeof(ISequenceContainer))]
 [ExportMetadata("Name", "Director Session")]
-[ExportMetadata("Description", "Experimental Director prepared-target acquisition with native sequence hooks.")]
+[ExportMetadata("Description", "Experimental Director local target scheduling with native sequence hooks.")]
 [ExportMetadata("Icon", "TelescopeSVG")]
 [ExportMetadata("Category", "PSF Guard Director")]
 [JsonObject(MemberSerialization.OptIn)]
 public sealed class DirectorSessionContainer : SequentialContainer
 {
-    internal const string AcquisitionGate = "Enable prepared-target acquisition to run this session.";
+    internal const string AcquisitionGate = "Enable acquisition to run this session.";
     private readonly DirectorAcquisition? acquisition;
     private readonly object executionLock = new();
+    private readonly object displayLock = new();
     private CancellationTokenSource? executionCancellation;
     private Task? execution;
     private DirectorSessionOptions options = new();
@@ -73,8 +74,9 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
     public ICommand ReportEquipmentCommand => reportEquipmentCommand;
     public string SessionStatus => Display.Phase;
-    public string Readiness => !Options.EnableAcquisition ? AcquisitionGate : Options.AutomaticWorkloads
-        ? "Prepared target; commissioned automatic workloads" : "Prepared target; online one-shot allocation admission required";
+    public string Readiness => !Options.EnableAcquisition ? AcquisitionGate :
+        $"{(Options.LocalTargetScheduling ? "Local target scheduling; target setup in Before New Target" : "Prepared target")}; " +
+        (Options.AutomaticWorkloads ? "commissioned automatic workloads" : "online one-shot allocation admission required");
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
     private bool CanReportEquipment()
@@ -97,7 +99,14 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     internal void Report(DirectorSessionDisplay display)
     {
-        Display = display ?? throw new ArgumentNullException(nameof(display));
+        ArgumentNullException.ThrowIfNull(display);
+        UpdateDisplay(_ => display);
+    }
+
+    internal void UpdateDisplay(Func<DirectorSessionDisplay, DirectorSessionDisplay> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        lock (displayLock) Display = update(Display) ?? throw new InvalidOperationException("Missing Director status.");
         RaisePropertyChanged(nameof(Display));
         RaisePropertyChanged(nameof(SessionStatus));
     }

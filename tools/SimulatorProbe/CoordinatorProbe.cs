@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -24,6 +24,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool PublicAcquisition { get; private init; }
     internal bool PublicUnsafe { get; private init; }
     internal bool AutomaticWorkloads { get; private init; }
+    internal bool LocalTargetScheduling { get; private init; }
+    internal bool LocalTargetsVerified { get; private set; }
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
@@ -68,7 +70,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling };
         }
         catch
         {
@@ -173,57 +175,63 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 limits = (object?)null,
                 reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             }, token);
-        var project = Guid.NewGuid();
-        await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
-        await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/framing", new
+        var projectIds = new List<Guid>();
+        for (var targetIndex = 0; targetIndex < (LocalTargetScheduling ? 2 : 1); targetIndex++)
         {
-            project_id = project,
-            revision = 0,
-            updated_at_ms = 0,
-            target_name = target.Name,
-            center = new { ra_degrees = target.IcrsRaMas / 3600000.0, dec_degrees = target.IcrsDecMas / 3600000.0 },
-            position_angle_degrees = 0.0,
-            mosaic = new { rows = 1, columns = 1, overlap_percent = 0 },
-            panel_rig_id = binding.RigId,
-            panel = new { width_degrees = 2.0, height_degrees = 1.5 },
-            shown_rig_ids = Array.Empty<Guid>(),
-            rig_framings = Array.Empty<object>(),
-            survey_id = "dss2_color",
-            view_fov_degrees = 5.0
-        }, token);
-        var objectives = Enumerable.Range(0, 3).Select(i => new
-        {
-            id = Guid.NewGuid(),
-            bandpass_id = $"smoke_{i}",
-            purpose = "simulator",
-            goal = new { kind = "frames", value = 1 },
-            priority = 3 - i
-        }).ToArray();
-        var contributions = objectives.Select((objective, i) => new
-        {
-            id = Guid.NewGuid(),
-            objective_id = objective.id,
-            rig_id = binding.RigId,
-            template = new
+            var frame = targetIndex == 0 ? target : target with { Name = "Higher priority remote target", IcrsRaMas = (target.IcrsRaMas + 1080000) % 1296000000 };
+            var project = Guid.NewGuid();
+            projectIds.Add(project);
+            await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
+            await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/framing", new
             {
-                template_guid = (Guid?)null,
-                template_id = (int?)null,
-                name = $"Simulator filter {i}",
-                filter_name = filterNames[$"filter-{i}"],
-                gain = (int?)null,
-                offset = (int?)null,
-                bin = 1,
-                readout_mode = 0
-            },
-            exposure_seconds = PublicUnsafe ? 30.0 : 1.0,
-            panel_ids = Array.Empty<string>(),
-            enabled = true
-        }).ToArray();
-        await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/plan", new
-        { project_id = project, revision = 0, updated_at_ms = 0, objectives, contributions }, token);
-        var preview = await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/preview", new { }, token);
-        await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/apply",
-            new { preview_digest = preview.GetProperty("preview_digest").GetString() }, token);
+                project_id = project,
+                revision = 0,
+                updated_at_ms = 0,
+                target_name = frame.Name,
+                center = new { ra_degrees = frame.IcrsRaMas / 3600000.0, dec_degrees = frame.IcrsDecMas / 3600000.0 },
+                position_angle_degrees = 0.0,
+                mosaic = new { rows = 1, columns = 1, overlap_percent = 0 },
+                panel_rig_id = binding.RigId,
+                panel = new { width_degrees = 2.0, height_degrees = 1.5 },
+                shown_rig_ids = Array.Empty<Guid>(),
+                rig_framings = Array.Empty<object>(),
+                survey_id = "dss2_color",
+                view_fov_degrees = 5.0
+            }, token);
+            var objectives = Enumerable.Range(0, LocalTargetScheduling ? targetIndex == 0 ? 2 : 1 : 3).Select(i => new
+            {
+                id = Guid.NewGuid(),
+                bandpass_id = $"smoke_{i}",
+                purpose = "simulator",
+                goal = new { kind = "frames", value = 1 },
+                priority = targetIndex == 0 ? 3 - i : 10
+            }).ToArray();
+            var contributions = objectives.Select((objective, i) => new
+            {
+                id = Guid.NewGuid(),
+                objective_id = objective.id,
+                rig_id = binding.RigId,
+                template = new
+                {
+                    template_guid = (Guid?)null,
+                    template_id = (int?)null,
+                    name = $"Simulator filter {i}",
+                    filter_name = filterNames[$"filter-{i}"],
+                    gain = (int?)null,
+                    offset = (int?)null,
+                    bin = 1,
+                    readout_mode = 0
+                },
+                exposure_seconds = PublicUnsafe ? 30.0 : 1.0,
+                panel_ids = Array.Empty<string>(),
+                enabled = true
+            }).ToArray();
+            await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/plan", new
+            { project_id = project, revision = 0, updated_at_ms = 0, objectives, contributions }, token);
+            var preview = await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/preview", new { }, token);
+            await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/apply",
+                new { preview_digest = preview.GetProperty("preview_digest").GetString() }, token);
+        }
         using var client = new CoordinatorProgramClient(endpoint, Credential);
         var cache = new CoordinatorPreviewCache(root, endpoint, binding, configuration);
         var first = await client.ReadAndCachePreviewAsync(binding, configuration, cache, token);
@@ -234,7 +242,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
             || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != 3
             || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe ? 30000UL : 1000UL))
-            || second.Envelope.Program.Targets.Length != 1)
+            || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;
         var admission = new
@@ -259,12 +267,13 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     profile_id = binding.ProfileId,
                     profile_revision = second.Envelope.Rig.ProfileRevision,
                     configuration_id = configuration.Id,
-                    project_ids = new[] { project },
+                    project_ids = projectIds,
                     enabled = true,
                     revision = 1
                 }
             }, token);
-            using var work = new CoordinatorWorkloadClient(Path.Combine(Path.GetDirectoryName(root)!, "public-state"), endpoint, binding, pairing.ClientId, configuration, Credential);
+            using var work = new CoordinatorWorkloadClient(Path.Combine(Path.GetDirectoryName(root)!, "public-state"), endpoint, binding, pairing.ClientId, configuration, Credential,
+                localTargetScheduling: LocalTargetScheduling);
             allocation = (await work.RequestAsync(token)).Allocation ?? throw new InvalidDataException("Commissioned work was not issued.");
             if ((await work.RequestAsync(token)).Allocation?.Fingerprint != allocation.Fingerprint)
                 throw new InvalidDataException("Automatic request retry changed its immutable grant.");
@@ -287,10 +296,25 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         return allocation.Envelope.Snapshot.Program;
     }
 
+    internal void VerifyLocalTargets(IReadOnlyList<PsfGuard.Director.Plugin.Acquisition.CaptureEvidence> captures, IReadOnlyList<string> hooks)
+    {
+        if (!LocalTargetScheduling) return;
+        var program = allocation!.Envelope.Snapshot.Program;
+        var expected = program.Bindings.Single(b => b.GoalId == program.Assignment.Goals.Single(g => g.Priority == 10).Id).TargetId;
+        var ordered = captures.OrderBy(c => c.StartedAt).ToArray();
+        if (ordered.Length != 3 || ordered[0].Intent.Program?.TargetId != expected
+            || ordered[1].Intent.Program?.TargetId == expected || ordered[1].Intent.Program?.TargetId != ordered[2].Intent.Program?.TargetId
+            || !hooks.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget",
+                "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
+            throw new InvalidDataException("Local scheduling did not prioritize and visit both targets through native hooks.");
+        LocalTargetsVerified = true;
+    }
+
     private static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     internal async Task VerifyAutomaticWorkloadAsync(string root, DirectorConfiguration configuration, CancellationToken token)
     {
-        using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential);
+        using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
+            localTargetScheduling: LocalTargetScheduling);
         var waiting = await client.RequestAsync(token);
         if (waiting.Allocation is not null || waiting.RetryAfterSeconds != 30)
             throw new InvalidDataException("Pending assessment authorized duplicate acquisition.");
@@ -303,7 +327,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             catalog_id = pairing.Binding.CatalogId,
             request_id = AllocationId,
             configuration_id = configuration.Id,
-            execution_mode = "prepared_target_v1"
+            execution_mode = LocalTargetScheduling ? "local_sequence_v1" : "prepared_target_v1"
         });
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();

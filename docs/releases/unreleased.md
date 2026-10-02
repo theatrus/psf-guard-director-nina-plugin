@@ -1,5 +1,10 @@
 # Unreleased
 
+- Add opt-in local multi-target scheduling with shared-core priorities, native
+  target setup hooks, and background check-ins that let a running workload
+  switch targets while the server is offline. Old prepared-target sessions
+  remain supported; automatic equipment-operation defaults are still pending.
+
 - Add opt-in automatic commissioned workload intake to Director Session, with
   durable request retries, clean parked terminal check-in, and a bounded wait
   for eligible work or quality assessment. Successors cannot refill spent
