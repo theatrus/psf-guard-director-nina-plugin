@@ -41,8 +41,8 @@ public sealed class ReleaseManifestTests
         Assert.Equal(metadata["ShortDescription"], template["Descriptions"]!["ShortDescription"]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
         Assert.Contains("Experimental", metadata["ShortDescription"]);
-        Assert.Contains("prepared-target", metadata["ShortDescription"]);
-        Assert.Contains("Automatic scheduling and restart/resume are not yet available", template["Descriptions"]!["LongDescription"]!.GetValue<string>());
+        Assert.Contains("local target scheduling", metadata["ShortDescription"]);
+        Assert.Contains("Automatic equipment defaults and restart/resume are not yet available", template["Descriptions"]!["LongDescription"]!.GetValue<string>());
         Assert.Null(template["Channel"]);
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "experimental");
         Assert.Null(template["Installer"]);
