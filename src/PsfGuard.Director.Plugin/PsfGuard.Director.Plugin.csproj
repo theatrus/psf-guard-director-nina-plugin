@@ -6,7 +6,7 @@
     <RootNamespace>PsfGuard.Director.Plugin</RootNamespace>
     <Version>0.1.0.1</Version>
     <Title>PSF Guard Director</Title>
-    <Description>Experimental PSF Guard Director with bounded prepared-target acquisition.</Description>
+    <Description>Experimental PSF Guard Director with bounded local target scheduling.</Description>
     <Company>Yann Ramin (@theatrus)</Company>
     <Product>PSF Guard Director</Product>
     <Copyright>Copyright 2026 Yann Ramin</Copyright>

@@ -8,10 +8,12 @@ param(
     [switch]$PublicAcquisition,
     [switch]$PublicUnsafe,
     [switch]$AutomaticWorkloads,
+    [switch]$LocalTargetScheduling,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
 if ($PublicUnsafe -and !$PublicAcquisition) { throw 'PublicUnsafe requires PublicAcquisition.' }
+if ($LocalTargetScheduling -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'LocalTargetScheduling requires a safe public acquisition run.' }
 if ($AutomaticWorkloads -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'AutomaticWorkloads requires a safe PublicAcquisition run.' }
 $root = Join-Path $env:TEMP "director-server-plan-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $root, "$root/images" | Out-Null
@@ -60,7 +62,7 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
-        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AutomaticWorkloads=[bool]$AutomaticWorkloads } |
+        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -94,6 +96,7 @@ try {
     }
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     if ($AutomaticWorkloads -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
+    if ($LocalTargetScheduling -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {

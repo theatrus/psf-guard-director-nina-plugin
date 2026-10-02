@@ -46,6 +46,7 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly IProfileService profiles;
     private readonly ICameraMediator camera;
     private readonly ITelescopeMediator telescope;
+    private readonly IGuiderMediator guider;
     private readonly IFilterWheelMediator filters;
     private readonly ISafetyMonitorMediator safety;
     private readonly IImagingMediator imaging;
@@ -57,11 +58,12 @@ public sealed class SimulatorSequence : SequenceItem
     [ImportingConstructor]
     public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime)
+        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider)
     {
         this.profiles = profiles;
         this.camera = camera;
         this.telescope = telescope;
+        this.guider = guider;
         this.filters = filters;
         this.safety = safety;
         this.imaging = imaging;
@@ -73,7 +75,7 @@ public sealed class SimulatorSequence : SequenceItem
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -237,7 +239,7 @@ public sealed class SimulatorSequence : SequenceItem
                 program = await coordinator.ActivateAndReadProgramAsync(Path.Combine(run, "program-preview"), equipment,
                     equipmentReader.ReadFilterNames(equipmentBinding, equipment), programTarget, lifetime.Token);
                 assignment = program.Assignment;
-                programTarget = program.Targets.Single();
+                programTarget = program.Targets.First();
                 await coordinator.ReportStatusAsync(programTarget, "simulator_outage_test", lifetime.Token);
                 if (!coordinator.PublicAcquisition) await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
             }
@@ -251,12 +253,15 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
+                sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
                 sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
                     sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
+                if (coordinator.LocalTargetScheduling)
+                    sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
                 // The public session must own safety cancellation, not this probe.
                 safetyCancellation.Dispose();
                 using var publicLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
@@ -326,11 +331,13 @@ public sealed class SimulatorSequence : SequenceItem
                 var retry = new DirectorSessionContainer(service);
                 retry.Options.EnableAcquisition = true;
                 retry.Options.MaximumAltitude = 89;
+                retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 retry.Options.SlewCenter = retry.Options.Focus = retry.Options.Guiding = retry.Options.Dither = retry.Options.MeridianFlip = DirectorOperationOwner.Sequence;
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
                 Step("Public acquisition saved three frames; server refused a second launch");
-                if (!sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
+                coordinator.VerifyLocalTargets(captures, sessionHookEvents);
+                if (!coordinator.LocalTargetScheduling && !sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
                     throw new InvalidDataException("Public session hooks did not follow confirmed save boundaries.");
                 await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
                 return;
@@ -604,6 +611,7 @@ public sealed class SimulatorSequence : SequenceItem
                 liveStatusVerified = coordinator?.LiveStatusVerified ?? false,
                 equipmentReviewVerified = coordinator?.EquipmentReviewVerified ?? false,
                 automaticWorkloadVerified = coordinator?.AutomaticWorkloadVerified ?? false,
+                localTargetsVerified = coordinator?.LocalTargetsVerified ?? false,
                 steps,
                 evaluations,
                 operations,

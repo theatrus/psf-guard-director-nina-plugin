@@ -24,8 +24,43 @@ public sealed class CoordinatorWorkloadTests
             e.Revision, Now - 500, e with { Program = e.Program with { Assignment = e.Program.Assignment with { Id = $"allocation-{id:D}" } } });
     }
     private static string Root() => Path.Combine(Path.GetTempPath(), $"director-workload-{Guid.NewGuid():N}");
-    private static CoordinatorWorkloadClient Create(string root, Handler handler) => new(root, Endpoint, Binding, Client, Configuration,
-        _ => ValueTask.FromResult<string?>("test-token"), handler, new Clock());
+    private static CoordinatorWorkloadClient Create(string root, Handler handler, bool localTargets = false) => new(root, Endpoint, Binding, Client, Configuration,
+        _ => ValueTask.FromResult<string?>("test-token"), handler, new Clock(), localTargetScheduling: localTargets);
+
+    [Fact]
+    public async Task LostReplyCannotChangeTheExecutorsMode()
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(_ => throw new HttpRequestException())))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            using var changed = Create(root, new(_ => throw new Xunit.Sdk.XunitException("Changed mode must not send HTTP.")), true);
+            await Assert.ThrowsAsync<InvalidDataException>(() => changed.RequestAsync());
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task ConfirmedWaitingCanChangeModeWithoutDiscardingItsRequestIdentity()
+    {
+        var root = Root(); Guid id = default;
+        try
+        {
+            Handler Wire(string mode) => new(async r =>
+            {
+                var body = JsonDocument.Parse(await r.Content!.ReadAsStringAsync()).RootElement;
+                Assert.Equal(mode, body.GetProperty("execution_mode").GetString());
+                var requested = body.GetProperty("request_id").GetGuid();
+                if (id == Guid.Empty) id = requested; else Assert.Equal(id, requested);
+                return Response(new { request_id = id, state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            });
+            using (var first = Create(root, Wire("prepared_target_v1"))) Assert.Null((await first.RequestAsync()).Allocation);
+            using var changed = Create(root, Wire("local_sequence_v1"), true);
+            Assert.Null((await changed.RequestAsync()).Allocation);
+        }
+        finally { Directory.Delete(root, true); }
+    }
 
     [Fact]
     public async Task LostResponseAndRestartKeepRequestIdentityUntilVerifiedRelease()

@@ -1,5 +1,41 @@
 # Native capture adapter
 
+## Local target scheduling (experimental)
+
+Enable **Local target scheduling** in Director Session to run multiple targets
+within one admitted workload. The shared Rust core chooses the highest-priority
+feasible goal after each saved exposure and native preparation operation, using
+current NINA site, horizon, altitude, meridian limits and durable progress.
+The adapter resolves that goal's target and recipe; it does not rank targets.
+
+Put native inherited-coordinate slew/center, autofocus and guiding instructions
+in **Before New Target**, with their ownership set to **Sequence**. Director
+unparks and enables tracking before entering that slot. Target switches run
+**After New Target**, **After Each Target**, then **Before New Target** with the
+new target's context. Each confirmed save runs **After Each Exposure**. A wait
+ends the visit; returning runs setup again. Saved images are pending quality
+assessment, so they do not fire **After Target Complete**.
+
+Target setup runs as a core-issued, one-shot preparation operation with its
+actual duration retained in the local ledger. After a slow hook, Rust can halt
+unused preparation and select a newly eligible higher-priority goal. Unknown or
+failed hooks stop the session, rather than replaying hardware operations.
+Reported mount pointing must match the selected target within three arcminutes
+before reserving/capturing; this is not a pixel solve.
+
+Target and periodic capture check-ins use a bounded background pump. An offline
+server does not block a local target switch. Final check-in/park/release still
+must finish before a new workload is authorized. First launch remains online;
+offline execution stays inside that workload's original expiry and budget.
+Use **Automatic workloads** independently to renew work after clean release.
+Its capability request is `local_sequence_v1`, while existing single-target
+sessions keep `prepared_target_v1`. An outstanding request cannot change modes.
+
+This is not full TS operation-policy parity: automatic centering, focus,
+guiding, dithering, flips, learned duration estimates, feedback revisions and
+offline cold-start recovery remain unfinished. Target setup is sequence-owned.
+Acquisition and local scheduling stay off by default, preserving old sequences.
+
 ## Public prepared-target mode (experimental)
 
 ### Automatic workload intake
@@ -24,8 +60,9 @@ or preparation uncertainty, changed configuration and revoked credentials stop
 renewal. Keep the local state for reconciliation. There is no automatic restart
 recovery, rejected-image feedback or attempt-budget increase yet. Manual
 allocations cannot be switched into this release protocol retroactively.
-This mode still requires one prepared target and the ownership settings below;
-it does not add automatic multi-target centering/focus/guiding/flip defaults.
+Without **Local target scheduling**, this mode still requires one prepared
+target and the ownership settings below. Neither mode adds automatic
+centering/focus/guiding/flip defaults.
 
 `Director Session` can opt in to prepared-target acquisition. It requires the
 server's one-shot allocation-start API, online first launch, a connected safe
@@ -33,13 +70,13 @@ monitor, matching commissioned equipment/site/horizon, and dated NINA IERS
 data. Sequence files cannot store launch authority. Lost launch responses and
 restarts require reconciliation; this mode never reuses a consumed allocation.
 
-Enable prepared-target acquisition in the Session tab. Select **Sequence** for
+Enable acquisition in the Session tab. Select **Sequence** for
 centering, autofocus, guiding, dithering and meridian flips, and **Director**
 for startup/shutdown. Prepare one allocated target through normal NINA
 instructions or the Before New Target hook. The executor requires reported
 pointing within three arcminutes and tracking before exposure; this check is
-not plate-solve evidence. Rotation requests and automatic multi-target work are
-not supported yet. Unsupported policies fail validation, not silent fallback.
+not plate-solve evidence. Rotation requests are not supported yet. Unsupported
+policies fail validation, not silent fallback.
 
 The shared core selects recipes and owns preparation/capture budgets. Native
 exposure instructions inherit sequence triggers/conditions; all seven named
@@ -57,7 +94,7 @@ operations stop acquisition. Authentication failures never become offline
 fallback. Preserve the local acquisition directory for reconciliation.
 
 The historical sections below describe the adapters' earlier validation gates;
-the public increment does not remove gates for automatic multi-target work,
+the public increment does not remove gates for automatic operation policies,
 resume/successor accounting, duration learning or pixel-verified pointing.
 
 This is the internal acquisition building block for Director's session
@@ -732,7 +769,7 @@ distributed in the plugin archive; the installed NINA host owns those files.
 
 `Director Session` is a public Advanced Sequencer container, separate from Sync
 and TS. It exports both native item/container contracts and its own WPF template.
-Acquisition stays disabled until the explicit prepared-target toggle and narrow
+Acquisition stays disabled until the explicit enable toggle and narrow
 ownership/safety policies validate. The enable field requests acquisition; it
 cannot bypass online one-shot server admission, native safety, orientation or
 fresh dispatch checks. The test-only simulator is not shipped in the archive.
@@ -747,7 +784,7 @@ The editor saves versioned local requests in four groups:
 - Offline continuation, start/end/target check-ins, batch interval, and live
   status with its independent interval.
 
-Prepared-target mode binds these requests to its session owner. It refuses
+Both acquisition modes bind these requests to their session owner. They refuse
 attended mode and automatic centering/focus/guiding/dither/flip ownership.
 Sequence-owned dithering uses native trigger configuration, not the Director
 dither interval. Sequence ownership means explicit native instructions/triggers,

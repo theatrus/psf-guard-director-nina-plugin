@@ -8,7 +8,7 @@ public sealed record CoordinatorWorkloadResult(CoordinatorAllocation? Allocation
 /// retryable; the separate allocation launch is still strictly one-shot.</summary>
 public sealed class CoordinatorWorkloadClient : IDisposable
 {
-    private sealed record Pending(int SchemaVersion, string Origin, CoordinatorBinding Binding, Guid ClientId, Guid RequestId, string ConfigurationId, bool Submitted, string? AllocationFingerprint);
+    private sealed record Pending(int SchemaVersion, string Origin, CoordinatorBinding Binding, Guid ClientId, Guid RequestId, string ConfigurationId, bool Submitted, string? AllocationFingerprint, string ExecutionMode = "prepared_target_v1");
     private sealed record Workload(CoordinatorAllocationEnvelope Allocation, bool Released, Guid? LedgerId, ulong? TerminalSequence);
     private sealed record Reply(Guid RequestId, string State, Workload? Workload, int RetryAfterSeconds);
     private readonly CoordinatorTransport transport;
@@ -17,19 +17,21 @@ public sealed class CoordinatorWorkloadClient : IDisposable
     private readonly Guid clientId;
     private readonly DirectorConfiguration configuration;
     private readonly TimeProvider clock;
+    private readonly string executionMode;
 
     public CoordinatorWorkloadClient(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId,
-        DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false)
-        : this(root, endpoint, binding, clientId, configuration, credential, CoordinatorTransport.Handler(), TimeProvider.System, allowInsecureHttp) { }
+        DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false, bool localTargetScheduling = false)
+        : this(root, endpoint, binding, clientId, configuration, credential, CoordinatorTransport.Handler(), TimeProvider.System, allowInsecureHttp, localTargetScheduling) { }
 
     internal CoordinatorWorkloadClient(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId,
         DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, HttpMessageHandler handler,
-        TimeProvider clock, bool allowInsecureHttp = false)
+        TimeProvider clock, bool allowInsecureHttp = false, bool localTargetScheduling = false)
     {
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")) throw new ArgumentException("Exact client and configuration required.");
         transport = new(endpoint, credential, handler, allowInsecureHttp);
         this.binding = binding; this.clientId = clientId; this.configuration = configuration; this.clock = clock;
+        executionMode = localTargetScheduling ? "local_sequence_v1" : "prepared_target_v1";
         file = new(root, new { origin = transport.Endpoint.AbsoluteUri, binding, clientId }, "workload-request");
     }
 
@@ -44,7 +46,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             catalog_id = binding.CatalogId,
             request_id = pending.RequestId,
             configuration_id = configuration.Id,
-            execution_mode = "prepared_target_v1"
+            execution_mode = executionMode
         }, token).ConfigureAwait(false);
         var reply = Read<Reply>(bytes);
         if (reply.RequestId != pending.RequestId) throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
@@ -107,14 +109,16 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         var p = file.Read<Pending>();
         if (p is null)
         {
-            p = new(1, transport.Endpoint.AbsoluteUri, binding, clientId, Guid.NewGuid(), configuration.Id, false, null);
+            p = new(1, transport.Endpoint.AbsoluteUri, binding, clientId, Guid.NewGuid(), configuration.Id, false, null, executionMode);
             file.Write(p);
         }
         if (p.SchemaVersion != 1 || p.Origin != transport.Endpoint.AbsoluteUri || p.Binding != binding || p.ClientId != clientId
-            || p.RequestId == Guid.Empty || p.Submitted && p.ConfigurationId != configuration.Id
+            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1")
+            || p.Submitted && (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode)
             || p.AllocationFingerprint is not null && (p.AllocationFingerprint.Length != 64 || !p.AllocationFingerprint.All(char.IsAsciiHexDigitLower)))
             throw new InvalidDataException("Outstanding workload request does not match this equipment. Reconciliation is required.");
-        if (p.ConfigurationId != configuration.Id) { p = p with { ConfigurationId = configuration.Id }; file.Write(p); }
+        if (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode)
+        { p = p with { ConfigurationId = configuration.Id, ExecutionMode = executionMode }; file.Write(p); }
         return p;
     }
     private void Advance(Pending p) => file.Write(p with { RequestId = Guid.NewGuid(), Submitted = false, AllocationFingerprint = null });

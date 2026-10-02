@@ -18,7 +18,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
     NinaEquipmentSnapshot equipment, TimeProvider clock, ITelescopeMediator? telescope = null)
 {
     internal NinaIssuedItem Create(PreparationNext next, DirectorProgram program, NinaEquipmentBinding local,
-        Func<CancellationToken, Task<Action>> revalidateAtDispatch)
+        Func<CancellationToken, Task<Action>> revalidateAtDispatch,
+        Func<IProgress<ApplicationStatus>, CancellationToken, Task>? beforeTarget = null)
     {
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
         if (next is not PreparationNext.Run run) throw new InvalidOperationException("Only a newly issued operation can create a native item.");
@@ -74,6 +75,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         });
         item = command.Operation switch
         {
+            PreparationOperation.BeforeTarget when beforeTarget is not null =>
+                new IssuedBeforeTarget(fence, beforeTarget) { Name = "Director target setup" },
             PreparationOperation.Unpark when telescope is not null && local.TelescopeDeviceId is not null =>
                 new IssuedUnpark(telescope, fence, () =>
                 {
@@ -144,6 +147,15 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         public override object Clone() => throw new NotSupportedException("Issued Director operations cannot be cloned.");
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) =>
             fence.ExecuteAsync(() => Task.CompletedTask, token);
+    }
+
+    private sealed class IssuedBeforeTarget(NinaOperationFence fence,
+        Func<IProgress<ApplicationStatus>, CancellationToken, Task> run) : SequenceItem
+    {
+        public override int Attempts { get => 1; set => RequireSingleAttempt(value); }
+        public override object Clone() => throw new NotSupportedException("Issued Director operations cannot be cloned.");
+        public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) =>
+            fence.ExecuteAsync(() => run(progress, token), token);
     }
 
     private static void RequireSingleAttempt(int attempts)

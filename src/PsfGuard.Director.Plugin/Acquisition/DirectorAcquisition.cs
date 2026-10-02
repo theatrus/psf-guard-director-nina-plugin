@@ -16,8 +16,8 @@ using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.Plugin.Acquisition;
 
-// The first public mode executes an already prepared single target. It does not
-// pretend to implement automatic centering, focus, guiding, or meridian flips.
+// Rust selects local work; native sequence slots own target preparation. The
+// prepared-target mode remains available for existing single-target sessions.
 [Export(typeof(DirectorAcquisition))]
 public sealed class DirectorAcquisition
 {
@@ -48,12 +48,12 @@ public sealed class DirectorAcquisition
     internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options, bool requireEnabled = true)
     {
         var issues = new List<string>();
-        if (requireEnabled && !options.EnableAcquisition) issues.Add("Enable prepared-target acquisition to run this session.");
+        if (requireEnabled && !options.EnableAcquisition) issues.Add("Enable acquisition to run this session.");
         if (options.Safety != DirectorSafetyPolicy.RequireMonitor) issues.Add("Public acquisition requires a connected safety monitor.");
         if (new[] { options.SlewCenter, options.Focus, options.Guiding, options.Dither, options.MeridianFlip }.Any(x => x != DirectorOperationOwner.Sequence))
-            issues.Add("Prepared-target mode requires sequence ownership for centering, autofocus, guiding, dithering and meridian flips.");
+            issues.Add("Current acquisition modes require sequence ownership for centering, autofocus, guiding, dithering and meridian flips.");
         if (options.Startup != DirectorOperationOwner.Director || options.Shutdown != DirectorOperationOwner.Director)
-            issues.Add("Prepared-target mode requires Director startup and shutdown (unpark/park).");
+            issues.Add("Acquisition requires Director startup and shutdown (unpark/park).");
         return issues;
     }
 
@@ -83,14 +83,14 @@ public sealed class DirectorAcquisition
         var reader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         var names = reader.ReadFilterNames(equipmentBinding, configuration);
         using var client = new CoordinatorEquipmentClient(endpoint, Credential, connection.AllowInsecureHttp);
-        container.Report(container.Display with { Phase = "Reporting equipment", Operation = "Equipment report" });
+        container.UpdateDisplay(d => d with { Phase = "Reporting equipment", Operation = "Equipment report" });
         var ack = await client.ReportAsync(pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names,
             checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), token);
         await Credential(token);
         if (constraints.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision || reader.Read(equipmentBinding).Id != configuration.Id
             || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
             throw new InvalidOperationException("Equipment report was received, but local settings changed. Report the current setup again.");
-        container.Report(container.Display with
+        container.UpdateDisplay(d => d with
         {
             Phase = ack.AcceptedRevision is null ? "Equipment reported; awaiting operator review" : "Equipment report already reviewed",
             Rig = pairing.Binding.RigId.ToString("D"),
@@ -163,7 +163,8 @@ public sealed class DirectorAcquisition
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
-        using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential, connection.AllowInsecureHttp);
+        using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
+            connection.AllowInsecureHttp, options.LocalTargetScheduling);
         CoordinatorAllocation allocation;
         if (options.AutomaticWorkloads)
         {
@@ -195,11 +196,13 @@ public sealed class DirectorAcquisition
             allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
         }
         var program = allocation.Envelope.Snapshot.Program;
-        if (program.Targets.Length != 1 || program.Targets[0].PositionAngleMas is not null
+        if (program.Targets.IsEmpty || !options.LocalTargetScheduling && program.Targets.Length != 1 || program.Targets.Any(t => t.PositionAngleMas is not null)
             || program.Configuration.EnableSlewCenter || program.Configuration.DitherEvery != 0
             || program.Recipes.Any(r => r.DitherOverride is > 0))
-            throw new InvalidOperationException("Prepared-target mode requires one target, no rotation request, and sequence-owned centering/dithering.");
-        var target = program.Targets.Single();
+            throw new InvalidOperationException("The allocation exceeds this mode's target, rotation or sequence-owned preparation capabilities.");
+        DirectorTarget? target = null;
+        DirectorPointing? previousPointing = null;
+        var targetContexts = new Dictionary<string, NinaTargetContainer>(StringComparer.Ordinal);
         var assignment = program.Assignment;
         var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
@@ -215,11 +218,15 @@ public sealed class DirectorAcquisition
         var launched = false;
         Task? watchdog = null;
         Task? telemetryTask = null;
+        Task? checkpointTask = null;
         using var background = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        using var checkpointWake = new SemaphoreSlim(0, 1);
+        using var checkpointDelivery = new SemaphoreSlim(1, 1);
         NinaTargetContainer? context = null;
         CoordinatorCheckpointClient? checkpoint = null;
         CoordinatorSessionReporter? telemetry = null;
         Exception? executionError = null;
+        Exception? reportingError = null;
         var released = false;
         var terminalFailed = false;
         try
@@ -237,26 +244,23 @@ public sealed class DirectorAcquisition
             telemetry = new CoordinatorSessionReporter(endpoint, pairing.Binding, Credential, connection.AllowInsecureHttp);
             if (options.LiveStatus) telemetryTask = TelemetryAsync(telemetry, ledger.LedgerId);
             var hooks = new NinaSessionHooks(container, TimeProvider.System);
-            context = new NinaTargetContainer(profiles, profile, target, nighttime.Calculate(), TimeProvider.System);
-            context.AttachNewParent(container);
-            await hooks.SelectTargetAsync(target.Id, context, progress, lifetime.Token);
-            CheckPointing();
-            if (options.CheckInAtStart || options.CheckInOnTarget) await CheckIn();
+            if (options.CheckInAtStart) await CheckIn();
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
                 TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
             var nextCheckIn = DateTimeOffset.UtcNow;
+            checkpointTask = CheckpointPumpAsync();
             while (true)
             {
                 Check();
                 var current = Snapshot();
                 var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
-                Report(decision.Reason, container.Display.Connectivity);
+                Report(decision.Reason, null);
                 if (decision.Action == PlannerAction.Complete)
                 {
-                    await hooks.TargetCompletedAsync(progress, lifetime.Token);
+                    if (context is not null) await hooks.TargetCompletedAsync(progress, lifetime.Token);
                     break;
                 }
                 if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
@@ -264,25 +268,63 @@ public sealed class DirectorAcquisition
                 {
                     if (options.ParkOnWait) await Park(lifetime.Token);
                     await hooks.WaitAsync(ct => Task.Delay(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
-                    await hooks.SelectTargetAsync(target.Id, context, progress, lifetime.Token);
+                    // Waiting ends the target visit, so re-enter its setup on
+                    // the next core selection even if the mount has not moved.
+                    previousPointing = null;
                     continue;
                 }
                 if (decision.Action != PlannerAction.Acquire || decision.GoalId is null)
                     throw new InvalidOperationException($"Director stopped: {decision.Reason}.");
-                CheckPointing();
+                // Resolve the core's choice, never sort targets in the adapter.
+                var selected = program.Bindings.Single(b => b.GoalId == decision.GoalId);
+                target = program.Targets.Single(t => t.Id == selected.TargetId);
+                if (!targetContexts.TryGetValue(target.Id, out context))
+                {
+                    context = new NinaTargetContainer(profiles, profile, target, nighttime.Calculate(), TimeProvider.System);
+                    context.AttachNewParent(container);
+                    targetContexts.Add(target.Id, context);
+                }
+                var selectedTarget = target;
+                var selectedContext = context;
+                var newTarget = previousPointing?.Target.Id != target.Id;
                 var id = Guid.NewGuid().ToString("D");
-                var began = Require(await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
-                    new(configuration, new(configuration.Id, target), telescope.GetInfo().AtPark, false, 0),
-                    new(30000, 0, 0, 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token));
+                var begin = await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
+                    new(configuration, previousPointing, telescope.GetInfo().AtPark, false, 0),
+                    new(30000, 0, 0, 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token);
+                if (begin.Error == LedgerError.PreparationNotSelected)
+                {
+                    // No operation was issued. Conditions/time can change
+                    // between selection and preparation admission.
+                    Report("Reevaluating local work", null);
+                    await Task.Delay(TimeSpan.FromSeconds(1), lifetime.Token);
+                    continue;
+                }
+                var began = Require(begin);
                 if (!began.Created) throw new InvalidOperationException("Preparation is not new.");
+                var reselect = false;
                 while (true)
                 {
                     current = Snapshot();
                     var next = Require(await runtime.AdvanceGeometryPreparationAsync(id, current.Configuration, current.Constraints, current.State, lifetime.Token));
                     if (next is PreparationNext.ReadyToReserve) break;
+                    if (next is PreparationNext.Decision stopped && CanReselect(stopped.Value))
+                    {
+                        // A clean boundary is not an uncertain hardware result.
+                        // Close the unused preparation and ask Rust for work again.
+                        Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                        reselect = true;
+                        break;
+                    }
                     if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
                     var block = TargetBlock();
-                    var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, block.ValidateContext));
+                    var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, block.ValidateContext),
+                        async (p, ct) =>
+                        {
+                            container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = "Target setup" });
+                            await hooks.SelectTargetAsync(selectedTarget.Id, selectedContext, p, ct);
+                            Check(); CheckPointing();
+                            previousPointing = new(configuration.Id, selectedTarget);
+                        });
                     using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                     operationDeadline.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds));
                     try { await RunItem(block, issued.Item, operationDeadline.Token); }
@@ -294,9 +336,18 @@ public sealed class DirectorAcquisition
                     if (issued.Fence.Completion?.Outcome is not PreparationOutcome.Succeeded)
                         throw new InvalidOperationException("Native preparation failed.");
                 }
+                if (reselect) continue;
+                CheckPointing();
+                if (options.CheckInOnTarget && newTarget) QueueCheckIn();
                 current = Snapshot();
                 var captureId = Guid.NewGuid().ToString("D");
                 var reservation = Require(await runtime.ReserveGeometryPreparedAsync(id, captureId, current.Configuration, current.Constraints, current.State, lifetime.Token));
+                if (reservation.Kind == ReservationKind.Decision && CanReselect(reservation.Decision))
+                {
+                    Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                    continue;
+                }
+                if (reservation.Kind != ReservationKind.Created) throw new InvalidOperationException("Capture reservation is not newly authorized.");
                 var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding ?? throw new InvalidDataException("Missing capture binding.");
                 var captureBlock = TargetBlock();
                 var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
@@ -306,7 +357,7 @@ public sealed class DirectorAcquisition
                     if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
                         throw new InvalidOperationException("Mount is not tracking and ready to expose.");
                 }));
-                container.Report(container.Display with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
+                container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
                 await RunItem(captureBlock, exposure, lifetime.Token);
                 var evidence = exposure.Evidence;
                 if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
@@ -314,30 +365,53 @@ public sealed class DirectorAcquisition
                 await hooks.ExposureSavedAsync(captureId, progress, lifetime.Token);
                 if (DateTimeOffset.UtcNow >= nextCheckIn)
                 {
-                    await CheckIn();
+                    QueueCheckIn();
                     nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
                 }
             }
             await hooks.FinishAsync(progress, lifetime.Token);
             if (options.CheckInAtEnd) await CheckIn();
-            Report("Allocation finished; awaiting assessment or a new reconciled plan", container.Display.Connectivity);
+            Report("Allocation finished; awaiting assessment or a new reconciled plan", null);
 
-            async Task CheckIn()
+            void QueueCheckIn()
+            {
+                if (checkpointWake.CurrentCount == 0) checkpointWake.Release();
+            }
+            async Task CheckpointPumpAsync()
             {
                 try
                 {
+                    while (true)
+                    {
+                        await checkpointWake.WaitAsync(background.Token);
+                        await CheckIn(background.Token);
+                    }
+                }
+                catch (OperationCanceledException) when (background.IsCancellationRequested) { }
+                catch (Exception error) { Logger.Error(error); lifetime.Cancel(); throw; }
+            }
+            async Task CheckIn(CancellationToken? cancellation = null)
+            {
+                var ct = cancellation ?? lifetime.Token;
+                await checkpointDelivery.WaitAsync(ct);
+                try
+                {
                     var result = await checkpoint.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
-                        allocation.Envelope.PreviewRevision, token: lifetime.Token);
-                    container.Report(container.Display with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
+                        allocation.Envelope.PreviewRevision, token: ct);
+                    container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
-                { Report("Offline; capture evidence retained locally", "Offline"); }
+                {
+                    container.UpdateDisplay(d => d with { Connectivity = "Offline", QueueDepth = "Pending" });
+                    Logger.Info("Director check-in offline; local scheduling continues within the allocation.");
+                }
+                finally { checkpointDelivery.Release(); }
             }
         }
         catch (Exception error)
         {
             executionError = error;
-            Report(launched ? "Stopped; allocation consumed, reconciliation required" : "Acquisition admission failed", container.Display.Connectivity);
+            Report(launched ? "Stopped; allocation consumed, reconciliation required" : "Acquisition admission failed", null);
             throw;
         }
         finally
@@ -345,8 +419,13 @@ public sealed class DirectorAcquisition
             background.Cancel();
             if (watchdog is not null) await watchdog;
             if (telemetryTask is not null) await telemetryTask;
-            context?.AttachNewParent(null);
-            context?.NighttimeData.Ticker.Stop();
+            if (checkpointTask is not null)
+            {
+                // Do not let a reporting fault skip the physical shutdown.
+                try { await checkpointTask; }
+                catch (Exception error) { reportingError = error; executionError ??= error; }
+            }
+            foreach (var c in targetContexts.Values) { c.AttachNewParent(null); c.NighttimeData.Ticker.Stop(); }
             if (launched)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -378,10 +457,10 @@ public sealed class DirectorAcquisition
                 {
                     var phase = !parked ? "Shutdown failed" : terminalFailed || executionError is not null ? "Stopped; parked; reconciliation required"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
-                    Report(phase, container.Display.Connectivity);
+                    Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
-                        try { await telemetry.ReportAsync(allocation, LastLedger.LedgerId, phase, target.Name, interlock.Read().Safety.ToString(), cleanup.Token); }
+                        try { await telemetry.ReportAsync(allocation, LastLedger.LedgerId, phase, target?.Name ?? "", interlock.Read().Safety.ToString(), cleanup.Token); }
                         catch (Exception error) { Logger.Error(error); }
                     }
                     telemetry?.Dispose();
@@ -390,6 +469,7 @@ public sealed class DirectorAcquisition
             }
             else { telemetry?.Dispose(); checkpoint?.Dispose(); }
         }
+        if (reportingError is not null) throw new InvalidOperationException("Director check-in failed.", reportingError);
         return released;
 
         static ulong Now() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -409,17 +489,18 @@ public sealed class DirectorAcquisition
         }
         void CheckPointing()
         {
+            if (target is null) throw new InvalidOperationException("No core-selected target.");
             var info = telescope.GetInfo();
             if (!info.Connected || info.DeviceId != equipmentBinding.TelescopeDeviceId || info.Slewing)
                 throw new InvalidOperationException("Prepared telescope is unavailable or moving.");
             var p = telescope.GetCurrentPosition().Transform(Epoch.J2000);
             var expected = new Coordinates(target.IcrsRaMas / 3600000.0, target.IcrsDecMas / 3600000.0, Epoch.J2000, Coordinates.RAType.Degrees);
             if (!double.IsFinite(p.RA) || !double.IsFinite(p.Dec) || (p - expected).Distance.Degree > 0.05)
-                throw new InvalidOperationException("Prepare the allocated target with native slew/center instructions before acquisition (pointing tolerance 3 arcmin).");
+                throw new InvalidOperationException("Prepare the selected target using native slew/center instructions in Before New Target (pointing tolerance 3 arcmin).");
         }
         NinaTargetContainer TargetBlock()
         {
-            var block = new NinaTargetContainer(profiles, profile, target, nighttime.Calculate(), TimeProvider.System);
+            var block = new NinaTargetContainer(profiles, profile, target ?? throw new InvalidOperationException("No selected target."), nighttime.Calculate(), TimeProvider.System);
             block.AttachNewParent(container); return block;
         }
         async Task RunItem(NinaTargetContainer block, NINA.Sequencer.SequenceItem.SequenceItem item, CancellationToken ct)
@@ -463,9 +544,9 @@ public sealed class DirectorAcquisition
             catch (OperationCanceledException) when (background.IsCancellationRequested) { }
             catch (Exception e) { Logger.Error(e); lifetime.Cancel(); }
         }
-        void Report(string phase, string connectivity)
+        void Report(string phase, string? connectivity)
         {
-            container.Report(container.Display with { Phase = phase, Rig = rig, Connectivity = connectivity, Safety = interlock.Read().Safety.ToString() });
+            container.UpdateDisplay(d => d with { Phase = phase, Rig = rig, Connectivity = connectivity ?? d.Connectivity, Safety = interlock.Read().Safety.ToString() });
             Logger.Info($"PSF Guard Director: {phase}");
             try { progress.Report(new ApplicationStatus { Status = phase }); }
             catch (Exception error) { Logger.Error(error); }
@@ -475,4 +556,6 @@ public sealed class DirectorAcquisition
     private static bool OfflineFailure(CoordinatorIntakeFailure failure) => failure is CoordinatorIntakeFailure.Transport
         or CoordinatorIntakeFailure.Timeout or CoordinatorIntakeFailure.ServerUnavailable or CoordinatorIntakeFailure.Busy;
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Value ?? throw new InvalidOperationException($"Director ledger refused: {result.Error}");
+    internal static bool CanReselect(PlannerDecision? decision) => decision is { Action: PlannerAction.Wait }
+        or { Action: PlannerAction.CheckIn, Reason: "preparation_goal_changed" };
 }

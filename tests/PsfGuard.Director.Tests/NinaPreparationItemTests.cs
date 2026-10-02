@@ -17,6 +17,26 @@ public sealed class NinaPreparationItemTests
 {
     private static readonly IProgress<ApplicationStatus> Progress = new Progress<ApplicationStatus>();
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TargetSetupUsesTheCoreFenceAndReportsUnknownHookFailures(bool fail)
+    {
+        var f = new Fixture();
+        var command = f.Command with { Operation = new PreparationOperation.BeforeTarget() };
+        var calls = 0;
+        var issued = f.Factory.Create(new PreparationNext.Run(command), f.Program, f.Native.Binding, NativeDispatchTest.Allow,
+            (_, _) => { calls++; if (fail) throw new IOException(); return Task.CompletedTask; });
+        Assert.Throws<NotSupportedException>(() => issued.Item.Clone());
+        if (fail) await Assert.ThrowsAsync<IOException>(() => issued.Item.Execute(Progress, default));
+        else await issued.Item.Execute(Progress, default);
+        Assert.Equal(1, calls);
+        if (fail) Assert.IsType<PreparationOutcome.Uncertain>(issued.Fence.Completion!.Outcome);
+        else Assert.IsType<PreparationOutcome.Succeeded>(issued.Fence.Completion!.Outcome);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => issued.Item.Execute(Progress, default));
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public async Task NativeContainerKeepsInheritedTriggersAndFencesAfterThem()
     {

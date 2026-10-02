@@ -10,6 +10,7 @@ using NINA.Sequencer.SequenceItem.Utility;
 using NINA.Sequencer.Utility;
 using PsfGuard.Director.Plugin.Acquisition;
 using PsfGuard.Director.Plugin.Sequencer;
+using PsfGuard.Director.Runtime;
 using Xunit;
 
 namespace PsfGuard.Director.Tests;
@@ -22,6 +23,27 @@ public sealed class DirectorSessionContainerTests
         PreserveReferencesHandling = PreserveReferencesHandling.Objects
     };
     private static readonly IProgress<ApplicationStatus> Progress = new Progress<ApplicationStatus>();
+
+    [Fact]
+    public async Task BackgroundConnectivityUpdatesKeepTheCurrentLocalTarget()
+    {
+        var session = new DirectorSessionContainer();
+        var target = Task.Run(() => { for (var i = 0; i < 1000; i++) session.UpdateDisplay(d => d with { Target = i.ToString() }); });
+        var checkin = Task.Run(() => { for (var i = 0; i < 1000; i++) session.UpdateDisplay(d => d with { QueueDepth = i.ToString() }); });
+        await Task.WhenAll(target, checkin);
+        Assert.Equal("999", session.Display.Target);
+        Assert.Equal("999", session.Display.QueueDepth);
+    }
+
+    [Theory]
+    [InlineData(PlannerAction.Wait, "future_window", true)]
+    [InlineData(PlannerAction.CheckIn, "preparation_goal_changed", true)]
+    [InlineData(PlannerAction.CheckIn, "conditions_stale", false)]
+    [InlineData(PlannerAction.CheckIn, "configuration_mismatch", false)]
+    [InlineData(PlannerAction.Stop, "safety_not_confirmed", false)]
+    [InlineData(PlannerAction.Acquire, "highest_priority_feasible_goal", false)]
+    public void OnlyCleanLocalSelectionBoundariesMayReselect(PlannerAction action, string reason, bool expected) =>
+        Assert.Equal(expected, DirectorAcquisition.CanReselect(new(action, reason)));
 
     [Fact]
     public async Task EquipmentReportingCannotRunWithoutNativeServicesOrSerializeAuthority()
@@ -53,6 +75,8 @@ public sealed class DirectorSessionContainerTests
     {
         var session = new DirectorSessionContainer();
         session.Options.MaximumHours = 6;
+        session.Options.LocalTargetScheduling = true;
+        session.Options.AutomaticWorkloads = true;
         session.Options.MinimumAltitude = 30;
         session.Options.MaximumAltitude = 85;
         session.Options.MeridianBeforeMinutes = 60;
