@@ -47,8 +47,8 @@ internal static class PipeProtocol
             throw new InvalidDataException("Runtime response belongs to a different session or request.");
         var payload = reply.GetProperty("payload");
         if (type == "ready")
-            RequireFields(payload, "type", "runtime_version", "engine_version", "contract_version", "rig_id", "storage_enabled");
-        else if (type is "decision" or "ledger")
+            RequireFields(payload, "type", "runtime_version", "engine_version", "contract_version", "rig_id", "storage_enabled", "recovery_enabled", "recovery_version");
+        else if (type is "decision" or "ledger" or "recovery")
             RequireFields(payload, "type", "response");
         else
             RequireFields(payload, "type");

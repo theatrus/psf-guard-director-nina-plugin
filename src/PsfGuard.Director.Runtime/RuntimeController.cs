@@ -7,6 +7,7 @@ public sealed class RuntimeController : IAsyncDisposable
 {
     private readonly string pluginDirectory;
     private readonly string? storageDirectory;
+    private readonly string? recoveryDirectory;
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly object cancellationLock = new();
     private readonly TimeSpan heartbeatInterval;
@@ -28,11 +29,13 @@ public sealed class RuntimeController : IAsyncDisposable
 
     public RuntimeController(string pluginDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5)) { }
     public RuntimeController(string pluginDirectory, string storageDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory) { }
-    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null)
+    public RuntimeController(string pluginDirectory, string storageDirectory, string recoveryDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory, recoveryDirectory) { }
+    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null, string? recoveryDirectory = null)
     {
         this.pluginDirectory = pluginDirectory;
         this.heartbeatInterval = heartbeatInterval;
         this.storageDirectory = RuntimeSession.NormalizeStorageDirectory(storageDirectory);
+        this.recoveryDirectory = RuntimeSession.NormalizeStorageDirectory(recoveryDirectory);
     }
 
     public async Task StartAsync(string rigId, CancellationToken token = default)
@@ -52,7 +55,7 @@ public sealed class RuntimeController : IAsyncDisposable
             SetStatus(new(RuntimeState.Starting, "Starting runtime", rigId));
             try
             {
-                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token, storageDirectory).ConfigureAwait(false);
+                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token, storageDirectory, recoveryDirectory).ConfigureAwait(false);
                 activeSession = session;
                 SetStatus(new(RuntimeState.Ready, "Ready", rigId));
                 run = SuperviseAsync(session, rigId, cancellation.Token);
@@ -89,6 +92,14 @@ public sealed class RuntimeController : IAsyncDisposable
 
     public Task<PlannerEvaluation> EvaluateAsync(PlannerRequest request, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.EvaluateAsync(request, linked), token);
+    public Task<RecoveryResult<RecoveryOpened>> OpenRecoveryAsync(RecoveryIdentity identity, RecoveryPolicy policy, ulong nowMs, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.OpenRecoveryAsync(identity, policy, nowMs, linked), token);
+    public Task<RecoveryResult<RecoveryCurrent>> ReadRecoveryAsync(CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReadRecoveryAsync(linked), token);
+    public Task<RecoveryResult<RecoveryApplied>> ApplyRecoveryAsync(RecoveryRequest request, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ApplyRecoveryAsync(request, linked), token);
+    public Task<RecoveryResult<RecoveryPage>> ReadRecoveryEventsAsync(string nightId, ulong after, int limit = 16, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReadRecoveryEventsAsync(nightId, after, limit, linked), token);
     public Task<LedgerResult<LedgerIdentity>> OpenLedgerAsync(PlannerRequest request, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.OpenLedgerAsync(request, linked), token);
     public Task<LedgerResult<LedgerReservation>> ReserveAsync(string captureId, PlannerState state, CancellationToken token = default) =>
