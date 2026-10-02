@@ -12,6 +12,17 @@ the server, verifies exactly three pending images and no credit for the
 blocked goal, and refuses replay. The connected automatic-workload variant
 uses enabled fractional Moon settings to exercise v2 capability admission.
 
+2026-10-01 validation: NINA 3.3.0.1064 nightly, ASCOM OmniSim, bundled runtime
+0.8.0 / engine 0.3.0 / IPC 8 and an isolated PSF Guard server. Both passed:
+
+- Offline lunar-blocked priority and parked wait:
+  `artifacts/nina-smoke-3050d3783ec5403a855d5bbc62d1cead/probe/3975fc2c18e24826b6ac485573a3c463/result.json`.
+- Connected v2 automatic intake, release and pending-assessment wait:
+  `artifacts/nina-smoke-ec12e6ca28e04f42a2aae3aaea860e52/probe/e71c2ed748254e8299a5a028e2595fd0/result.json`.
+
+The full plugin suite passed 681 tests. Review also corrected stale release
+descriptions; the second native run used that rebuilt committed package.
+
 ## Local target scheduling test
 
 Run `run-server-plan-smoke.ps1 -PublicAcquisition -LocalTargetScheduling` with
