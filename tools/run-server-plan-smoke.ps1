@@ -7,6 +7,8 @@ param(
     [string]$Python = 'python',
     [switch]$PublicAcquisition,
     [switch]$PublicUnsafe,
+    [switch]$DeferredCheckIn,
+    [switch]$OfflineWorkloadRelease,
     [switch]$AbortWithoutPark,
     [switch]$EnclosureClosure,
     [switch]$AutomaticWorkloads,
@@ -18,6 +20,8 @@ $ErrorActionPreference = 'Stop'
 if ($EnclosureClosure -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $MoonAvoidance)) { throw 'EnclosureClosure requires only PublicAcquisition.' }
 if ($MoonAvoidance -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $AutomaticWorkloads -or $PublicUnsafe)) { throw 'MoonAvoidance requires safe public local scheduling without automatic workloads.' }
 if ($PublicUnsafe -and !$PublicAcquisition) { throw 'PublicUnsafe requires PublicAcquisition.' }
+if ($DeferredCheckIn -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $EnclosureClosure -or $MoonAvoidance)) { throw 'DeferredCheckIn requires safe public acquisition without automatic workloads.' }
+if ($OfflineWorkloadRelease -and (!$AutomaticWorkloads -or !$PublicAcquisition -or $DeferredCheckIn)) { throw 'OfflineWorkloadRelease requires automatic public acquisition.' }
 if ($AbortWithoutPark -and !$PublicUnsafe) { throw 'AbortWithoutPark requires PublicUnsafe.' }
 if ($LocalTargetScheduling -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'LocalTargetScheduling requires a safe public acquisition run.' }
 if ($AutomaticWorkloads -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'AutomaticWorkloads requires a safe PublicAcquisition run.' }
@@ -68,7 +72,7 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
-        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance } |
+        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -97,7 +101,7 @@ try {
     }
     if (!$result) { throw "No simulator result; inspect $($started.TestRoot)" }
     $evidence = Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json
-    if (!$evidence.passed -or (!$AutomaticWorkloads -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
+    if (!$evidence.passed -or ((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
         throw "Server-plan smoke failed; inspect $($result.FullName)"
     }
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }

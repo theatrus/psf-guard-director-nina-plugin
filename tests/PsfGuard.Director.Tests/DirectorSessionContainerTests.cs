@@ -92,6 +92,7 @@ public sealed class DirectorSessionContainerTests
         session.Options.Safety = DirectorSafetyPolicy.Attended;
         session.Options.Enclosure = DirectorEnclosurePolicy.RequireOpenShutter;
         session.Options.OnAbort = DirectorAbortPolicy.StopMount;
+        session.Options.CheckInMode = DirectorCheckInMode.Deferred;
         session.Options.Horizon = DirectorHorizonPolicy.MinimumAltitude;
         session.Options.Startup = session.Options.SlewCenter = session.Options.Focus = session.Options.Guiding =
             session.Options.Dither = session.Options.MeridianFlip = session.Options.Shutdown = DirectorOperationOwner.Sequence;

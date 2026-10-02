@@ -1,5 +1,10 @@
 # Unreleased
 
+- Choose live or deferred capture check-ins. Deliver saved runs from plugin
+  settings, a Director Check In sequence action, or the next session's start.
+  Cancel and resume without resending acknowledged events. Cleanly completed,
+  parked offline workloads can finish their release when the server returns;
+  aborted or uncertain runs remain outstanding and never restart automatically.
 - Choose whether an aborted Director Session parks the mount (when enclosure
   clearance permits) or only stops slewing and tracking. Failed parks also
   attempt to stop motion; successful tracking-off is no longer reported as an error.

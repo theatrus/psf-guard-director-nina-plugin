@@ -51,7 +51,7 @@ internal static class SessionUiProbe
                     .Where(control => !string.IsNullOrEmpty(System.Windows.Automation.AutomationProperties.GetName(control))).ToArray();
                 if (tab == 0)
                 {
-                    if (controls.OfType<ComboBox>().Count() != 11 || controls.OfType<TextBox>().Count() != 10
+                    if (controls.OfType<ComboBox>().Count() != 12 || controls.OfType<TextBox>().Count() != 10
                         || controls.OfType<CheckBox>().Count() != 9)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())

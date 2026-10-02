@@ -173,7 +173,7 @@
                                 <Expander Header="Check-ins and status" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                         <TextBlock Grid.Row="0" Text="Continue authorized work offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue authorized work offline" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="1" Text="Check in at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
@@ -188,6 +188,9 @@
                                         <CheckBox Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="7" Text="Capture delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Capture delivery" MaxWidth="320" Margin="0,3"
+                                            ToolTip="Deferred skips target and periodic capture delivery. Session-end delivery follows its checkbox; automatic workloads always check in before requesting a successor. Live status is independent." />
                                     </Grid>
                                 </Expander>
                             </StackPanel>

@@ -123,9 +123,23 @@ public sealed class DirectorAcquisition
 
     internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, CancellationToken token)
     {
-        using var owner = new AcquisitionLease(LocalStateRoot);
+        var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
+        if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         using var session = CancellationTokenSource.CreateLinkedTokenSource(token);
         session.CancelAfter(TimeSpan.FromHours(container.Options.MaximumHours));
+        if (container.Options.CheckInAtStart)
+        {
+            try
+            {
+                container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
+                var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
+                { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; cursor {p.AcknowledgedThrough}" }));
+                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, session.Token);
+            }
+            catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
+            { Logger.Info("Director saved-run check-in offline; evidence retained."); }
+        }
+        using var owner = new AcquisitionLease(LocalStateRoot);
         do
         {
             if (!await ExecuteAllocationAsync(container, progress, owner, session.Token)) break;
@@ -238,6 +252,7 @@ public sealed class DirectorAcquisition
         var released = false;
         var terminalFailed = false;
         var mountShutdown = new NinaMountShutdown();
+        var archive = new CoordinatorRunArchive(runRoot, endpoint, pairing.Binding, pairing.ClientId, connection.AllowInsecureHttp);
         try
         {
             await runtime.StartAsync(rig, lifetime.Token);
@@ -245,6 +260,8 @@ public sealed class DirectorAcquisition
             var snapshot = Snapshot();
             var ledger = Require(await runtime.OpenGeometryAsync(program, snapshot.Constraints, snapshot.State, lifetime.Token));
             LastLedger = ledger;
+            archive.Store(new(allocation.Envelope, snapshot.Constraints, snapshot.State, ledger,
+                options.AutomaticWorkloads, options.LocalTargetScheduling));
             // Server accepts this only once. Nothing on disk can replay this permit.
             await intake.StartOnceAsync(pairing.Binding, pairing.ClientId, allocation, ledger, lifetime.Token);
             launched = true;
@@ -260,7 +277,7 @@ public sealed class DirectorAcquisition
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
             var nextCheckIn = DateTimeOffset.UtcNow;
-            checkpointTask = CheckpointPumpAsync();
+            if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
             {
                 Check();
@@ -379,11 +396,16 @@ public sealed class DirectorAcquisition
                 }
             }
             await hooks.FinishAsync(progress, lifetime.Token);
-            if (options.CheckInAtEnd) await CheckIn();
+            if (options.CheckInAtEnd) await CheckIn(drain: true);
             Report("Allocation finished; awaiting assessment or a new reconciled plan", null);
 
             void QueueCheckIn()
             {
+                if (options.CheckInMode != DirectorCheckInMode.Live)
+                {
+                    container.UpdateDisplay(d => d with { QueueDepth = "Deferred" });
+                    return;
+                }
                 if (checkpointWake.CurrentCount == 0) checkpointWake.Release();
             }
             async Task CheckpointPumpAsync()
@@ -399,15 +421,19 @@ public sealed class DirectorAcquisition
                 catch (OperationCanceledException) when (background.IsCancellationRequested) { }
                 catch (Exception error) { Logger.Error(error); lifetime.Cancel(); throw; }
             }
-            async Task CheckIn(CancellationToken? cancellation = null)
+            async Task CheckIn(CancellationToken? cancellation = null, bool drain = false)
             {
                 var ct = cancellation ?? lifetime.Token;
                 await checkpointDelivery.WaitAsync(ct);
                 try
                 {
-                    var result = await checkpoint.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
-                        allocation.Envelope.PreviewRevision, token: ct);
-                    container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
+                    CoordinatorCheckpointResult result;
+                    do
+                    {
+                        result = await checkpoint.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
+                            allocation.Envelope.PreviewRevision, token: ct);
+                        container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
+                    } while (drain && !result.CaughtUp);
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
                 {
@@ -454,12 +480,14 @@ public sealed class DirectorAcquisition
                         if (Require(await runtime.FindUnresolvedAttemptAsync(cleanup.Token)).Attempt is not null
                             || Require(await runtime.FindActivePreparationAsync(cleanup.Token)).Record is not null)
                             throw new InvalidOperationException("Unresolved operations prevent terminal workload release.");
+                        archive.MarkCompleted();
                         try
                         {
                             var final = await checkpoint!.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
                                 allocation.Envelope.PreviewRevision, maxPages: 256, token: cleanup.Token);
                             if (!final.CaughtUp) throw new InvalidOperationException("Capture feed is not fully delivered; workload remains outstanding.");
                             await workloads.ReleaseAsync(allocation, LastLedger!, final.AcknowledgedThrough, cleanup.Token);
+                            archive.MarkReleased();
                             released = true;
                         }
                         catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
