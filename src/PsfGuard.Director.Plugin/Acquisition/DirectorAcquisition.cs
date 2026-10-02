@@ -438,9 +438,16 @@ public sealed class DirectorAcquisition
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
                 var parked = false;
+                var stopped = false;
+                var aborted = executionError is not null || lifetime.IsCancellationRequested;
                 try
                 {
-                    await Park(cleanup.Token); parked = true;
+                    if (aborted && options.OnAbort == DirectorAbortPolicy.StopMount)
+                    {
+                        NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
+                        stopped = true;
+                    }
+                    else { await Park(cleanup.Token); parked = true; }
                     if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
                     {
                         if (Require(await runtime.FindUnresolvedAttemptAsync(cleanup.Token)).Attempt is not null
@@ -463,8 +470,9 @@ public sealed class DirectorAcquisition
                 catch { terminalFailed = true; throw; }
                 finally
                 {
-                    var phase = !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
-                        : terminalFailed || executionError is not null ? "Stopped; parked; reconciliation required"
+                    var phase = stopped ? "Stopped; tracking off; reconciliation required"
+                        : !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
+                        : terminalFailed || aborted ? "Stopped; parked; reconciliation required"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
                     Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)

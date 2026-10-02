@@ -4,6 +4,9 @@ public sealed record DirectorChoice<T>(T Value, string Label);
 
 public static class DirectorSessionChoices
 {
+    public static IReadOnlyList<DirectorChoice<DirectorAbortPolicy>> AbortPolicies { get; } =
+        [new(DirectorAbortPolicy.ParkMount, "Park mount (clearance required)"),
+         new(DirectorAbortPolicy.StopMount, "Stop slew and tracking (no park)")];
     public static IReadOnlyList<DirectorChoice<DirectorEnclosurePolicy>> EnclosurePolicies { get; } =
         [new(DirectorEnclosurePolicy.Unconfigured, "Not configured"), new(DirectorEnclosurePolicy.OpenAir, "Open air (no enclosure)"),
          new(DirectorEnclosurePolicy.RequireOpenShutter, "Require fully open enclosure")];

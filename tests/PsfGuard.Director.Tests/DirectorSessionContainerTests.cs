@@ -91,6 +91,7 @@ public sealed class DirectorSessionContainerTests
         session.Options.MeridianAfterMinutes = 4;
         session.Options.Safety = DirectorSafetyPolicy.Attended;
         session.Options.Enclosure = DirectorEnclosurePolicy.RequireOpenShutter;
+        session.Options.OnAbort = DirectorAbortPolicy.StopMount;
         session.Options.Horizon = DirectorHorizonPolicy.MinimumAltitude;
         session.Options.Startup = session.Options.SlewCenter = session.Options.Focus = session.Options.Guiding =
             session.Options.Dither = session.Options.MeridianFlip = session.Options.Shutdown = DirectorOperationOwner.Sequence;
@@ -127,8 +128,10 @@ public sealed class DirectorSessionContainerTests
         session.BeforeNewTarget.IsExpanded = false;
         session.Report(DirectorSessionDisplay.Empty with { ProgramRevision = "runtime-only-revision", Target = "M31" });
         session.Options.MeridianBeforeMinutes = 50;
+        session.Options.OnAbort = DirectorAbortPolicy.StopMount;
         var clone = Assert.IsType<DirectorSessionContainer>(session.Clone());
         Assert.NotSame(session.Options, clone.Options);
+        Assert.Equal(DirectorAbortPolicy.StopMount, clone.Options.OnAbort);
         Assert.NotSame(session.BeforeNewTarget, clone.BeforeNewTarget);
         Assert.Same(clone.BeforeNewTarget, clone.BeforeNewTarget.Items[0].Parent);
         Assert.All(clone.InstructionBlocks, block => Assert.Same(clone, block.Parent));

@@ -1,5 +1,10 @@
 # Unreleased
 
+- Choose whether an aborted Director Session parks the mount (when enclosure
+  clearance permits) or only stops slewing and tracking. Failed parks also
+  attempt to stop motion; successful tracking-off is no longer reported as an error.
+- Restore preview release packaging while retaining experimental labeling.
+
 - Require an explicit enclosure-clearance policy before acquisition. Existing
   sequences start unconfigured. Fully-open enclosure evidence is independent of
   weather safety: closure or lost clearance aborts acquisition, requests mount

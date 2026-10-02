@@ -1,5 +1,22 @@
 # Native capture adapter
 
+## Abort Policy
+
+Director Session > Session > Safety and visibility > **On abort** selects
+**Park mount (clearance required)** or **Stop slew and tracking (no park)**.
+The choice is saved in the sequence and applies to operator cancellation,
+unsafe conditions, session timeout and acquisition errors after launch. Older
+sequences retain the park default. Normal completion still parks; **Park during
+waits** controls planned waits separately. Aborted workloads are not released
+as successful, and recovery never restarts the stopped owner automatically.
+
+Parking always requires independent enclosure clearance. If the enclosure is
+not clear, Director stops slewing and tracking without starting a park. A
+failed, cancelled or timed-out park also attempts both stop commands. Failures
+remain visible; Director never retries parking automatically or commands a
+replacement mount/profile. NINA's tracking setter returns the resulting state:
+`false` confirms tracking-off, rather than indicating command failure.
+
 ## Enclosure Clearance
 
 The public Session requires an explicit **Enclosure clearance** policy under

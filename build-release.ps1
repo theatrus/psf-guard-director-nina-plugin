@@ -12,10 +12,7 @@ try {
     if ([Reflection.AssemblyName]::GetAssemblyName($assembly).Version -ne $version) {
         throw 'Manifest version does not match the built plugin.'
     }
-    if ($manifest.ContainsKey('Channel') -or $manifest.Tags -notcontains 'experimental' -or
-        !$manifest.Descriptions.ShortDescription.Contains('Acquisition is not yet available.')) {
-        throw 'The shared registry feed requires explicit preview labeling and no Channel override.'
-    }
+    & "$PSScriptRoot/tools/validate-preview-manifest.ps1" -Manifest $manifest
     $tag = "$version-preview.1"
     $name = "PSFGuardDirector-$version.zip"
     $archive = Join-Path $PSScriptRoot "artifacts/$name"

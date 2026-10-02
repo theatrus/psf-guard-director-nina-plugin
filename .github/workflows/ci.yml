@@ -41,7 +41,9 @@ jobs:
         run: ./build-package.ps1
       - name: Build preview release metadata
         shell: pwsh
-        run: ./build-release.ps1
+        run: |
+          ./tools/test-preview-manifest.ps1
+          ./build-release.ps1
       - uses: actions/upload-artifact@v7
         with:
           name: director-development-bundle
