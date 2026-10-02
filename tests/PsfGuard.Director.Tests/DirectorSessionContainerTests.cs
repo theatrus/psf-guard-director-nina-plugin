@@ -17,6 +17,14 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class DirectorSessionContainerTests
 {
+    [Fact]
+    public void MoonWindowsCanCloseAfterCleanPreparationWithoutBecomingAnEquipmentFailure()
+    {
+        var decision = new PlannerDecision(PlannerAction.CheckIn, "no_authorized_feasible_work");
+        Assert.False(DirectorAcquisition.CanReselect(decision));
+        Assert.True(DirectorAcquisition.CanReselect(decision, moonScheduling: true));
+        Assert.False(DirectorAcquisition.CanReselect(new(PlannerAction.Stop, "unsafe"), moonScheduling: true));
+    }
     private static readonly JsonSerializerSettings Settings = new()
     {
         TypeNameHandling = TypeNameHandling.Auto,

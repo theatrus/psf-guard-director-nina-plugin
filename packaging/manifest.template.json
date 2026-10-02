@@ -11,7 +11,7 @@
   "Tags": ["psf-guard", "director", "experimental"],
   "MinimumApplicationVersion": { "Major": 3, "Minor": 3, "Patch": 0, "Build": 1058 },
   "Descriptions": {
-    "ShortDescription": "Experimental PSF Guard Director with bounded prepared-target acquisition.",
-    "LongDescription": "Experimental Director for operator-issued, single prepared-target allocations. Requires NINA safety monitoring and sequence-owned centering, focus, guiding, dithering and meridian flips. Automatic scheduling and restart/resume are not yet available. Director is separate from PSF Guard Sync and does not replace or change Sync."
+    "ShortDescription": "Experimental PSF Guard Director with bounded local target scheduling.",
+    "LongDescription": "Experimental Director with shared-core target priorities and Moon avoidance inside bounded allocations. Supports commissioned automatic workload requests and local execution during coordinator outages. Requires NINA safety monitoring and sequence-owned centering, focus, guiding, dithering and meridian flips. Automatic equipment defaults and restart/resume are not yet available. Director is separate from PSF Guard Sync and does not replace or change Sync."
   }
 }

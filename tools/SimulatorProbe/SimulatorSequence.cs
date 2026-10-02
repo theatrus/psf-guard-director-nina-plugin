@@ -291,7 +291,19 @@ public sealed class SimulatorSequence : SequenceItem
                         Step("Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
                         return;
                     }
-                    if (coordinator.AutomaticWorkloads)
+                    if (coordinator.MoonAvoidance)
+                    {
+                        using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                        while (!executing.IsCompleted && (sessionContainer.Display.Phase != "moon_avoidance"
+                            || !telescope.GetInfo().AtPark || !sessionHookEvents.Contains("BeforeWait")))
+                            await Task.Delay(100, waitingDeadline.Token);
+                        if (executing.IsCompleted) throw new InvalidDataException("Moon avoidance did not retain a parked waiting session.");
+                        publicLifetime.Cancel();
+                        try { await executing; throw new InvalidDataException("Moon wait ignored cancellation."); }
+                        catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                    }
+                    else if (coordinator.AutomaticWorkloads)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                         waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
@@ -612,6 +624,7 @@ public sealed class SimulatorSequence : SequenceItem
                 equipmentReviewVerified = coordinator?.EquipmentReviewVerified ?? false,
                 automaticWorkloadVerified = coordinator?.AutomaticWorkloadVerified ?? false,
                 localTargetsVerified = coordinator?.LocalTargetsVerified ?? false,
+                moonAvoidanceVerified = coordinator is { MoonAvoidance: true, LocalTargetsVerified: true },
                 steps,
                 evaluations,
                 operations,

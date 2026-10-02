@@ -1,5 +1,29 @@
 # Native capture adapter
 
+## Exposure Moon Avoidance
+
+Runtime 0.8 / engine 0.3 enforces the explicit Moon policy carried by each
+server recipe. Configure it in PSF Guard's exposure template library. NINA
+does not implement a separate lunar scorer: the shared Rust core intersects
+whole-operation lunar windows with the site's horizon, meridian constraints
+and allocation limits. A blocked high-priority recipe cannot displace eligible
+work. Equal-priority choices prefer the more Moon-sensitive recipe.
+
+When only lunar rules block the remaining work, the session reports
+`moon_avoidance`, runs the native wait slots and parks when **Park on wait** is
+enabled. It keeps evaluating locally during a coordinator outage. A clean
+preparation that outlasts its lunar window is closed before asking Rust again;
+uncertain or failed native operations are never silently retried.
+
+Automatic requests advertise `prepared_target_v2` or `local_sequence_v2`.
+Ambiguous requests saved by the old plugin retry their original v1 capability
+until the server confirms waiting or release; they cannot switch scope during
+recovery. Older non-lunar ledgers remain readable. Moon policies cannot use a
+non-geometry ledger, and binding comparisons preserve exact JSON numbers.
+
+Inherited policy defaults, configurable preference weights, detailed lunar
+diagnostics and quality-pause recovery remain separate unfinished phase work.
+
 ## Local target scheduling (experimental)
 
 Enable **Local target scheduling** in Director Session to run multiple targets

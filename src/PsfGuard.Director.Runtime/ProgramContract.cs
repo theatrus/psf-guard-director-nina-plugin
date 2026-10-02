@@ -25,7 +25,10 @@ public sealed record DirectorConfiguration(string RigId, string Id, string Camer
     ImmutableArray<DirectorFilter> Filters, ImmutableArray<CameraBinning> BinningModes, ImmutableArray<short> ReadoutModes,
     CameraControl Gain, CameraControl Offset, ulong ExposureMinMs, ulong ExposureMaxMs, bool EnableSlewCenter, uint DitherEvery);
 public sealed record ExposureRecipe(string Id, ulong ExposureMs, string FilterId, CameraBinning Binning,
-    int? Gain, int? Offset, short ReadoutMode, uint? DitherOverride);
+    int? Gain, int? Offset, short ReadoutMode, uint? DitherOverride,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DirectorMoonPolicy? Moon = null);
+public sealed record DirectorMoonPolicy(bool Enabled, double SeparationDegrees, double WidthDays,
+    double RelaxDegreesPerDegree, double RelaxMinAltitudeDegrees, double RelaxMaxAltitudeDegrees, bool MoonDown);
 public sealed record GoalBinding(string GoalId, string TargetId, string RecipeId);
 public sealed record DirectorPointing(string ConfigurationId, DirectorTarget Target);
 public sealed record ProgramLocalState(DirectorConfiguration Configuration, DirectorPointing? PreviousPointing,
@@ -93,12 +96,10 @@ internal static class ProgramContract
                 for (var i = 0; i < expected.GetArrayLength(); i++) RequireExact(actual[i], expected[i]);
                 break;
             case JsonValueKind.Number:
-                if (expected.TryGetUInt64(out var unsigned))
-                {
-                    if (!actual.TryGetUInt64(out var other) || other != unsigned) throw new InvalidDataException("Program integer mismatch.");
-                }
-                else if (!expected.TryGetInt64(out var signed) || !actual.TryGetInt64(out var other) || signed != other)
-                    throw new InvalidDataException("Program integer mismatch.");
+                // Numeric equality accepts 7.0 versus 7 without rounding IDs
+                // or underflowing small policy values through decimal/double.
+                if (!JsonElement.DeepEquals(actual, expected))
+                    throw new InvalidDataException("Program number mismatch.");
                 break;
             case JsonValueKind.String:
                 if (actual.GetString() != expected.GetString()) throw new InvalidDataException("Program text mismatch.");
