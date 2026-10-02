@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -25,6 +25,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool PublicUnsafe { get; private init; }
     internal bool AutomaticWorkloads { get; private init; }
     internal bool LocalTargetScheduling { get; private init; }
+    internal bool MoonAvoidance { get; private init; }
     internal bool LocalTargetsVerified { get; private set; }
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
@@ -70,7 +71,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance };
         }
         catch
         {
@@ -198,13 +199,13 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 survey_id = "dss2_color",
                 view_fov_degrees = 5.0
             }, token);
-            var objectives = Enumerable.Range(0, LocalTargetScheduling ? targetIndex == 0 ? 2 : 1 : 3).Select(i => new
+            var objectives = Enumerable.Range(0, LocalTargetScheduling ? targetIndex == 0 ? MoonAvoidance ? 3 : 2 : 1 : 3).Select(i => new
             {
                 id = Guid.NewGuid(),
                 bandpass_id = $"smoke_{i}",
                 purpose = "simulator",
                 goal = new { kind = "frames", value = 1 },
-                priority = targetIndex == 0 ? 3 - i : 10
+                priority = MoonAvoidance && i == 2 ? 100 : targetIndex == 0 ? 3 - i : 10
             }).ToArray();
             var contributions = objectives.Select((objective, i) => new
             {
@@ -220,7 +221,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     gain = (int?)null,
                     offset = (int?)null,
                     bin = 1,
-                    readout_mode = 0
+                    readout_mode = 0,
+                    moon = MoonAvoidance && i == 2
+                        ? new DirectorMoonPolicy(true, 180, 14, 0, -90, -89, true)
+                        : new DirectorMoonPolicy(true, 0.25, 7, 0, -15, 5, false)
                 },
                 exposure_seconds = PublicUnsafe ? 30.0 : 1.0,
                 panel_ids = Array.Empty<string>(),
@@ -240,7 +244,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         var second = await restarted.ReadAndCachePreviewAsync(binding, configuration,
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
-            || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != 3
+            || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
             || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
@@ -304,9 +308,12 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         var ordered = captures.OrderBy(c => c.StartedAt).ToArray();
         if (ordered.Length != 3 || ordered[0].Intent.Program?.TargetId != expected
             || ordered[1].Intent.Program?.TargetId == expected || ordered[1].Intent.Program?.TargetId != ordered[2].Intent.Program?.TargetId
-            || !hooks.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget",
+            || !hooks.Where(h => !MoonAvoidance || h is not ("BeforeWait" or "AfterWait")).SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget",
                 "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
             throw new InvalidDataException("Local scheduling did not prioritize and visit both targets through native hooks.");
+        if (MoonAvoidance && (!hooks.Contains("BeforeWait") || captures.Any(c => c.Intent.Program?.RecipeId ==
+            program.Bindings.Single(b => b.GoalId == program.Assignment.Goals.Single(g => g.Priority == 100).Id).RecipeId)))
+            throw new InvalidDataException("Moon-blocked work was captured or did not enter native wait hooks.");
         LocalTargetsVerified = true;
     }
 
@@ -327,7 +334,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             catalog_id = pairing.Binding.CatalogId,
             request_id = AllocationId,
             configuration_id = configuration.Id,
-            execution_mode = LocalTargetScheduling ? "local_sequence_v1" : "prepared_target_v1"
+            execution_mode = LocalTargetScheduling ? "local_sequence_v2" : "prepared_target_v2"
         });
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
@@ -381,8 +388,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, pairing.Binding, configuration), token);
         if (!delivered && preview.Envelope.Revision != previewRevision)
             throw new InvalidDataException("Server restart changed unchanged program identity.");
-        if (delivered && (preview.Envelope.Revision == previewRevision || preview.Envelope.Program.Assignment.Goals.Length != 3
-            || preview.Envelope.Program.Assignment.Goals.Any(g => g.Pending != 1 || g.Accepted != 0)))
+        if (delivered && (preview.Envelope.Revision == previewRevision || preview.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
+            || preview.Envelope.Program.Assignment.Goals.Any(g => g.Pending != (MoonAvoidance && g.Priority == 100 ? 0U : 1U) || g.Accepted != 0)))
             throw new InvalidDataException("Server did not retain exactly one pending capture per goal after duplicate delivery.");
         using var allocations = new CoordinatorAllocationClient(endpoint, Credential);
         var current = await allocations.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);

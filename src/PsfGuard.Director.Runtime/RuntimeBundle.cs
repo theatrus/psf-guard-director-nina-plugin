@@ -7,8 +7,8 @@ public static class RuntimeContract
 {
     public const int ProtocolVersion = 8;
     public const int ContractVersion = 2;
-    public const string RuntimeVersion = "0.7.0";
-    public const string EngineVersion = "0.2.0";
+    public const string RuntimeVersion = "0.8.0";
+    public const string EngineVersion = "0.3.0";
     public const string ExecutableName = "psf-guard-director-runtime.exe";
     internal const int MaxFrameBytes = 266240;
 

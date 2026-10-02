@@ -55,9 +55,40 @@ public sealed class CoordinatorWorkloadTests
                 if (id == Guid.Empty) id = requested; else Assert.Equal(id, requested);
                 return Response(new { request_id = id, state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
             });
-            using (var first = Create(root, Wire("prepared_target_v1"))) Assert.Null((await first.RequestAsync()).Allocation);
-            using var changed = Create(root, Wire("local_sequence_v1"), true);
+            using (var first = Create(root, Wire("prepared_target_v2"))) Assert.Null((await first.RequestAsync()).Allocation);
+            using var changed = Create(root, Wire("local_sequence_v2"), true);
             Assert.Null((await changed.RequestAsync()).Allocation);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpgradeRetriesAmbiguousLegacyRequestBeforeAdvertisingNewCapabilities(bool localTargets)
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(_ => throw new HttpRequestException()), localTargets))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var state = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+            var legacy = localTargets ? "local_sequence_v1" : "prepared_target_v1";
+            state["execution_mode"] = legacy;
+            await File.WriteAllTextAsync(path, state.ToJsonString());
+            var requests = 0;
+            using var restarted = Create(root, new(async request =>
+            {
+                var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+                Assert.Equal(requests++ == 0 ? legacy : localTargets ? "local_sequence_v2" : "prepared_target_v2",
+                    body.GetProperty("execution_mode").GetString());
+                Assert.Equal(state["request_id"]!.GetValue<string>(), body.GetProperty("request_id").GetString());
+                return Response(new { request_id = body.GetProperty("request_id").GetGuid(), state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            }), localTargets);
+            Assert.Null((await restarted.RequestAsync()).Allocation);
+            Assert.Null((await restarted.RequestAsync()).Allocation);
+            Assert.Equal(2, requests);
         }
         finally { Directory.Delete(root, true); }
     }

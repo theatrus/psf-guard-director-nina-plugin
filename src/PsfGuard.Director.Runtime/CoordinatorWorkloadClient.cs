@@ -31,7 +31,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         if (clientId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")) throw new ArgumentException("Exact client and configuration required.");
         transport = new(endpoint, credential, handler, allowInsecureHttp);
         this.binding = binding; this.clientId = clientId; this.configuration = configuration; this.clock = clock;
-        executionMode = localTargetScheduling ? "local_sequence_v1" : "prepared_target_v1";
+        executionMode = localTargetScheduling ? "local_sequence_v2" : "prepared_target_v2";
         file = new(root, new { origin = transport.Endpoint.AbsoluteUri, binding, clientId }, "workload-request");
     }
 
@@ -46,7 +46,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             catalog_id = binding.CatalogId,
             request_id = pending.RequestId,
             configuration_id = configuration.Id,
-            execution_mode = executionMode
+            execution_mode = pending.ExecutionMode
         }, token).ConfigureAwait(false);
         var reply = Read<Reply>(bytes);
         if (reply.RequestId != pending.RequestId) throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
@@ -113,14 +113,17 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             file.Write(p);
         }
         if (p.SchemaVersion != 1 || p.Origin != transport.Endpoint.AbsoluteUri || p.Binding != binding || p.ClientId != clientId
-            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1")
-            || p.Submitted && (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode)
+            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2")
+            || p.Submitted && (p.ConfigurationId != configuration.Id || !CompatibleMode(p.ExecutionMode))
             || p.AllocationFingerprint is not null && (p.AllocationFingerprint.Length != 64 || !p.AllocationFingerprint.All(char.IsAsciiHexDigitLower)))
             throw new InvalidDataException("Outstanding workload request does not match this equipment. Reconciliation is required.");
-        if (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode)
+        if (!p.Submitted && (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode))
         { p = p with { ConfigurationId = configuration.Id, ExecutionMode = executionMode }; file.Write(p); }
         return p;
     }
+    private bool CompatibleMode(string pendingMode) => pendingMode == executionMode
+        || pendingMode == "prepared_target_v1" && executionMode == "prepared_target_v2"
+        || pendingMode == "local_sequence_v1" && executionMode == "local_sequence_v2";
     private void Advance(Pending p) => file.Write(p with { RequestId = Guid.NewGuid(), Submitted = false, AllocationFingerprint = null });
     private ulong Now() => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
     private CoordinatorAllocation Validate(CoordinatorAllocationEnvelope a, ulong now) => CoordinatorAllocation.Read(

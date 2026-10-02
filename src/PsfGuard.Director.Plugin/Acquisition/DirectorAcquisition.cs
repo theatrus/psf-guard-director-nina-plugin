@@ -307,7 +307,7 @@ public sealed class DirectorAcquisition
                     current = Snapshot();
                     var next = Require(await runtime.AdvanceGeometryPreparationAsync(id, current.Configuration, current.Constraints, current.State, lifetime.Token));
                     if (next is PreparationNext.ReadyToReserve) break;
-                    if (next is PreparationNext.Decision stopped && CanReselect(stopped.Value))
+                    if (next is PreparationNext.Decision stopped && CanReselect(stopped.Value, program.Recipes.Any(r => r.Moon?.Enabled == true)))
                     {
                         // A clean boundary is not an uncertain hardware result.
                         // Close the unused preparation and ask Rust for work again.
@@ -342,7 +342,7 @@ public sealed class DirectorAcquisition
                 current = Snapshot();
                 var captureId = Guid.NewGuid().ToString("D");
                 var reservation = Require(await runtime.ReserveGeometryPreparedAsync(id, captureId, current.Configuration, current.Constraints, current.State, lifetime.Token));
-                if (reservation.Kind == ReservationKind.Decision && CanReselect(reservation.Decision))
+                if (reservation.Kind == ReservationKind.Decision && CanReselect(reservation.Decision, program.Recipes.Any(r => r.Moon?.Enabled == true)))
                 {
                     Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
                     continue;
@@ -556,6 +556,7 @@ public sealed class DirectorAcquisition
     private static bool OfflineFailure(CoordinatorIntakeFailure failure) => failure is CoordinatorIntakeFailure.Transport
         or CoordinatorIntakeFailure.Timeout or CoordinatorIntakeFailure.ServerUnavailable or CoordinatorIntakeFailure.Busy;
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Value ?? throw new InvalidOperationException($"Director ledger refused: {result.Error}");
-    internal static bool CanReselect(PlannerDecision? decision) => decision is { Action: PlannerAction.Wait }
-        or { Action: PlannerAction.CheckIn, Reason: "preparation_goal_changed" };
+    internal static bool CanReselect(PlannerDecision? decision, bool moonScheduling = false) => decision is { Action: PlannerAction.Wait }
+        or { Action: PlannerAction.CheckIn, Reason: "preparation_goal_changed" }
+        || moonScheduling && decision is { Action: PlannerAction.CheckIn, Reason: "no_authorized_feasible_work" };
 }

@@ -1,5 +1,17 @@
 # Real N.I.N.A. smoke test
 
+## Moon Avoidance Test
+
+Run `run-server-plan-smoke.ps1 -PublicAcquisition -LocalTargetScheduling
+-MoonAvoidance` with the isolated server and package arguments below. The
+fixture adds a fourth goal with priority 100 and an always-blocked Moon-down
+rule. The public container must ignore that goal, acquire the other three
+exposures across two targets during a server outage, then enter its native
+wait hooks parked with `moon_avoidance`. The probe cancels the wait, restores
+the server, verifies exactly three pending images and no credit for the
+blocked goal, and refuses replay. The connected automatic-workload variant
+uses enabled fractional Moon settings to exercise v2 capability admission.
+
 ## Local target scheduling test
 
 Run `run-server-plan-smoke.ps1 -PublicAcquisition -LocalTargetScheduling` with

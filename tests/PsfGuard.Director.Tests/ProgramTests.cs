@@ -161,6 +161,22 @@ public sealed class ProgramTests
     }
 
     [Theory]
+    [InlineData("7.0", "width_days", true)]
+    [InlineData("0", "separation_degrees", false)]
+    [InlineData("2e-30", "separation_degrees", false)]
+    public void MoonBindingNumbersCannotBeRoundedIntoEquality(string number, string field, bool valid)
+    {
+        var program = Program();
+        program = program with { Recipes = [program.Recipes[0] with { Moon = new(true, 1e-30, 7, 0, -15, 5, false) }] };
+        var binding = Binding();
+        binding["recipe"] = ProgramContract.Encode(program.Recipes[0]);
+        binding["recipe"]!["moon"]![field] = JsonNode.Parse(number);
+        using var json = JsonDocument.Parse(binding.ToJsonString());
+        if (valid) Assert.Equal(program.Recipes[0], ProgramContract.ReadBinding(json.RootElement, program, Identity, "capture").Recipe);
+        else Assert.Throws<InvalidDataException>(() => ProgramContract.ReadBinding(json.RootElement, program, Identity, "capture"));
+    }
+
+    [Theory]
     [InlineData("target")]
     [InlineData("recipe")]
     [InlineData("filter")]
