@@ -53,6 +53,11 @@ local-policy fields, and a status view. It saves and clones configuration, not
 credentials or acquisition authority. Acquisition is off by default. Enabling
 it requires an online one-shot allocation launch, fresh native safety evidence,
 dated NINA Earth-orientation data and the explicit prepared-target policies.
+Select **Enclosure clearance** in the Session's safety settings: **Open air**
+requires no configured or connected dome; an enclosed setup requires a fresh
+fully-open NINA shutter report. Existing sequences default to **Not configured**
+and cannot acquire until reviewed. Loss of clearance aborts acquisition, requests
+slew-stop/tracking-off, and blocks parking. Reopening does not resume the session.
 See [session configuration](docs/native-capture.md#session-configuration-preview)
 for what is implemented and what remains gated.
 
@@ -135,8 +140,9 @@ The runtime client also supports opt-in recovery contract 1: admit a night,
 read its persistent state, submit revision-checked events and page its journal.
 Probe/park suggestions are accepted only for the exact newly committed request;
 replays and restart readback cannot issue work. **The public NINA Session does
-not enable this recovery mode yet.** Native enclosure-clearance evidence,
-commissioned policy, persistent session ownership and one-shot native dispatch
+not enable this recovery mode yet.** Local enclosure-clearance evidence now
+guards acquisition and shutdown. Recovery policy, persistent session ownership
+and one-shot native dispatch
 remain required. See [session recovery](docs/native-capture.md#session-recovery-client).
 
 The typed program API binds immutable targets, exposure recipes, and equipment

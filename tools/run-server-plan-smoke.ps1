@@ -7,12 +7,14 @@ param(
     [string]$Python = 'python',
     [switch]$PublicAcquisition,
     [switch]$PublicUnsafe,
+    [switch]$EnclosureClosure,
     [switch]$AutomaticWorkloads,
     [switch]$LocalTargetScheduling,
     [switch]$MoonAvoidance,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
+if ($EnclosureClosure -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $MoonAvoidance)) { throw 'EnclosureClosure requires only PublicAcquisition.' }
 if ($MoonAvoidance -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $AutomaticWorkloads -or $PublicUnsafe)) { throw 'MoonAvoidance requires safe public local scheduling without automatic workloads.' }
 if ($PublicUnsafe -and !$PublicAcquisition) { throw 'PublicUnsafe requires PublicAcquisition.' }
 if ($LocalTargetScheduling -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'LocalTargetScheduling requires a safe public acquisition run.' }
@@ -64,7 +66,7 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
-        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance } |
+        RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=(!$AutomaticWorkloads); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1

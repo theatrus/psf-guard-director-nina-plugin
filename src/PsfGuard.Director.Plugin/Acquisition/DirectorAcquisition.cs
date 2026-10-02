@@ -26,6 +26,7 @@ public sealed class DirectorAcquisition
     private readonly ITelescopeMediator telescope;
     private readonly IFilterWheelMediator filters;
     private readonly ISafetyMonitorMediator safety;
+    private readonly IDomeMediator dome;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -39,16 +40,19 @@ public sealed class DirectorAcquisition
     [ImportingConstructor]
     public DirectorAcquisition(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging,
-        IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime)
+        IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome)
     {
         this.profiles = profiles; this.camera = camera; this.telescope = telescope; this.filters = filters;
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
+        this.dome = dome;
     }
 
     internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options, bool requireEnabled = true)
     {
         var issues = new List<string>();
         if (requireEnabled && !options.EnableAcquisition) issues.Add("Enable acquisition to run this session.");
+        if (requireEnabled && options.Enclosure == DirectorEnclosurePolicy.Unconfigured)
+            issues.Add("Select an enclosure clearance policy before acquisition.");
         if (options.Safety != DirectorSafetyPolicy.RequireMonitor) issues.Add("Public acquisition requires a connected safety monitor.");
         if (new[] { options.SlewCenter, options.Focus, options.Guiding, options.Dither, options.MeridianFlip }.Any(x => x != DirectorOperationOwner.Sequence))
             issues.Add("Current acquisition modes require sequence ownership for centering, autofocus, guiding, dithering and meridian flips.");
@@ -152,13 +156,17 @@ public sealed class DirectorAcquisition
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime.CancelAfter(TimeSpan.FromHours(options.MaximumHours));
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
+        using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
         using (var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
         {
             fresh.CancelAfter(TimeSpan.FromSeconds(15));
-            while (interlock.Read().Safety != PlannerSafety.Safe) await Task.Delay(100, fresh.Token);
+            while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
+                await Task.Delay(100, fresh.Token);
         }
         interlock.Arm();
+        enclosure.Arm();
         using var safetyCancellation = interlock.Interrupted.Register(lifetime.Cancel);
+        using var enclosureCancellation = enclosure.Interrupted.Register(lifetime.Cancel);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
@@ -455,7 +463,8 @@ public sealed class DirectorAcquisition
                 catch { terminalFailed = true; throw; }
                 finally
                 {
-                    var phase = !parked ? "Shutdown failed" : terminalFailed || executionError is not null ? "Stopped; parked; reconciliation required"
+                    var phase = !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
+                        : terminalFailed || executionError is not null ? "Stopped; parked; reconciliation required"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
                     Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
@@ -476,7 +485,7 @@ public sealed class DirectorAcquisition
         void Check()
         {
             lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
-            if (profiles.ActiveProfile.Id != profile || interlock.Read().Safety != PlannerSafety.Safe
+            if (profiles.ActiveProfile.Id != profile || interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted
                 || runtime.Status.State != RuntimeState.Ready || Now() >= assignment.ExpiresAtMs)
                 throw new InvalidOperationException("Director context, safety, runtime or allocation validity changed.");
         }
@@ -513,13 +522,8 @@ public sealed class DirectorAcquisition
             }
             finally { block.Remove(item); block.AttachNewParent(null); block.NighttimeData.Ticker.Stop(); }
         }
-        async Task Park(CancellationToken ct)
-        {
-            var info = telescope.GetInfo();
-            if (!info.Connected || info.DeviceId != equipmentBinding.TelescopeDeviceId || profiles.ActiveProfile.Id != profile)
-                throw new InvalidOperationException("Cannot safely park: original telescope/profile is unavailable.");
-            if (!info.AtPark && !await telescope.ParkTelescope(progress, ct)) throw new IOException("Director shutdown park failed.");
-        }
+        Task Park(CancellationToken ct) => NinaMountShutdown.ParkAsync(profiles, profile, telescope,
+            equipmentBinding.TelescopeDeviceId!, enclosure.Read, enclosure.Interrupted, progress, ct);
         async Task WatchdogAsync()
         {
             try

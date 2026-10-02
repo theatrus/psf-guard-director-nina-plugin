@@ -1,5 +1,37 @@
 # Native capture adapter
 
+## Enclosure Clearance
+
+The public Session requires an explicit **Enclosure clearance** policy under
+**Safety and visibility**. New and older serialized sequences default to
+**Not configured**; equipment reporting remains available, but acquisition is
+blocked until the operator chooses a policy.
+
+- **Open air (no enclosure)** is an operator declaration that no roof/enclosure
+  obstructs the mount. NINA must have no configured or connected dome.
+- **Require fully open enclosure** binds the exact active profile and dome
+  device. Both current device state and a subsequent fresh broadcast must show
+  fully open. A cached registration callback cannot establish freshness.
+
+Closed, closing, opening, unknown/error, disconnected, stale or changed-device
+evidence interrupts the owner and blocks further mount motion. The local
+watchdog runs independently of the server. Reopening cannot clear this owner's
+stop latch. Weather Unsafe still cancels acquisition, but permits shutdown park
+only when independent enclosure clearance remains valid.
+
+Shutdown skips new park motion without clearance, requests native slew-stop and
+tracking-off independently, and reports **Stopped; enclosure blocks parking**.
+Errors stopping the mount are logged and propagated, not treated as successful
+parking. Clearance loss during a park cancels that operation and requests stop;
+there is no automatic retry. Cleanup refuses commands to a replacement mount or
+profile. Director never opens or closes the real enclosure itself.
+
+This is sampled native evidence, not a physical roof/mount interlock. Drivers
+must report truthful shutter state and honor abort/stop requests; independent
+observatory hardware protection is still required. Arbitrary third-party
+equipment clients are not excluded. The persistent observing-night recovery
+policy, cloud classifier and automatic probes remain pending.
+
 ## Session Recovery Client
 
 Runtime 0.9.0 / IPC 9 exposes recovery contract 1 through the managed runtime
@@ -21,13 +53,15 @@ and read persisted evidence instead of guessing whether the event committed.
 foreign, missing or changed state faults the connection. Typed domain errors
 remain visible without pretending the operation succeeded.
 
-Native integration remains pending. It must commission a policy and observing
-night, persist one per-rig recovery directory across allocations, supply fresh
+Native recovery integration remains pending. It must commission a policy and
+observing night, persist one per-rig recovery directory across allocations, supply fresh
 safety and **independent enclosure/mount-motion clearance**, classify compatible
 quality samples against a frozen reference, cancel/reconcile active native work,
-and dispatch each original suggestion once with fresh native checks. A safe
-weather monitor alone does not prove a roof is clear. Do not enable recovery
-by adding the directory argument to the public owner without those gates.
+and dispatch each original suggestion once with fresh native checks. The local
+enclosure interlock now supplies separate clearance for ordinary acquisition
+and shutdown. A safe weather monitor alone does not prove a roof is clear.
+Do not enable recovery by adding the directory argument to the public owner
+without those gates.
 
 ## Exposure Moon Avoidance
 

@@ -61,6 +61,7 @@ public sealed class AcquisitionLeaseTests
         var options = new DirectorSessionOptions();
         Assert.NotEmpty(DirectorAcquisition.PolicyIssues(options));
         options.EnableAcquisition = true;
+        options.Enclosure = DirectorEnclosurePolicy.OpenAir;
         options.SlewCenter = options.Focus = options.Guiding = options.Dither = options.MeridianFlip = DirectorOperationOwner.Sequence;
         Assert.Empty(DirectorAcquisition.PolicyIssues(options));
         options.Safety = DirectorSafetyPolicy.Attended;

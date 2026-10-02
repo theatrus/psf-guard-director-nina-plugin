@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -23,6 +23,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
     internal bool PublicUnsafe { get; private init; }
+    internal bool EnclosureClosure { get; private init; }
     internal bool AutomaticWorkloads { get; private init; }
     internal bool LocalTargetScheduling { get; private init; }
     internal bool MoonAvoidance { get; private init; }
@@ -71,7 +72,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure };
         }
         catch
         {
@@ -226,7 +227,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                         ? new DirectorMoonPolicy(true, 180, 14, 0, -90, -89, true)
                         : new DirectorMoonPolicy(true, 0.25, 7, 0, -15, 5, false)
                 },
-                exposure_seconds = PublicUnsafe ? 30.0 : 1.0,
+                exposure_seconds = PublicUnsafe || EnclosureClosure ? 30.0 : 1.0,
                 panel_ids = Array.Empty<string>(),
                 enabled = true
             }).ToArray();
@@ -245,7 +246,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
             || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
-            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe ? 30000UL : 1000UL))
+            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;
