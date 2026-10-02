@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -23,6 +23,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
     internal bool PublicUnsafe { get; private init; }
+    internal bool AbortWithoutPark { get; private init; }
     internal bool EnclosureClosure { get; private init; }
     internal bool AutomaticWorkloads { get; private init; }
     internal bool LocalTargetScheduling { get; private init; }
@@ -72,7 +73,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark };
         }
         catch
         {

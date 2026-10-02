@@ -264,6 +264,7 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
                 sessionContainer.Options.Enclosure = coordinator.EnclosureClosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
+                sessionContainer.Options.OnAbort = coordinator.AbortWithoutPark ? DirectorAbortPolicy.StopMount : DirectorAbortPolicy.ParkMount;
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
@@ -317,8 +318,12 @@ public sealed class SimulatorSequence : SequenceItem
                         safetySimulator.IsSafe = false;
                         try { await executing.WaitAsync(TimeSpan.FromSeconds(15)); throw new InvalidDataException("Unsafe public session completed successfully."); }
                         catch (OperationCanceledException) when (interlock.Interrupted.IsCancellationRequested) { }
-                        if (!telescope.GetInfo().AtPark || camera.GetInfo().IsExposing || AcquisitionLease.IsActive)
-                            throw new InvalidDataException("Unsafe public session did not abort, park and release ownership.");
+                        if (telescope.GetInfo().AtPark == coordinator.AbortWithoutPark || camera.GetInfo().IsExposing || AcquisitionLease.IsActive
+                            || telescope.GetInfo().TrackingEnabled || telescope.GetInfo().Slewing)
+                            throw new InvalidDataException("Unsafe public session did not abort, apply the selected mount policy and release ownership.");
+                        var expectedPhase = coordinator.AbortWithoutPark ? "Stopped; tracking off; reconciliation required" : "Stopped; parked; reconciliation required";
+                        if (sessionContainer.Display.Phase != expectedPhase)
+                            throw new InvalidDataException("Unsafe public session did not report the selected shutdown outcome.");
                         safetySimulator.IsSafe = true;
                         using (var fresh = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
                             while (!safety.GetInfo().IsSafe) await Task.Delay(100, fresh.Token);
@@ -326,7 +331,8 @@ public sealed class SimulatorSequence : SequenceItem
                             throw new InvalidDataException("Safety recovery revived the public session or the probe caused cancellation.");
                         unsafeCancellationVerified = true;
                         ledger = service.LastLedger;
-                        Step("Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
+                        Step(coordinator.AbortWithoutPark ? "Public unsafe monitor aborted exposure, stopped slew/tracking without parking and stayed stopped after recovery"
+                            : "Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
                         return;
                     }
                     if (coordinator.MoonAvoidance)
