@@ -1,5 +1,10 @@
 # Unreleased
 
+- Execute opt-in observing preferences saved in the PSF Guard planner, including
+  inherited importance, scoring weights, dwell and switching margin. Policies
+  stay bound to their allocation and work offline with the shared Rust core.
+  Legacy allocations and pending v1/v2 requests remain compatible.
+
 - Choose live or deferred capture check-ins. Deliver saved runs from plugin
   settings, a Director Check In sequence action, or the next session's start.
   Cancel and resume without resending acknowledged events. Cleanly completed,

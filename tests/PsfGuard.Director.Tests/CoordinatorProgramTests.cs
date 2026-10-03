@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Immutable;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -95,6 +96,42 @@ public sealed class CoordinatorProgramTests
         Assert.Equal(first.Fingerprint, second.Fingerprint);
         Assert.Equal("filter-0", second.Envelope.Program.Recipes[0].FilterId);
         Assert.Equal(15, Assert.IsType<CoordinatorRotation.Fixed>(second.Envelope.Rig.Rotation).AngleDegrees);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObservingPoliciesRoundTripAndNullPolicyIsAControlledFailure(bool corrupt)
+    {
+        var weights = new Dictionary<string, ushort>
+        {
+            ["importance"] = 30,
+            ["window_urgency"] = 25,
+            ["altitude"] = 15,
+            ["moon_opportunity"] = 15,
+            ["completion"] = 5,
+            ["efficiency"] = 5,
+            ["continuity"] = 5
+        }.ToImmutableDictionary();
+        var source = new DirectorPreferenceSource("global", "global", 1);
+        var policy = new DirectorObservingPolicy(weights, 50, 600000, 500);
+        var resolved = new DirectorResolvedPolicy(1, policy, new(weights.Keys.ToImmutableDictionary(k => k, _ => source), source, source, source), policy, source, []);
+        var preferences = new DirectorObservingPreferences(1,
+            ImmutableDictionary<string, DirectorResolvedPolicy>.Empty.Add("policy", resolved),
+            ImmutableDictionary<string, string>.Empty.Add(Goal.ToString("D"), "policy"));
+        var original = Envelope();
+        var body = Body(original with { Program = original.Program with { ObservingPreferences = preferences } });
+        Assert.Equal(weights.Keys.Order(StringComparer.Ordinal), body["data"]!["program"]!["observing_preferences"]!["policies"]!["policy"]!["policy"]!["weights"]!.AsObject().Select(entry => entry.Key));
+        if (corrupt) body["data"]!["program"]!["observing_preferences"]!["policies"]!["policy"] = null;
+        using var client = Client((_, _) => Task.FromResult(Response(body)));
+        if (corrupt)
+            await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.ReadPreviewAsync(Binding, Configuration));
+        else
+        {
+            var read = await client.ReadPreviewAsync(Binding, Configuration);
+            Assert.Equal(50, read.Envelope.Program.ObservingPreferences!.Policies["policy"].Policy.Importance);
+            Assert.Equal(body["data"]!.ToJsonString(), ProgramContract.Encode(read.Envelope).ToJsonString());
+        }
     }
 
     [Theory]

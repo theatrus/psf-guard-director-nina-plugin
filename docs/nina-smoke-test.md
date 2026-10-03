@@ -682,3 +682,23 @@ not fire After Target Complete. All 587 plugin tests passed; the package build,
 format check and diff whitespace check passed. This validates configuration UI,
 hook bookkeeping and the internal simulator path, not production arming or
 automatic equipment-policy execution.
+
+## Observing preference execution
+
+2026-10-02: runtime 0.10.0 / IPC 10, packaged plugin and native NINA 3.3.0.1064
+passed the public multi-target session test against isolated local PSF Guard
+with ASCOM OmniSim camera, mount and filter wheel. Rig importance-only weights
+and project importance reversed the legacy priority order: two captures on the
+preferred project, then one on the other target, through normal native hooks.
+The server was stopped during acquisition. On reconnection, all six capture
+events were acknowledged; live status, saved-run batch replay and refusal of a
+second allocation launch passed. No real equipment or catalog was used.
+
+Run `tools/run-server-plan-smoke.ps1` with `-PublicAcquisition
+-LocalTargetScheduling -ObservingPreferences`. Evidence:
+`artifacts/nina-smoke-f1714f67bfab4179af5e5b0183b66a2f/probe/a0f7c5c19aa940d0b067815034543300/result.json`.
+
+The same scenario also passed with `-AutomaticWorkloads -OfflineWorkloadRelease`:
+v3 intake issued weighted work, the rig captured and parked offline, and batch
+delivery released the original workload before entering bounded assessment wait.
+Evidence: `artifacts/nina-smoke-4c8709f089284387a5ce18230c533326/probe/7dab6f23c8ea4efc9a1751bf85a6e010/result.json`.

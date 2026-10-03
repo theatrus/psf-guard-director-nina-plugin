@@ -31,7 +31,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         if (clientId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")) throw new ArgumentException("Exact client and configuration required.");
         transport = new(endpoint, credential, handler, allowInsecureHttp);
         this.binding = binding; this.clientId = clientId; this.configuration = configuration; this.clock = clock;
-        executionMode = localTargetScheduling ? "local_sequence_v2" : "prepared_target_v2";
+        executionMode = localTargetScheduling ? "local_sequence_v3" : "prepared_target_v3";
         file = new(root, new { origin = transport.Endpoint.AbsoluteUri, binding, clientId }, "workload-request");
     }
 
@@ -124,7 +124,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             file.Write(p);
         }
         if (p.SchemaVersion != 1 || p.Origin != transport.Endpoint.AbsoluteUri || p.Binding != binding || p.ClientId != clientId
-            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2")
+            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2" or "prepared_target_v3" or "local_sequence_v3")
             || p.Submitted && (p.ConfigurationId != configuration.Id || !CompatibleMode(p.ExecutionMode))
             || p.AllocationFingerprint is not null && (p.AllocationFingerprint.Length != 64 || !p.AllocationFingerprint.All(char.IsAsciiHexDigitLower)))
             throw new InvalidDataException("Outstanding workload request does not match this equipment. Reconciliation is required.");
@@ -133,8 +133,8 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         return p;
     }
     private bool CompatibleMode(string pendingMode) => pendingMode == executionMode
-        || pendingMode == "prepared_target_v1" && executionMode == "prepared_target_v2"
-        || pendingMode == "local_sequence_v1" && executionMode == "local_sequence_v2";
+        || pendingMode is "prepared_target_v1" or "prepared_target_v2" && executionMode == "prepared_target_v3"
+        || pendingMode is "local_sequence_v1" or "local_sequence_v2" && executionMode == "local_sequence_v3";
     private void Advance(Pending p) => file.Write(p with { RequestId = Guid.NewGuid(), Submitted = false, AllocationFingerprint = null });
     private ulong Now() => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
     private CoordinatorAllocation Validate(CoordinatorAllocationEnvelope a, ulong now) => CoordinatorAllocation.Read(

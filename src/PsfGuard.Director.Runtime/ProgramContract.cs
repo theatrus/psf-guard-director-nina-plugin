@@ -7,7 +7,19 @@ namespace PsfGuard.Director.Runtime;
 
 // Immutable wire snapshots. Capability validation and scheduling remain in Rust.
 public sealed record DirectorProgram(uint SchemaVersion, PlannerAssignment Assignment, DirectorConfiguration Configuration,
-    ImmutableArray<DirectorTarget> Targets, ImmutableArray<ExposureRecipe> Recipes, ImmutableArray<GoalBinding> Bindings);
+    ImmutableArray<DirectorTarget> Targets, ImmutableArray<ExposureRecipe> Recipes, ImmutableArray<GoalBinding> Bindings,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DirectorObservingPreferences? ObservingPreferences = null);
+public sealed record DirectorObservingPreferences(uint SchemaVersion,
+    [property: JsonConverter(typeof(OrdinalMapConverter<DirectorResolvedPolicy>))] ImmutableDictionary<string, DirectorResolvedPolicy> Policies,
+    [property: JsonConverter(typeof(OrdinalMapConverter<string>))] ImmutableDictionary<string, string> Bindings);
+public sealed record DirectorObservingPolicy([property: JsonConverter(typeof(OrdinalMapConverter<ushort>))] ImmutableDictionary<string, ushort> Weights, ushort Importance, ulong MinimumDwellMs, ushort SwitchMargin);
+public sealed record DirectorPreferenceSource(string Scope, string Id, ulong Revision);
+public sealed record DirectorPreferenceOverrides([property: JsonConverter(typeof(OrdinalMapConverter<ushort>))] ImmutableDictionary<string, ushort> Weights, ushort? Importance, ulong? MinimumDwellMs, ushort? SwitchMargin);
+public sealed record DirectorPreferenceLayer(DirectorPreferenceSource Source, DirectorPreferenceOverrides Overrides);
+public sealed record DirectorPreferenceProvenance([property: JsonConverter(typeof(OrdinalMapConverter<DirectorPreferenceSource>))] ImmutableDictionary<string, DirectorPreferenceSource> Weights,
+    DirectorPreferenceSource Importance, DirectorPreferenceSource MinimumDwellMs, DirectorPreferenceSource SwitchMargin);
+public sealed record DirectorResolvedPolicy(uint SchemaVersion, DirectorObservingPolicy Policy, DirectorPreferenceProvenance Provenance,
+    DirectorObservingPolicy Global, DirectorPreferenceSource GlobalSource, ImmutableArray<DirectorPreferenceLayer> Layers);
 public sealed record DirectorTarget(string Id, string Name, uint IcrsRaMas, int IcrsDecMas, uint? PositionAngleMas);
 public readonly record struct CameraBinning(short X, short Y);
 public sealed record DirectorFilter(string Id, short? Position);
