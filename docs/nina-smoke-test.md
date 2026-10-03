@@ -702,3 +702,9 @@ The same scenario also passed with `-AutomaticWorkloads -OfflineWorkloadRelease`
 v3 intake issued weighted work, the rig captured and parked offline, and batch
 delivery released the original workload before entering bounded assessment wait.
 Evidence: `artifacts/nina-smoke-4c8709f089284387a5ce18230c533326/probe/7dab6f23c8ea4efc9a1751bf85a6e010/result.json`.
+
+The `-PublicAcquisition -PublicUnsafe` regression passed with the same package:
+unsafe weather aborted the active exposure, parked the simulated mount and
+remained stopped after recovery. Evidence:
+`artifacts/nina-smoke-87f8b9fbbaf341ba8e56c405ccc2e2d5/probe/fa26e827b9c64da2bbcb4a174a40e5ef/result.json`.
+All 775 plugin tests, package build, format and runtime-fetch regressions passed.
