@@ -139,20 +139,42 @@ enabled. It keeps evaluating locally during a coordinator outage. A clean
 preparation that outlasts its lunar window is closed before asking Rust again;
 uncertain or failed native operations are never silently retried.
 
-Automatic requests advertise `prepared_target_v2` or `local_sequence_v2`.
-Ambiguous requests saved by the old plugin retry their original v1 capability
+Automatic requests advertise `prepared_target_v3` or `local_sequence_v3`.
+Ambiguous requests saved by the old plugin retry their original v1/v2 capability
 until the server confirms waiting or release; they cannot switch scope during
 recovery. Older non-lunar ledgers remain readable. Moon policies cannot use a
 non-geometry ledger, and binding comparisons preserve exact JSON numbers.
 
-Inherited policy defaults, configurable preference weights, detailed lunar
-diagnostics and quality-pause recovery remain separate unfinished phase work.
+Detailed lunar diagnostics and quality-pause recovery remain separate unfinished
+phase work.
+
+## Observing preferences
+
+In PSF Guard's project planner, open **Observing preferences**, select the rig
+and scope, and enable the mode at global, site or rig scope. Tune importance,
+relative weights, minimum dwell and switching margin, or start with a preset.
+Project settings inherit unless explicitly overridden; zero is a real value,
+not inheritance. Existing rigs continue using legacy priorities by default.
+
+New allocations carry their resolved policy and source revisions. Runtime
+0.10.0 / IPC 10 uses the shared geometry scorer offline; the plugin does not
+implement its own ranking. The ledger preserves selected-goal time on restart.
+One exposure's preparation retains its selection while rechecking hard limits
+before dispatch. Safety, horizon, Moon, expiry and attempt budgets always win.
+Old execution modes refuse weighted workloads. Settings edits affect new
+allocations, never rewrite an existing grant, and policy dictionaries serialize
+in ordinal key order so fingerprints stay stable across processes.
+
+Continuity currently lasts within one allocation. A clean parked successor
+starts without an active-goal context. Cross-allocation continuity, displayed
+candidate scores and learned timing estimates remain backlog.
 
 ## Local target scheduling (experimental)
 
 Enable **Local target scheduling** in Director Session to run multiple targets
-within one admitted workload. The shared Rust core chooses the highest-priority
-feasible goal after each saved exposure and native preparation operation, using
+within one admitted workload. The shared Rust core chooses the best eligible
+goal using the allocation's legacy or weighted policy after each saved exposure,
+and rechecks feasibility during native preparation, using
 current NINA site, horizon, altitude, meridian limits and durable progress.
 The adapter resolves that goal's target and recipe; it does not rank targets.
 

@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -30,6 +30,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool AutomaticWorkloads { get; private init; }
     internal bool LocalTargetScheduling { get; private init; }
     internal bool MoonAvoidance { get; private init; }
+    internal bool ObservingPreferences { get; private init; }
     internal bool LocalTargetsVerified { get; private set; }
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
@@ -75,7 +76,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences };
         }
         catch
         {
@@ -181,12 +182,32 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             }, token);
         var projectIds = new List<Guid>();
+        if (ObservingPreferences)
+            await OperatorAsync(HttpMethod.Put, $"preferences/rig/{binding.RigId:D}", new
+            {
+                scope = "rig",
+                scope_id = binding.RigId,
+                revision = 0,
+                enabled = true,
+                site_id = (Guid?)null,
+                overrides = new { weights = new { importance = 100, window_urgency = 0, altitude = 0, moon_opportunity = 0, completion = 0, efficiency = 0, continuity = 0 }, importance = (int?)null, minimum_dwell_ms = 600000, switch_margin = 500 }
+            }, token);
         for (var targetIndex = 0; targetIndex < (LocalTargetScheduling ? 2 : 1); targetIndex++)
         {
             var frame = targetIndex == 0 ? target : target with { Name = "Higher priority remote target", IcrsRaMas = (target.IcrsRaMas + 1080000) % 1296000000 };
             var project = Guid.NewGuid();
             projectIds.Add(project);
             await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
+            if (ObservingPreferences)
+                await OperatorAsync(HttpMethod.Put, $"preferences/project/{project:D}", new
+                {
+                    scope = "project",
+                    scope_id = project,
+                    revision = 0,
+                    enabled = (bool?)null,
+                    site_id = (Guid?)null,
+                    overrides = new { weights = new { }, importance = targetIndex == 0 ? 90 : 10, minimum_dwell_ms = (ulong?)null, switch_margin = (int?)null }
+                }, token);
             await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/framing", new
             {
                 project_id = project,
@@ -253,6 +274,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;
+        if (ObservingPreferences && second.Envelope.Program.ObservingPreferences?.Bindings.Count != 3)
+            throw new InvalidDataException("Server omitted the observing preferences from its program.");
         var admission = new
         {
             binding.CoordinatorInstanceId,
@@ -310,10 +333,14 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         var program = allocation!.Envelope.Snapshot.Program;
         var expected = program.Bindings.Single(b => b.GoalId == program.Assignment.Goals.Single(g => g.Priority == 10).Id).TargetId;
         var ordered = captures.OrderBy(c => c.StartedAt).ToArray();
-        if (ordered.Length != 3 || ordered[0].Intent.Program?.TargetId != expected
-            || ordered[1].Intent.Program?.TargetId == expected || ordered[1].Intent.Program?.TargetId != ordered[2].Intent.Program?.TargetId
-            || !hooks.Where(h => !MoonAvoidance || h is not ("BeforeWait" or "AfterWait")).SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget",
-                "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
+        var expectedHooks = ObservingPreferences
+            ? new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget", "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }
+            : new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget", "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" };
+        var orderedTargets = ordered.Select(c => c.Intent.Program?.TargetId).ToArray();
+        var correctOrder = ordered.Length == 3 && (ObservingPreferences
+            ? orderedTargets[0] != expected && orderedTargets[0] == orderedTargets[1] && orderedTargets[2] == expected
+            : orderedTargets[0] == expected && orderedTargets[1] != expected && orderedTargets[1] == orderedTargets[2]);
+        if (!correctOrder || !hooks.Where(h => !MoonAvoidance || h is not ("BeforeWait" or "AfterWait")).SequenceEqual(expectedHooks))
             throw new InvalidDataException("Local scheduling did not prioritize and visit both targets through native hooks.");
         if (MoonAvoidance && (!hooks.Contains("BeforeWait") || captures.Any(c => c.Intent.Program?.RecipeId ==
             program.Bindings.Single(b => b.GoalId == program.Assignment.Goals.Single(g => g.Priority == 100).Id).RecipeId)))
@@ -340,7 +367,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             catalog_id = pairing.Binding.CatalogId,
             request_id = AllocationId,
             configuration_id = configuration.Id,
-            execution_mode = LocalTargetScheduling ? "local_sequence_v2" : "prepared_target_v2"
+            execution_mode = LocalTargetScheduling ? "local_sequence_v3" : "prepared_target_v3"
         });
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();

@@ -138,6 +138,11 @@ internal static class CoordinatorProgramContract
         var goals = Ids(program.Assignment.Goals.Select(g => g.Id));
         var targets = Ids(program.Targets.Select(t => t.Id));
         var recipes = Ids(program.Recipes.Select(r => r.Id));
+        if (program.ObservingPreferences is { } preferences && (preferences.SchemaVersion != 1
+            || !goals.SetEquals(preferences.Bindings.Keys) || preferences.Policies.Count == 0
+            || preferences.Bindings.Values.Any(id => !preferences.Policies.ContainsKey(id))
+            || preferences.Policies.Any(p => p.Value is null || p.Value.SchemaVersion != 1 || !preferences.Bindings.Values.Contains(p.Key))))
+            throw new InvalidDataException("Invalid observing preference binding.");
         if (goals.Count == 0 || !goals.SetEquals(Ids(program.Bindings.Select(b => b.GoalId)))
             || !goals.SetEquals(Ids(envelope.Links.Select(l => l.GoalId)))) throw new InvalidDataException();
         foreach (var binding in program.Bindings)

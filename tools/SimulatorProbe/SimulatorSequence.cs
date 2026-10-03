@@ -703,6 +703,7 @@ public sealed class SimulatorSequence : SequenceItem
                 automaticWorkloadVerified = coordinator?.AutomaticWorkloadVerified ?? false,
                 localTargetsVerified = coordinator?.LocalTargetsVerified ?? false,
                 moonAvoidanceVerified = coordinator is { MoonAvoidance: true, LocalTargetsVerified: true },
+                observingPreferencesVerified = coordinator is { ObservingPreferences: true, LocalTargetsVerified: true },
                 steps,
                 evaluations,
                 operations,
