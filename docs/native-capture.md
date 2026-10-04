@@ -1054,12 +1054,33 @@ valid Earth-orientation snapshot explicitly. Rust still owns their numeric and
 astronomical validation. The adapter neither fetches EOP data nor inserts a
 zero-valued default, resamples the curve, or computes windows.
 
-This client is not yet wired into a production NINA container. The owner must
-call the exporter at each boundary, obtain valid Earth-orientation data, and
-compare current native profile/equipment state again after inherited triggers
-and at hardware dispatch. No finite set of snapshot reads prevents later changes.
+The public Director Session calls this exporter at dispatch boundaries, obtains
+valid Earth-orientation data, and compares native profile/equipment state after
+inherited triggers and at hardware dispatch. No finite set of snapshot reads
+prevents later changes.
 Do not construct permissive placeholder constraints or treat a successful ledger
 reservation as that last validation.
+
+### Constraint changes during acquisition
+
+The running Session also checks its admitted NINA site, meridian-flip settings,
+loaded horizon and horizon file contents independently of the dispatch path.
+This read-only check runs once per second, including during slow sequence hooks
+and exposures. It does not reload the profile or replace the immutable grant.
+The file content hash catches same-path, same-size edits even with an unchanged
+timestamp. A missing, unreadable or stalled horizon also stops acquisition;
+the two-second read deadline is separate from the safety watchdog.
+
+A detected change cancels native work and applies the Session's abort policy,
+with enclosure clearance taking precedence. The error identifies changed or
+unavailable rig constraints; parked sessions retain a review-required status.
+Restoring the old file or settings does not restart acquisition or refund the
+consumed allocation. Review/report the current equipment configuration and
+reconcile the interrupted run before obtaining new authority. There is no
+automatic acceptance of new site, horizon or meridian settings in this increment.
+
+The existing fresh dispatch checks still run after slow hooks. Polling is not a
+replacement for those checks or independent observatory safety protection.
 
 ### Dispatch feasibility after native hooks
 

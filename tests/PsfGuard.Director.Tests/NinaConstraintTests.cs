@@ -10,6 +10,68 @@ namespace PsfGuard.Director.Tests;
 public sealed class NinaConstraintTests
 {
     [Theory]
+    [InlineData("unchanged")]
+    [InlineData("same-path-same-size")]
+    [InlineData("deleted")]
+    [InlineData("locked")]
+    [InlineData("cleared")]
+    [InlineData("native-curve")]
+    [InlineData("site")]
+    [InlineData("meridian")]
+    [InlineData("profile-round-trip")]
+    public async Task RunningConstraintCheckIsReadOnlyAndRejectsChangedOrMissingEvidence(string change)
+    {
+        using var f = new Fixture("0 20\n180 20\n360 20");
+        using var reader = new NinaConstraintSnapshot(f.Profiles.Object);
+        var expected = reader.Refresh(f.Binding);
+        var timestamp = File.GetLastWriteTimeUtc(f.Path);
+        using var locked = change == "locked" ? new FileStream(f.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        if (change == "same-path-same-size")
+        {
+            File.WriteAllText(f.Path, "0 80\n180 80\n360 80");
+            File.SetLastWriteTimeUtc(f.Path, timestamp);
+        }
+        if (change == "deleted") File.Delete(f.Path);
+        if (change == "cleared") f.Astrometry.Object.HorizonFilePath = "";
+        if (change == "native-curve") f.Astrometry.Object.Horizon = CustomHorizon.FromReader_Standard(new StringReader("0 80\n180 80"));
+        if (change == "site") f.Astrometry.Object.Latitude++;
+        if (change == "meridian") f.Flip.Object.MinutesAfterMeridian++;
+        if (change == "profile-round-trip") f.Profiles.Raise(p => p.BeforeProfileChanging += null, EventArgs.Empty);
+        if (change == "unchanged") await reader.VerifyUnchangedAsync(f.Binding, expected, CancellationToken.None);
+        else await Assert.ThrowsAnyAsync<Exception>(() => reader.VerifyUnchangedAsync(f.Binding, expected, CancellationToken.None));
+        f.Profiles.Verify(p => p.ChangeHorizon(It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunningFixedHorizonCheckRejectsNewHorizonAndHonorsCancellation()
+    {
+        using var f = new Fixture("0 20\n180 20");
+        f.Astrometry.Object.HorizonFilePath = "";
+        var binding = f.Binding with { Mode = NinaHorizonMode.FixedMinimum, HorizonPath = null };
+        using var reader = new NinaConstraintSnapshot(f.Profiles.Object);
+        var expected = reader.Refresh(binding);
+        await reader.VerifyUnchangedAsync(binding, expected, CancellationToken.None);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.VerifyUnchangedAsync(binding, expected, new CancellationToken(true)));
+        f.Astrometry.Object.HorizonFilePath = f.Path;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reader.VerifyUnchangedAsync(binding, expected, CancellationToken.None));
+        f.Profiles.Verify(p => p.ChangeHorizon(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunningConstraintCheckToleratesUnchangedDispatchReloads()
+    {
+        using var f = new Fixture("0 20\n180 20\n360 20");
+        using var reader = new NinaConstraintSnapshot(f.Profiles.Object);
+        var expected = reader.Refresh(f.Binding);
+        for (var i = 0; i < 10; i++)
+        {
+            await Task.WhenAll(
+                Task.Run(() => reader.VerifyUnchangedAsync(f.Binding, expected, CancellationToken.None)),
+                Task.Run(() => Assert.Equal(expected.Revision, reader.Refresh(f.Binding).Revision)));
+        }
+    }
+
+    [Theory]
     [InlineData("0 10\n90 20\n180 30\n270 20\n360 10", false)]
     [InlineData("[[10,0],[20,90],[30,180],[20,270],[10,360]]", true)]
     [InlineData("10 12\n350 30", false)]

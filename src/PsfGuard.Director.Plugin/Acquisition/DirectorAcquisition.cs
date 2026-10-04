@@ -183,6 +183,9 @@ public sealed class DirectorAcquisition
         using var enclosureCancellation = enclosure.Interrupted.Register(lifetime.Cancel);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
+        var admittedConstraints = constraintsReader.Refresh(constraintBinding);
+        if (admittedConstraints.Revision != equipmentBinding.ConstraintRevision)
+            throw new InvalidOperationException("Native constraints changed during admission.");
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
@@ -240,6 +243,7 @@ public sealed class DirectorAcquisition
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
         var launched = false;
         Task? watchdog = null;
+        Task? constraintWatchdog = null;
         Task? telemetryTask = null;
         Task? checkpointTask = null;
         using var background = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
@@ -250,6 +254,7 @@ public sealed class DirectorAcquisition
         CoordinatorSessionReporter? telemetry = null;
         Exception? executionError = null;
         Exception? reportingError = null;
+        Exception? constraintError = null;
         var released = false;
         var priorityRefresh = 0;
         var terminalFailed = false;
@@ -268,6 +273,7 @@ public sealed class DirectorAcquisition
             await intake.StartOnceAsync(pairing.Binding, pairing.ClientId, allocation, ledger, lifetime.Token);
             launched = true;
             watchdog = WatchdogAsync();
+            constraintWatchdog = Task.Run(ConstraintWatchdogAsync);
             checkpoint = new(runRoot, endpoint, pairing.Binding, ledger, Credential, connection.AllowInsecureHttp);
             telemetry = new CoordinatorSessionReporter(endpoint, pairing.Binding, Credential, connection.AllowInsecureHttp);
             if (options.LiveStatus) telemetryTask = TelemetryAsync(telemetry, ledger.LedgerId);
@@ -481,14 +487,17 @@ public sealed class DirectorAcquisition
         }
         catch (Exception error)
         {
-            executionError = error;
+            executionError = Volatile.Read(ref constraintError) is { } changed
+                ? new InvalidOperationException("Rig constraints changed or became unavailable; review and re-arm the session.", changed) : error;
             Report(launched ? "Stopped; allocation consumed, reconciliation required" : "Acquisition admission failed", null);
+            if (!ReferenceEquals(executionError, error)) throw executionError;
             throw;
         }
         finally
         {
             background.Cancel();
             if (watchdog is not null) await watchdog;
+            if (constraintWatchdog is not null) await constraintWatchdog;
             if (telemetryTask is not null) await telemetryTask;
             if (checkpointTask is not null)
             {
@@ -537,8 +546,10 @@ public sealed class DirectorAcquisition
                 {
                     var phase = stopped ? "Stopped; tracking off; reconciliation required"
                         : !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
+                        : Volatile.Read(ref constraintError) is not null ? "Stopped; parked; rig constraints changed; review required"
                         : terminalFailed || aborted ? "Stopped; parked; reconciliation required"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
+                    container.UpdateDisplay(d => d with { Operation = "" });
                     Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
@@ -605,6 +616,27 @@ public sealed class DirectorAcquisition
             }
             catch (OperationCanceledException) when (background.IsCancellationRequested) { }
             catch (Exception e) { Logger.Error(e); lifetime.Cancel(); }
+        }
+        async Task ConstraintWatchdogAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    // Keep slow file I/O independent of the safety watchdog.
+                    // A stalled read cannot postpone the acquisition stop.
+                    await Task.Run(() => constraintsReader.VerifyUnchangedAsync(constraintBinding, admittedConstraints, background.Token), background.Token)
+                        .WaitAsync(TimeSpan.FromSeconds(2), background.Token);
+                    await Task.Delay(1000, background.Token);
+                }
+            }
+            catch (OperationCanceledException) when (background.IsCancellationRequested) { }
+            catch (Exception error)
+            {
+                Volatile.Write(ref constraintError, error);
+                Logger.Error(error);
+                lifetime.Cancel();
+            }
         }
         async Task TelemetryAsync(CoordinatorSessionReporter reporter, string sessionId)
         {

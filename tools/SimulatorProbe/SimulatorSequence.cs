@@ -111,6 +111,7 @@ public sealed class SimulatorSequence : SequenceItem
         NinaSafetyInterlock? interlock = null;
         CancellationTokenRegistration safetyCancellation = default;
         var unsafeCancellationVerified = false;
+        var constraintChangeVerified = false;
         var enclosureCancellationVerified = false;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
@@ -280,15 +281,62 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 if (coordinator.LocalTargetScheduling)
                     sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
+                var slowSetup = new SlowSetupProbe();
+                if (coordinator.ConstraintChange is not null) sessionContainer.BeforeNewTarget.Add(slowSetup);
                 // The public session must own safety cancellation, not this probe.
                 safetyCancellation.Dispose();
                 using var publicLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                 var executing = sessionContainer.Execute(progress, publicLifetime.Token);
                 try
                 {
-                    while (!executing.IsCompleted && sessionContainer.Display.Phase != "Acquiring") await Task.Delay(50, lifetime.Token);
+                    while (!executing.IsCompleted && (coordinator.ConstraintChange is not null
+                        ? !slowSetup.Entered.Task.IsCompleted : sessionContainer.Display.Phase != "Acquiring"))
+                        await Task.Delay(50, lifetime.Token);
                     if (executing.IsCompleted) await executing;
                     await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+                    if (coordinator.ConstraintChange is { } change)
+                    {
+                        await slowSetup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(15), lifetime.Token);
+                        var originalHorizon = await File.ReadAllTextAsync(horizonPath, lifetime.Token);
+                        var timestamp = File.GetLastWriteTimeUtc(horizonPath);
+                        var latitude = profiles.ActiveProfile.AstrometrySettings.Latitude;
+                        var meridian = profiles.ActiveProfile.MeridianFlipSettings.PauseTimeBeforeMeridian;
+                        Step($"Changing {change} during a long native setup hook while the server is offline");
+                        try
+                        {
+                            if (change == "horizon")
+                            {
+                                await File.WriteAllTextAsync(horizonPath, "[[80,0],[80,100],[80,100.0001],[80,100.0002],[80,360]]", lifetime.Token);
+                                File.SetLastWriteTimeUtc(horizonPath, timestamp);
+                            }
+                            else if (change == "site") profiles.ActiveProfile.AstrometrySettings.Latitude = latitude + 1;
+                            else if (change == "meridian") profiles.ActiveProfile.MeridianFlipSettings.PauseTimeBeforeMeridian = meridian + 1;
+                            else throw new InvalidDataException("Unknown constraint test.");
+                            try { await executing.WaitAsync(TimeSpan.FromSeconds(10)); throw new InvalidDataException("Changed constraints did not stop acquisition."); }
+                            catch (InvalidOperationException error) when (error.Message.StartsWith("Rig constraints changed", StringComparison.Ordinal)) { }
+                            if (!slowSetup.Canceled || slowSetup.Completed || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark
+                                || telescope.GetInfo().TrackingEnabled || AcquisitionLease.IsActive
+                                || sessionHookEvents.Contains("AfterEachExposure")
+                                || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Any()
+                                || sessionContainer.Display.Operation.Length != 0
+                                || sessionContainer.Display.Phase != "Stopped; parked; rig constraints changed; review required")
+                                throw new InvalidDataException("Constraint stop did not cancel setup, prevent capture and park with a useful status.");
+                        }
+                        finally
+                        {
+                            await File.WriteAllTextAsync(horizonPath, originalHorizon, lifetime.Token);
+                            profiles.ActiveProfile.AstrometrySettings.Latitude = latitude;
+                            profiles.ActiveProfile.MeridianFlipSettings.PauseTimeBeforeMeridian = meridian;
+                        }
+                        await Task.Delay(1500, lifetime.Token);
+                        if (!executing.IsCompleted || AcquisitionLease.IsActive || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark)
+                            throw new InvalidDataException("Restoring constraints revived acquisition.");
+                        constraintChangeVerified = true;
+                        ledger = service.LastLedger;
+                        await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                        Step("Changed constraints canceled slow setup, saved no exposure, parked and stayed stopped after restoration");
+                        return;
+                    }
                     if (coordinator.PriorityRefresh)
                     {
                         using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -710,7 +758,7 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
                 enclosureCancellationVerified,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
                 ninaApi = "3.3.0.1058-nightly",
@@ -744,6 +792,7 @@ public sealed class SimulatorSequence : SequenceItem
                 geometryConstraints,
                 orientation,
                 unsafeCancellationVerified,
+                constraintChangeVerified,
                 captures = captures.Select(c => new { c.Intent.CaptureId, c.SavedPath, c.TotalMs }),
                 errors = errors.Select(e => e.ToString())
             };
@@ -762,6 +811,28 @@ public sealed class SimulatorSequence : SequenceItem
 
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Error is null && result.Value is { } value
         ? value : throw new InvalidDataException($"Simulator ledger operation failed: {result.Error}");
+
+    private sealed class SlowSetupState
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal bool Canceled;
+        internal bool Completed;
+    }
+
+    private sealed class SlowSetupProbe(SlowSetupState? shared = null) : SequenceItem
+    {
+        private readonly SlowSetupState state = shared ?? new();
+        internal TaskCompletionSource Entered => state.Entered;
+        internal bool Canceled => state.Canceled;
+        internal bool Completed => state.Completed;
+        public override object Clone() => new SlowSetupProbe(state);
+        public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            Entered.TrySetResult();
+            try { await Task.Delay(TimeSpan.FromSeconds(45), token); state.Completed = true; }
+            catch (OperationCanceledException) { state.Canceled = true; throw; }
+        }
+    }
 
     private sealed class SessionHookMarker(string slot, List<string> events) : SequenceItem
     {

@@ -42,6 +42,50 @@ internal sealed class NinaConstraintSnapshot : IDisposable
 
     internal long Generation => Interlocked.Read(ref generation);
     internal bool IsCurrent(long expectedGeneration) => !disposed && Generation == expectedGeneration;
+
+    // Read-only companion to dispatch Refresh: never reload NINA's horizon
+    // from a background task or accept new constraints into an active grant.
+    internal async Task VerifyUnchangedAsync(NinaConstraintBinding binding, NinaConstraints expected, CancellationToken token)
+    {
+        var profile = profiles.ActiveProfile;
+        Check();
+        if (binding.Mode == NinaHorizonMode.RequiredFile)
+        {
+            await using var file = new FileStream(binding.HorizonPath!, FileMode.Open, FileAccess.Read, FileShare.Read,
+                4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (file.Length > 1024 * 1024) throw new InvalidDataException("Horizon file exceeds one MiB.");
+            var bytes = new byte[checked((int)file.Length)];
+            await file.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
+            if (Convert.ToHexStringLower(SHA256.HashData(bytes)) != expected.Horizon.ContentSha256)
+                throw new InvalidOperationException("The horizon file changed during acquisition.");
+        }
+        Check();
+
+        void Check()
+        {
+            token.ThrowIfCancellationRequested();
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (Interlocked.Read(ref profileGeneration) != 0 || !ReferenceEquals(profiles.ActiveProfile, profile)
+                || profile.Id != binding.ProfileId || expected.ProfileId != binding.ProfileId
+                || Site(profile) != expected.Site || Flip(profile) != expected.Flip)
+                throw new InvalidOperationException("The NINA profile, site or meridian settings changed during acquisition.");
+            var path = profile.AstrometrySettings.HorizonFilePath;
+            var loaded = profile.AstrometrySettings.Horizon;
+            if (binding.Mode == NinaHorizonMode.FixedMinimum)
+            {
+                if (!string.IsNullOrWhiteSpace(path) || loaded is not null)
+                    throw new InvalidOperationException("A NINA horizon was added during acquisition.");
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)
+                    || !string.Equals(Path.GetFullPath(path), Path.GetFullPath(binding.HorizonPath!), StringComparison.OrdinalIgnoreCase)
+                    || loaded is null)
+                    throw new InvalidOperationException("The NINA horizon changed or became unavailable during acquisition.");
+                VerifyNativeCurve(expected.Horizon.Points, loaded);
+            }
+        }
+    }
     private void Changed(object? sender, EventArgs args) => Interlocked.Increment(ref generation);
     private void ProfileChanged(object? sender, EventArgs args)
     {

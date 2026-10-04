@@ -746,3 +746,36 @@ restart after safety recovered with the same package. Evidence:
 All 777 plugin tests passed. Package build, changed-file format verification,
 meta allocation tests and meta Clippy passed. Native template renders at 640
 and 1000 pixels remain beside each run's result.
+
+## Constraint changes during slow setup
+
+2026-10-03: native NINA 3.3.0.1064, ASCOM OmniSim and runtime 0.10.0 / IPC 10
+ran the packaged plugin against a fresh isolated PSF Guard main build.
+`-PublicAcquisition -ConstraintChange horizon`, `site` and `meridian` each
+changed local constraints while a 45-second native setup hook was running and
+the server was offline. Each canceled the hook before it finished, saved no
+exposure, parked, released local ownership and stayed stopped after restoring
+the original settings. The horizon case retained the file path, size and
+timestamp; only contents changed.
+
+Evidence:
+- Horizon: `artifacts/nina-smoke-38e53ac0f19b4b37951186f99e486dbd/probe/3831d430e62a4f8491a84bdcc3408767/result.json`.
+- Site: `artifacts/nina-smoke-3dcc48ca190f4c25acd17603597acc77/probe/c5b0c8b799a44296821dd4b91496f2e1/result.json`.
+- Meridian, including cleared terminal operation status: `artifacts/nina-smoke-204a5c8890ad4a63b699d7759dfb7e7f/probe/76d3b70109484cbfaf24341b7283677f/result.json`.
+
+All 788 plugin tests passed, including unreadable/locked/deleted files, profile
+round trips, fixed-horizon changes, cancellation and concurrent unchanged
+dispatch refreshes. Package build, changed-file format and whitespace checks
+passed. Native status renders at 640 and 1000 pixels retain the review-required
+stop reason without a running operation. This does not commission changed
+constraints automatically or implement recovery grants.
+
+The live ranked-priority regression passed with this guard enabled:
+`-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -ProjectOrder
+-PriorityRefresh` completed A, B, A across two sealed ledgers without a false
+constraint stop, duplicate capture or replenished attempt budget. Evidence:
+`artifacts/nina-smoke-8a231fd69ce8464c99bcac1e49c4b0e8/probe/ffa73810158b424b9034dfe0542b761c/result.json`.
+
+`-PublicAcquisition -PublicUnsafe` also passed with the final package: abort
+the active exposure, park and remain stopped after safety recovery. Evidence:
+`artifacts/nina-smoke-556e22db895444cab9b1ed04c3bb4119/probe/9e7dac1ca5dc4208a756c6531a1b5b48/result.json`.
