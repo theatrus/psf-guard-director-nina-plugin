@@ -187,6 +187,7 @@ public sealed class DirectorAcquisition
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             connection.AllowInsecureHttp, options.LocalTargetScheduling);
+        using var previews = new CoordinatorProgramClient(endpoint, Credential, connection.AllowInsecureHttp);
         CoordinatorAllocation allocation;
         if (options.AutomaticWorkloads)
         {
@@ -250,6 +251,7 @@ public sealed class DirectorAcquisition
         Exception? executionError = null;
         Exception? reportingError = null;
         var released = false;
+        var priorityRefresh = 0;
         var terminalFailed = false;
         var mountShutdown = new NinaMountShutdown();
         var archive = new CoordinatorRunArchive(runRoot, endpoint, pairing.Binding, pairing.ClientId, connection.AllowInsecureHttp);
@@ -281,6 +283,11 @@ public sealed class DirectorAcquisition
             while (true)
             {
                 Check();
+                if (Volatile.Read(ref priorityRefresh) != 0)
+                {
+                    Report("Priority changed; parking for a refreshed workload", "Online");
+                    break;
+                }
                 var current = Snapshot();
                 var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
                 Report(decision.Reason, null);
@@ -292,6 +299,11 @@ public sealed class DirectorAcquisition
                 if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
                 if (decision.Action == PlannerAction.Wait)
                 {
+                    if (DateTimeOffset.UtcNow >= nextCheckIn)
+                    {
+                        QueueCheckIn();
+                        nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
+                    }
                     if (options.ParkOnWait) await Park(lifetime.Token);
                     await hooks.WaitAsync(ct => Task.Delay(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
                     // Waiting ends the target visit, so re-enter its setup on
@@ -363,6 +375,13 @@ public sealed class DirectorAcquisition
                         throw new InvalidOperationException("Native preparation failed.");
                 }
                 if (reselect) continue;
+                if (Volatile.Read(ref priorityRefresh) != 0)
+                {
+                    // Preparation is settled and no capture was reserved.
+                    // Close it before yielding instead of starting another sub.
+                    Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                    continue;
+                }
                 CheckPointing();
                 if (options.CheckInOnTarget && newTarget) QueueCheckIn();
                 current = Snapshot();
@@ -397,7 +416,8 @@ public sealed class DirectorAcquisition
             }
             await hooks.FinishAsync(progress, lifetime.Token);
             if (options.CheckInAtEnd) await CheckIn(drain: true);
-            Report("Allocation finished; awaiting assessment or a new reconciled plan", null);
+            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
+                : "Allocation finished; awaiting assessment or a new reconciled plan", null);
 
             void QueueCheckIn()
             {
@@ -434,6 +454,22 @@ public sealed class DirectorAcquisition
                             allocation.Envelope.PreviewRevision, token: ct);
                         container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
                     } while (drain && !result.CaughtUp);
+                    if (!drain && result.CaughtUp && options.AutomaticWorkloads && options.CheckInMode == DirectorCheckInMode.Live)
+                    {
+                        // Progress alone changes the preview revision. Compare
+                        // priority intent so ordinary saves cannot churn grants.
+                        CoordinatorProgramPreview preview;
+                        try { preview = await previews.ReadPreviewAsync(pairing.Binding, configuration, token: ct); }
+                        catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.NotReady)
+                        {
+                            Logger.Info("Director priority preview is not ready; retaining the current allocation.");
+                            return;
+                        }
+                        var changed = CoordinatorPriorityRefresh.Required(program, preview.Envelope.Program);
+                        if (changed && Volatile.Read(ref priorityRefresh) == 0)
+                            Logger.Info("Director priority update queued for the next settled exposure boundary.");
+                        Volatile.Write(ref priorityRefresh, changed ? 1 : 0);
+                    }
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
                 {

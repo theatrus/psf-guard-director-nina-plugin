@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -31,6 +31,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool LocalTargetScheduling { get; private init; }
     internal bool MoonAvoidance { get; private init; }
     internal bool ObservingPreferences { get; private init; }
+    internal bool ProjectOrder { get; private init; }
+    internal bool PriorityRefresh { get; private init; }
+    internal bool PriorityRefreshVerified { get; private set; }
+    private Guid[] rankedProjects = [];
     internal bool LocalTargetsVerified { get; private set; }
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
@@ -76,7 +80,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh };
         }
         catch
         {
@@ -262,6 +266,27 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 new { preview_digest = preview.GetProperty("preview_digest").GetString() }, token);
         }
         using var client = new CoordinatorProgramClient(endpoint, Credential);
+        if (ProjectOrder)
+        {
+            rankedProjects = projectIds.ToArray();
+            await SetProjectOrderAsync(rankedProjects, token);
+            if (!PriorityRefresh)
+            {
+                // Exercise replacement and inheritance at both scopes before
+                // running the final inherited site order offline in NINA.
+                var site = Guid.NewGuid();
+                await OperatorAsync(HttpMethod.Post, "sites", new { id = site, name = "Priority simulator site" }, token);
+                await SetOrderAsync("site", site, rankedProjects, null, token);
+                await SetProjectOrderAsync(rankedProjects.Reverse().ToArray(), token);
+                await SetOrderAsync("rig", binding.RigId, rankedProjects.Reverse().ToArray(), site, token);
+                var overridden = await client.ReadPreviewAsync(binding, configuration, token: token);
+                var highGoal = overridden.Envelope.Program.Assignment.Goals.MaxBy(g => g.Priority)!;
+                var highTarget = overridden.Envelope.Program.Bindings.Single(b => b.GoalId == highGoal.Id).TargetId;
+                if (overridden.Envelope.Program.Targets.Single(t => t.Id == highTarget).Name != "Higher priority remote target")
+                    throw new InvalidDataException("Rig order did not replace the site order.");
+                await SetOrderAsync("rig", binding.RigId, null, site, token);
+            }
+        }
         var cache = new CoordinatorPreviewCache(root, endpoint, binding, configuration);
         var first = await client.ReadAndCachePreviewAsync(binding, configuration, cache, token);
         // A new client and cache instance must accept an unconditional repeat.
@@ -276,6 +301,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         previewRevision = second.Envelope.Revision;
         if (ObservingPreferences && second.Envelope.Program.ObservingPreferences?.Bindings.Count != 3)
             throw new InvalidDataException("Server omitted the observing preferences from its program.");
+        if (ProjectOrder && (second.Envelope.Program.ObservingPreferences is not null
+            || second.Envelope.Program.Assignment.Goals.MaxBy(g => g.Priority)!.Id == second.Envelope.Program.Bindings.Single(b => b.TargetId == second.Envelope.Program.Targets.Single(t => t.Name == "Higher priority remote target").Id).GoalId))
+            throw new InvalidDataException("Global project order did not override legacy objective priorities.");
         var admission = new
         {
             binding.CoordinatorInstanceId,
@@ -331,13 +359,13 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     {
         if (!LocalTargetScheduling) return;
         var program = allocation!.Envelope.Snapshot.Program;
-        var expected = program.Bindings.Single(b => b.GoalId == program.Assignment.Goals.Single(g => g.Priority == 10).Id).TargetId;
+        var expected = program.Targets.Single(t => t.Name == "Higher priority remote target").Id;
         var ordered = captures.OrderBy(c => c.StartedAt).ToArray();
-        var expectedHooks = ObservingPreferences
+        var expectedHooks = ObservingPreferences || ProjectOrder
             ? new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget", "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }
             : new[] { "BeforeNewTarget", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget", "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" };
         var orderedTargets = ordered.Select(c => c.Intent.Program?.TargetId).ToArray();
-        var correctOrder = ordered.Length == 3 && (ObservingPreferences
+        var correctOrder = ordered.Length == 3 && (ObservingPreferences || ProjectOrder
             ? orderedTargets[0] != expected && orderedTargets[0] == orderedTargets[1] && orderedTargets[2] == expected
             : orderedTargets[0] == expected && orderedTargets[1] != expected && orderedTargets[1] == orderedTargets[2]);
         if (!correctOrder || !hooks.Where(h => !MoonAvoidance || h is not ("BeforeWait" or "AfterWait")).SequenceEqual(expectedHooks))
@@ -349,6 +377,80 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     }
 
     private static ulong NowMs() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    private async Task SetProjectOrderAsync(Guid[] order, CancellationToken token)
+        => await SetOrderAsync("global", pairing.Binding.CoordinatorInstanceId, order, null, token);
+
+    private async Task SetOrderAsync(string scope, Guid id, Guid[]? order, Guid? site, CancellationToken token)
+    {
+        var path = $"preferences/{scope}/{id:D}";
+        var current = await OperatorAsync(HttpMethod.Get, path, null, token);
+        await OperatorAsync(HttpMethod.Put, path, new
+        {
+            scope,
+            scope_id = id,
+            revision = current.GetProperty("revision").GetUInt64(),
+            enabled = (bool?)null,
+            site_id = site,
+            overrides = new { weights = new { }, importance = (int?)null, minimum_dwell_ms = (ulong?)null, switch_margin = (int?)null },
+            project_order = order
+        }, token);
+    }
+
+    internal Task ReverseProjectOrderAsync(CancellationToken token) => SetProjectOrderAsync(rankedProjects.Reverse().ToArray(), token);
+
+    internal async Task VerifyPriorityRefreshAsync(string root, DirectorConfiguration configuration,
+        IReadOnlyList<PsfGuard.Director.Plugin.Acquisition.CaptureEvidence> captures, CancellationToken token)
+    {
+        var runs = Directory.EnumerateDirectories(Path.Combine(root, pairing.Binding.ProfileId.ToString("N")))
+            .Select(d => new CoordinatorRunArchive(d, endpoint, pairing.Binding, pairing.ClientId).Read())
+            .Where(r => r is not null).Select(r => r!).OrderBy(r => r.Allocation.AdmittedAtMs).ToArray();
+        if (runs.Length != 2 || runs.Any(r => !r.Completed || !r.Released) || captures.Count != 3
+            || captures.Select(c => c.Intent.GoalId).Distinct().Count() != 3)
+            throw new InvalidDataException("Priority handoff did not produce two clean runs and exactly three unique goal captures.");
+        var original = runs[0].Allocation.Snapshot.Program;
+        var successor = runs[1].Allocation.Snapshot.Program;
+        var firstCaptures = captures.Where(c => c.Intent.AssignmentId == original.Assignment.Id).OrderBy(c => c.StartedAt).ToArray();
+        var nextCaptures = captures.Where(c => c.Intent.AssignmentId == successor.Assignment.Id).OrderBy(c => c.StartedAt).ToArray();
+        if (firstCaptures.Length != 1 || nextCaptures.Length != 2
+            || firstCaptures[0].Intent.TargetName == "Higher priority remote target"
+            || nextCaptures[0].Intent.TargetName != "Higher priority remote target"
+            || firstCaptures[^1].UpdatedAt > nextCaptures[0].StartedAt)
+            throw new InvalidDataException("The refreshed ranking interrupted a capture or failed to select the new highest project.");
+        foreach (var goal in successor.Assignment.Goals)
+        {
+            var previous = original.Assignment.Goals.Single(g => g.Id == goal.Id);
+            var spent = (uint)firstCaptures.Count(c => c.Intent.GoalId == goal.Id);
+            if (goal.AttemptsRemaining != previous.AttemptsRemaining - spent || goal.Pending != spent || goal.Accepted != 0)
+                throw new InvalidDataException("Successor lost pending progress or refilled the attempt budget.");
+        }
+        foreach (var run in runs)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
+            request.Headers.Authorization = new("Bearer", pairing.Token);
+            request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
+            request.Content = JsonContent.Create(new
+            {
+                coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,
+                catalog_id = pairing.Binding.CatalogId,
+                request_id = run.Allocation.AllocationId,
+                configuration_id = configuration.Id,
+                execution_mode = "local_sequence_v3"
+            });
+            using var response = await operatorClient.SendAsync(request, token);
+            response.EnsureSuccessStatusCode();
+            using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
+            var data = body.RootElement.GetProperty("data");
+            if (data.GetProperty("state").GetString() != "released"
+                || data.GetProperty("workload").GetProperty("terminal_sequence").GetUInt64() !=
+                    (ulong)captures.Count(c => c.Intent.AssignmentId == run.Allocation.Snapshot.Program.Assignment.Id) * 2)
+                throw new InvalidDataException("Server did not seal the exact handoff ledger.");
+        }
+        using var client = new CoordinatorProgramClient(endpoint, Credential);
+        var latest = await client.ReadPreviewAsync(pairing.Binding, configuration, token: token);
+        if (latest.Envelope.Program.Assignment.Goals.Any(g => g.Pending != 1 || g.Accepted != 0))
+            throw new InvalidDataException("Reconciled successor double-counted or lost pending captures.");
+        LocalTargetsVerified = AutomaticWorkloadVerified = PriorityRefreshVerified = true;
+    }
     internal async Task VerifyAutomaticWorkloadAsync(string root, DirectorConfiguration configuration, CancellationToken token)
     {
         using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
@@ -483,9 +585,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         while (!File.Exists(Path.Combine(root, name))) await Task.Delay(100, wait.Token);
     }
 
-    private async Task<JsonElement> OperatorAsync(HttpMethod method, string path, object value, CancellationToken token)
+    private async Task<JsonElement> OperatorAsync(HttpMethod method, string path, object? value, CancellationToken token)
     {
-        using var request = new HttpRequestMessage(method, $"api/director/v1/{path}") { Content = JsonContent.Create(value, options: Wire) };
+        using var request = new HttpRequestMessage(method, $"api/director/v1/{path}") { Content = value is null ? null : JsonContent.Create(value, options: Wire) };
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));

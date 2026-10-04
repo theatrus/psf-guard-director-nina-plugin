@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -14,6 +15,38 @@ public sealed class ProgramTests
         [new("target", "M42", 298800000, -18000000, null)],
         [new("recipe", 1000, "L", new(1, 1), 40, null, 0, null)], [new("goal", "target", "recipe")]);
     private static ProgramLocalState Local() => new(Program().Configuration, new("config", Program().Targets[0]), false, false, 0);
+
+    [Fact]
+    public void PriorityRefreshIgnoresProgressAndRequiresTheSameGoalsAndConfiguration()
+    {
+        var held = Program();
+        var goal = held.Assignment.Goals[0];
+        var progress = held with { Assignment = held.Assignment with { Id = "new-preview", Goals = [goal with { Pending = 1, Accepted = 1, AttemptsRemaining = 0 }] } };
+        Assert.False(CoordinatorPriorityRefresh.Required(held, progress));
+        var changed = progress with { Assignment = progress.Assignment with { Goals = [progress.Assignment.Goals[0] with { Priority = goal.Priority + 1 }] } };
+        Assert.True(CoordinatorPriorityRefresh.Required(held, changed));
+        Assert.False(CoordinatorPriorityRefresh.Required(held, changed with { Configuration = held.Configuration with { Id = "another" } }));
+        Assert.False(CoordinatorPriorityRefresh.Required(held, changed with { Assignment = changed.Assignment with { Goals = [goal with { Id = "another-goal" }] } }));
+        Assert.False(CoordinatorPriorityRefresh.Required(held, changed with { Assignment = changed.Assignment with { Goals = [] } }));
+    }
+
+    [Fact]
+    public void PriorityRefreshComparesGoalIdentityAndSupportsLeavingLegacyWeights()
+    {
+        var held = Program();
+        var goal = held.Assignment.Goals[0];
+        held = held with { Assignment = held.Assignment with { Goals = [goal, goal with { Id = "second", Priority = goal.Priority + 1 }] } };
+        var reordered = held with { Assignment = held.Assignment with { Goals = held.Assignment.Goals.Reverse().ToImmutableArray() } };
+        Assert.False(CoordinatorPriorityRefresh.Required(held, reordered));
+        var weighted = held with
+        {
+            ObservingPreferences = new(1,
+            ImmutableDictionary<string, DirectorResolvedPolicy>.Empty, ImmutableDictionary<string, string>.Empty)
+        };
+        Assert.True(CoordinatorPriorityRefresh.Required(weighted, held));
+        Assert.False(CoordinatorPriorityRefresh.Required(held, weighted));
+        Assert.False(CoordinatorPriorityRefresh.Required(weighted, weighted));
+    }
     private static PreparationEstimates Estimates() => new(0, 0, 0, 0, 0, 0, 0);
     private static readonly LedgerIdentity Identity = new("3924de93-0f42-4b12-8036-66aa03fabdd0", "assignment", 9007199254740993UL, "rig-test", "config");
     private static JsonObject Opened() => new() { ["status"] = "program_opened", ["program_version"] = 1, ["info"] = ProgramContract.Encode(Identity) };

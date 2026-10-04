@@ -148,15 +148,40 @@ non-geometry ledger, and binding comparisons preserve exact JSON numbers.
 Detailed lunar diagnostics and quality-pause recovery remain separate unfinished
 phase work.
 
-## Observing preferences
+## Project ranking and live priority changes
 
-In PSF Guard's project planner, open **Observing preferences**, select the rig
-and scope, and enable the mode at global, site or rig scope. Tune importance,
-relative weights, minimum dwell and switching margin, or start with a preset.
-Project settings inherit unless explicitly overridden; zero is a real value,
-not inheritance. Existing rigs continue using legacy priorities by default.
+Use **Project priority** in PSF Guard's planner to order projects globally, with
+optional site or rig replacement orders. The server compiles that order into
+shared-core priorities. NINA selects the highest eligible project locally,
+including while disconnected; it does not implement a second scheduler.
 
-New allocations carry their resolved policy and source revisions. Runtime
+With **Automatic workloads** and **Live** check-in enabled, a successful start,
+target or periodic check-in also reads the current program preview. A changed
+priority for the same goal set queues a handoff at the next settled boundary.
+Progress-only revisions do not cause handoffs. Manual allocations and deferred
+check-in keep their original order for the full allocation.
+
+The handoff finishes the current preparation/exposure and its hooks, parks,
+checks that no preparation or capture is unresolved, delivers the full capture
+feed and releases the old workload. Only then can a newly commissioned grant
+start. Pending images and spent attempts carry forward; no budget is reset.
+An outage while executing retains the cached order. An outage during terminal
+release leaves the rig parked with durable evidence for later batch check-in,
+not permission to replay the old grant. This conservative handoff includes a
+park/unpark cycle; uninterrupted tracking across grants is not implemented.
+
+New/removed goals, configuration changes, grade corrections and arbitrary
+weighted-policy edits are not live priority handoffs. Those remain part of
+broader reconciliation. A preview that is not ready leaves the held grant in
+place. Safety, expiry and enclosure policies retain authority over every step.
+
+## Legacy observing preferences
+
+Previously issued weighted programs and their stored settings remain supported.
+New ranked programs omit those policies; the current planner does not expose
+per-project importance or weights.
+
+Legacy weighted allocations carry their resolved policy and source revisions. Runtime
 0.10.0 / IPC 10 uses the shared geometry scorer offline; the plugin does not
 implement its own ranking. The ledger preserves selected-goal time on restart.
 One exposure's preparation retains its selection while rechecking hard limits

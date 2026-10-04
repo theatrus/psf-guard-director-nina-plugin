@@ -708,3 +708,41 @@ unsafe weather aborted the active exposure, parked the simulated mount and
 remained stopped after recovery. Evidence:
 `artifacts/nina-smoke-87f8b9fbbaf341ba8e56c405ccc2e2d5/probe/fa26e827b9c64da2bbcb4a174a40e5ef/result.json`.
 All 775 plugin tests, package build, format and runtime-fetch regressions passed.
+
+## Ranked priority handoff
+
+2026-10-03: the packaged plugin, runtime 0.10.0 / IPC 10 and native NINA
+3.3.0.1064 passed against isolated local PSF Guard with ASCOM OmniSim devices.
+No normal NINA profile, real equipment or live catalog was used.
+
+`-PublicAcquisition -LocalTargetScheduling -ProjectOrder` verified that a rig
+order replaces its site order, clearing it inherits the site order, and that
+site order replaces the global order. The final inherited order executed
+offline as A, A, B despite conflicting legacy objective priorities. All six
+capture events reconciled after reconnection; repeat launch was refused.
+Evidence: `artifacts/nina-smoke-98b0850e96e8487bb272317be136814e/probe/13218b9a3385450ca6e59ffdbac2d424/result.json`.
+
+Adding `-AutomaticWorkloads -PriorityRefresh` changed the global ranking during
+the first exposure. NINA finished A, closed the next unused preparation,
+parked and released the two-event ledger, then obtained a successor and
+captured B followed by the remaining A exposure. Both ledgers were sealed,
+pending credit and spent attempts carried forward, and saved-run batch
+check-in delivered no duplicate events.
+Evidence: `artifacts/nina-smoke-8b2096d4964b472eb9fdc0b5df03965e/probe/8b67b290b2874324a004387a5d837d5e/result.json`.
+
+This verifies ranked-priority replacement for the same goals and configuration,
+not arbitrary goal/grade changes, seamless tracking between grants, or
+unattended production readiness. Manual and deferred sessions keep their
+held order until they obtain another allocation.
+
+The unchanged-priority automatic regression also passed with `-ProjectOrder
+-AutomaticWorkloads -OfflineWorkloadRelease`: one ledger, no progress-driven
+handoff, offline completion and park, then batch release on reconnection.
+Evidence: `artifacts/nina-smoke-052ea89f4a484855a91a023ff2253993/probe/331b23cff8fb4862901f9a232fb654f9/result.json`.
+
+`-PublicAcquisition -PublicUnsafe` passed exposure abort, park and no automatic
+restart after safety recovered with the same package. Evidence:
+`artifacts/nina-smoke-986c585ff568423cacffd0609a6bfdd8/probe/9b83802eac5441aa93ae7598fe484304/result.json`.
+All 777 plugin tests passed. Package build, changed-file format verification,
+meta allocation tests and meta Clippy passed. Native template renders at 640
+and 1000 pixels remain beside each run's result.

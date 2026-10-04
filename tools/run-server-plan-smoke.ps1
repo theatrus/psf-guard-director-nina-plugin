@@ -15,9 +15,13 @@ param(
     [switch]$LocalTargetScheduling,
     [switch]$MoonAvoidance,
     [switch]$ObservingPreferences,
+    [switch]$ProjectOrder,
+    [switch]$PriorityRefresh,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
+if ($ProjectOrder -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $ObservingPreferences -or $MoonAvoidance -or $PublicUnsafe)) { throw 'ProjectOrder requires safe public local scheduling without weights or Moon-only waits.' }
+if ($PriorityRefresh -and (!$ProjectOrder -or !$AutomaticWorkloads -or $OfflineWorkloadRelease -or $DeferredCheckIn)) { throw 'PriorityRefresh requires live automatic ranked workloads.' }
 if ($ObservingPreferences -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $MoonAvoidance -or $PublicUnsafe -or $EnclosureClosure)) { throw 'ObservingPreferences requires safe public local target scheduling.' }
 if ($EnclosureClosure -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $MoonAvoidance)) { throw 'EnclosureClosure requires only PublicAcquisition.' }
 if ($MoonAvoidance -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $AutomaticWorkloads -or $PublicUnsafe)) { throw 'MoonAvoidance requires safe public local scheduling without automatic workloads.' }
@@ -75,6 +79,7 @@ try {
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
+        ForEach-Object { $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_ } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -111,6 +116,8 @@ try {
     if ($LocalTargetScheduling -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
     if ($MoonAvoidance -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
     if ($ObservingPreferences -and !$evidence.observing_preferences_verified) { throw 'Weighted observing preferences did not change native target order.' }
+    if ($ProjectOrder -and !$evidence.project_order_verified) { throw 'Ranked project execution was not verified.' }
+    if ($PriorityRefresh -and !$evidence.priority_refresh_verified) { throw 'Safe-boundary priority handoff was not verified.' }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {
