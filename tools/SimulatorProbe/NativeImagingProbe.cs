@@ -27,13 +27,21 @@ internal sealed class NativeImagingProbe
     internal List<string> Operations { get; } = [];
     internal bool FailureInjected { get; private set; }
     internal INinaActionFactory Factory { get; }
+    internal NativeFlipProbe? Flip { get; }
 
     internal NativeImagingProbe(INinaActionFactory original, IProfileService profiles, ICameraMediator camera,
         ITelescopeMediator telescope, IFilterWheelMediator wheel, IGuiderMediator guider, IFocuserMediator focuser,
         IDomeMediator dome, IDomeFollower follower, IImagingMediator imaging, IImageHistoryVM history,
-        ISafetyMonitorMediator safety, string? failure)
+        ISafetyMonitorMediator safety, string? failure, bool forceFlip = false)
     {
         var windows = new Mock<IWindowServiceFactory> { DefaultValue = DefaultValue.Mock };
+        var window = new Mock<IWindowService>();
+        var dialog = new Mock<IDispatcherOperationWrapper>();
+        dialog.Setup(x => x.GetAwaiter()).Returns(() => Task.CompletedTask.GetAwaiter());
+        window.Setup(x => x.ShowDialog(It.IsAny<object>(), It.IsAny<string>(), It.IsAny<System.Windows.ResizeMode>(),
+            It.IsAny<System.Windows.WindowStyle>(), It.IsAny<System.Windows.Input.ICommand>())).Returns(dialog.Object);
+        window.Setup(x => x.Close()).Returns(Task.CompletedTask);
+        windows.Setup(x => x.Create()).Returns(window.Object);
         var focus = new Mock<IAutoFocusVM>();
         focus.Setup(f => f.StartAutoFocus(It.IsAny<FilterInfo>(), It.IsAny<CancellationToken>(), It.IsAny<IProgress<ApplicationStatus>>()))
             .Returns(async (FilterInfo filter, CancellationToken ct, IProgress<ApplicationStatus> p) =>
@@ -53,6 +61,8 @@ internal sealed class NativeImagingProbe
             });
         var focusFactory = new Mock<IAutoFocusVMFactory>();
         focusFactory.Setup(f => f.Create()).Returns(focus.Object);
+        if (forceFlip) Flip = new(profiles, camera, telescope, focuser, guider, wheel, dome, follower,
+            imaging, history, safety, focusFactory.Object, windows.Object, failure == "meridian");
         var solver = new Mock<ICenteringSolver>();
         solver.Setup(s => s.Center(It.IsAny<CaptureSequence>(), It.IsAny<CenterSolveParameter>(), It.IsAny<IProgress<PlateSolveProgress>>(),
             It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
@@ -70,7 +80,7 @@ internal sealed class NativeImagingProbe
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>());
-        factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>()).Returns(() => original.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>());
+        factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>()).Returns(() => Flip?.Trigger ?? original.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>());
         factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>()).Returns(() => original.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>());
         factory.Setup(f => f.GetTrigger<AutofocusAfterFilterChange>()).Returns(() => Configure(new AutofocusAfterFilterChange(profiles, history, camera, wheel, focuser, focusFactory.Object, safety)));
         factory.Setup(f => f.GetTrigger<AutofocusAfterTimeTrigger>()).Returns(() => Configure(new AutofocusAfterTimeTrigger(profiles, history, camera, wheel, focuser, focusFactory.Object, safety)));

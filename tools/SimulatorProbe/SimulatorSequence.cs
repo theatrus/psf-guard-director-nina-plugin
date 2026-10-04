@@ -219,7 +219,18 @@ public sealed class SimulatorSequence : SequenceItem
                 if (!await focuser.Connect() || focuser.GetInfo().DeviceId != "ASCOM.OmniSim.Focuser") throw new IOException("Simulator focuser connection failed.");
                 await guider.Rescan();
                 if (!await guider.Connect() || guider.GetInfo().DeviceId != "Direct_Guider") throw new IOException("Direct guider connection failed.");
-                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure);
+                if (coordinator.ForceNativeFlip)
+                {
+                    var flip = profiles.ActiveProfile.MeridianFlipSettings;
+                    flip.MinutesAfterMeridian = 0;
+                    flip.MaxMinutesAfterMeridian = 0;
+                    flip.PauseTimeBeforeMeridian = 0;
+                    flip.SettleTime = 1;
+                    flip.UseSideOfPier = false;
+                    flip.Recenter = false; // No real sky solve is available to this simulator.
+                    flip.AutoFocusAfterFlip = true;
+                }
+                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure, coordinator.ForceNativeFlip);
             }
             await Revalidate(lifetime.Token);
             Step("Refreshing native site and fixture horizon constraints");
@@ -244,6 +255,10 @@ public sealed class SimulatorSequence : SequenceItem
             // the simulator's current coordinates without requesting a slew.
             var current = telescope.GetCurrentPosition();
             var target = new Coordinates(current.RA, current.Dec, current.Epoch, Coordinates.RAType.Hours);
+            // Arrive east of the meridian; after two saves the real flip VM
+            // waits through transit before issuing the ASCOM flip slew.
+            if (coordinator?.ForceNativeFlip == true)
+                target = new Coordinates((telescope.GetInfo().SiderealTime + 0.025) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
@@ -314,6 +329,7 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
+                if (nativeProbe?.Flip is { } flipProbe) sessionContainer.AfterEachExposure.Add(flipProbe.SaveMarker());
                 if (coordinator.LocalTargetScheduling && !coordinator.NativeImaging)
                     sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
                 var slowSetup = new SlowSetupProbe();
@@ -329,8 +345,18 @@ public sealed class SimulatorSequence : SequenceItem
                         Exception? failure = null;
                         // Native AbortOnError cancels the parent NINA sequence too.
                         // Await actual shutdown with an independent deadline.
-                        try { await executing.WaitAsync(TimeSpan.FromSeconds(90)); }
+                        try { await executing.WaitAsync(TimeSpan.FromSeconds(150)); }
                         catch (Exception error) when (error is not TimeoutException) { failure = error; }
+                        if (fault == "meridian")
+                        {
+                            nativeProbe!.Flip!.Verify(sessionContainer, failed: true);
+                            if (failure is null || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || AcquisitionLease.IsActive
+                                || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Count() != 2)
+                                throw new InvalidDataException("Failed flip did not preserve two saves, block the third exposure and park.", failure);
+                            nativeFailureVerified = true;
+                            Step("Native flip failure blocked the next exposure, parked and retained the two earlier saves");
+                            return;
+                        }
                         if (failure is null || nativeProbe?.FailureInjected != true || !nativeProbe.Operations.Contains(fault == "center" ? "Center" : "Autofocus")
                             || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || AcquisitionLease.IsActive
                             || sessionHookEvents.Contains("AfterEachExposure")
@@ -464,7 +490,7 @@ public sealed class SimulatorSequence : SequenceItem
                     else if (coordinator.AutomaticWorkloads && !coordinator.OfflineWorkloadRelease)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(coordinator.ForceNativeFlip ? 180 : 90));
                         while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for eligible work or quality assessment")
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
@@ -546,6 +572,7 @@ public sealed class SimulatorSequence : SequenceItem
                     || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")
                     || sessionContainer.GetTriggersSnapshot().Any()))
                     throw new InvalidDataException("Native target centering/autofocus did not run for both targets.");
+                nativeProbe?.Flip?.Verify(sessionContainer, failed: false);
                 if (!coordinator.LocalTargetScheduling && !sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
                     throw new InvalidDataException("Public session hooks did not follow confirmed save boundaries.");
                 await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
@@ -824,6 +851,17 @@ public sealed class SimulatorSequence : SequenceItem
                 nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
                 nativeFailureVerified,
                 nativeOperations = nativeProbe?.Operations,
+                nativeFlip = nativeProbe?.Flip is { } flipEvidence ? new
+                {
+                    flipEvidence.Attempts,
+                    flipEvidence.MountResult,
+                    flipEvidence.FailureInjected,
+                    flipEvidence.NativeAfterSuccess,
+                    flipEvidence.PierBefore,
+                    flipEvidence.PierAfter,
+                    flipEvidence.Events,
+                    Steps = flipEvidence.Workflow?.Steps.Select(s => new { s.Id, s.Finished }).ToArray()
+                } : null,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
                 ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,

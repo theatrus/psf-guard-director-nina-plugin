@@ -1,5 +1,8 @@
 # Unreleased
 
+- Name failed automatic triggers in Director errors instead of leaving the
+  failing operation blank.
+
 - Director uses NINA's meridian-flip trigger with checked workflow outcomes,
   flip activity entries, and runtime defaults that stay out of saved sequences.
 

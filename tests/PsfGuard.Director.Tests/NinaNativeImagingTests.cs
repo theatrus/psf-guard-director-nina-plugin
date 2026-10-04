@@ -47,7 +47,7 @@ public sealed class NinaNativeImagingTests
         using var native = f.Create();
         native.Install(session);
         trigger.Status = status;
-        Assert.Throws<InvalidOperationException>(native.CheckTriggers);
+        Assert.Contains("RestoreGuiding", Assert.Throws<InvalidOperationException>(native.CheckTriggers).Message);
         native.Dispose();
         Assert.Empty(session.GetTriggersSnapshot());
         native.Dispose();
