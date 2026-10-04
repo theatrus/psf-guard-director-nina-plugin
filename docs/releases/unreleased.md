@@ -1,5 +1,10 @@
 # Unreleased
 
+- Apply changed project rankings at live check-in boundaries in automatic
+  sessions. Finish the current exposure, park and reconcile before requesting
+  a fresh workload; preserve pending images and spent attempts. Deferred and
+  manual allocations keep their original order.
+
 - Execute opt-in observing preferences saved in the PSF Guard planner, including
   inherited importance, scoring weights, dwell and switching margin. Policies
   stay bound to their allocation and work offline with the shared Rust core.

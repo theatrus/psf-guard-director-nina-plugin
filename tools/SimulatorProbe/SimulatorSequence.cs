@@ -289,6 +289,14 @@ public sealed class SimulatorSequence : SequenceItem
                     while (!executing.IsCompleted && sessionContainer.Display.Phase != "Acquiring") await Task.Delay(50, lifetime.Token);
                     if (executing.IsCompleted) await executing;
                     await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
+                    if (coordinator.PriorityRefresh)
+                    {
+                        using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        while (!camera.GetInfo().IsExposing && !executing.IsCompleted) await Task.Delay(20, dispatchDeadline.Token);
+                        if (executing.IsCompleted) throw new InvalidDataException("Priority test never entered capture.");
+                        await coordinator.ReverseProjectOrderAsync(lifetime.Token);
+                        Step("Changed global project order while a native exposure was running");
+                    }
                     if (coordinator.EnclosureClosure)
                     {
                         using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -363,13 +371,16 @@ public sealed class SimulatorSequence : SequenceItem
                         publicLifetime.Cancel();
                         try { await executing; throw new InvalidDataException("Automatic session ignored cancellation."); }
                         catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
-                        await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
+                        if (!coordinator.PriorityRefresh) await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
                     }
                     else await executing;
                 }
                 finally { if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } } }
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
-                foreach (var file in Directory.GetFiles(Path.Combine(service.LastRunDirectory!, "journal"), "*.json", SearchOption.AllDirectories))
+                var journalRoots = coordinator.PriorityRefresh
+                    ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
+                    : [Path.Combine(service.LastRunDirectory!, "journal")];
+                foreach (var file in journalRoots.SelectMany(d => Directory.GetFiles(d, "*.json", SearchOption.AllDirectories)))
                 {
                     var capture = CaptureJournal.Read(file);
                     if (capture.Phase != CapturePhase.Saved || !File.Exists(capture.SavedPath)) throw new InvalidDataException("Public capture lacks a saved file.");
@@ -377,6 +388,19 @@ public sealed class SimulatorSequence : SequenceItem
                     if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h => h.Key == NinaCaptureAdapter.CaptureIdHeader
                         && h.Value.Trim() == capture.Intent.CaptureId.ToString("D"))) throw new InvalidDataException("Public FITS capture identity missing.");
                     captures.Add(capture);
+                }
+                if (coordinator.PriorityRefresh)
+                {
+                    await coordinator.VerifyPriorityRefreshAsync(service.LocalStateRoot, equipment, captures, lifetime.Token);
+                    var checkIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
+                    var replay = await checkIn.RunAsync(null, lifetime.Token);
+                    if (replay.Runs != 2 || !replay.CaughtUp || replay.DeliveredEvents != 0)
+                        throw new InvalidDataException("Handoff batch replay did not preserve both original ledgers.");
+                    await new DirectorCheckInItem(checkIn).Execute(progress, lifetime.Token);
+                    await coordinator.ReportStatusAsync(programTarget, "priority_refresh_complete", lifetime.Token);
+                    await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                    Step("Priority handoff sealed two ledgers; successor preserved pending captures and spent attempts; batch replay changed nothing");
+                    return;
                 }
                 await coordinator.EndOutageAsync(root, lifetime.Token);
                 if (coordinator.DeferredCheckIn && Directory.GetFiles(service.LastRunDirectory!, "capture-cursor-*.json").Length != 0)
@@ -704,6 +728,8 @@ public sealed class SimulatorSequence : SequenceItem
                 localTargetsVerified = coordinator?.LocalTargetsVerified ?? false,
                 moonAvoidanceVerified = coordinator is { MoonAvoidance: true, LocalTargetsVerified: true },
                 observingPreferencesVerified = coordinator is { ObservingPreferences: true, LocalTargetsVerified: true },
+                projectOrderVerified = coordinator is { ProjectOrder: true, LocalTargetsVerified: true },
+                priorityRefreshVerified = coordinator?.PriorityRefreshVerified ?? false,
                 steps,
                 evaluations,
                 operations,
