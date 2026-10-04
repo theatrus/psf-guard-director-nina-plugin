@@ -22,11 +22,12 @@ internal sealed class NinaSessionHooks
     private int entered;
     private bool faulted, finished;
 
-    internal NinaSessionHooks(DirectorSessionContainer session, TimeProvider clock)
+    internal NinaSessionHooks(DirectorSessionContainer session, TimeProvider clock, Action<NinaInstructionSlots>? configure = null)
     {
         if (session.Options.ValidateSettings().Count != 0) throw new InvalidOperationException("Invalid Director session settings.");
         NinaHookAdmission.Validate(session.InstructionBlocks, session);
         slots = session.Slots.Clone();
+        configure?.Invoke(slots);
         parent = session;
         timeout = TimeSpan.FromSeconds(session.Options.HookTimeoutSeconds);
         this.clock = clock;

@@ -8,9 +8,12 @@ using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem;
+using NINA.Sequencer.Trigger;
 using PsfGuard.Director.Plugin.Acquisition;
 
 namespace PsfGuard.Director.Plugin.Sequencer;
+
+public sealed record DirectorActionEntry(DateTimeOffset Time, string Target, string Action, string Outcome, ulong? ElapsedMs);
 
 [Export(typeof(ISequenceItem))]
 [Export(typeof(ISequenceContainer))]
@@ -31,6 +34,26 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private NinaInstructionSlots slots = new();
     private readonly AsyncCommand reportEquipmentCommand;
     private bool reportingEquipment;
+    private readonly HashSet<ISequenceTrigger> runtimeTriggers = new(ReferenceEqualityComparer.Instance);
+
+    // Native execution sees the complete base collection. Sequence JSON keeps
+    // only user-authored triggers, never the defaults installed for a grant.
+    [JsonProperty]
+    public new IList<ISequenceTrigger> Triggers
+    {
+        get { lock (runtimeTriggers) return runtimeTriggers.Count == 0 ? base.Triggers : base.GetTriggersSnapshot().Where(t => !runtimeTriggers.Contains(t)).ToArray(); }
+        private set => base.Triggers = value;
+    }
+
+    internal void AddRuntimeTrigger(ISequenceTrigger trigger)
+    {
+        lock (runtimeTriggers) { runtimeTriggers.Add(trigger); Add(trigger); }
+    }
+
+    internal void RemoveRuntimeTrigger(ISequenceTrigger trigger)
+    {
+        lock (runtimeTriggers) { Remove(trigger); runtimeTriggers.Remove(trigger); }
+    }
 
     public DirectorSessionContainer()
     {
@@ -72,6 +95,26 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public SequentialContainer AfterTargetComplete => slots.AfterTargetComplete;
     public IReadOnlyList<SequentialContainer> InstructionBlocks => Enum.GetValues<NinaInstructionSlot>().Select(slot => slots[slot]).ToArray();
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
+    public IReadOnlyList<DirectorActionEntry> ActionHistory { get; private set; } = [];
+    public NINA.Astrometry.Interfaces.IDeepSkyObject? SkyTarget { get; private set; }
+    public NINA.Astrometry.NighttimeData? SkyNighttime { get; private set; }
+
+    internal void ShowSky(NINA.Astrometry.Interfaces.IDeepSkyObject? target, NINA.Astrometry.NighttimeData? nighttime)
+    {
+        SkyTarget = target;
+        SkyNighttime = nighttime;
+        RaisePropertyChanged(nameof(SkyTarget));
+        RaisePropertyChanged(nameof(SkyNighttime));
+    }
+
+    internal void RecordAction(string target, string action, string outcome, ulong? elapsedMs = null)
+    {
+        static string Clean(string value) => new(value.Where(c => !char.IsControl(c)).Take(512).ToArray());
+        var entry = new DirectorActionEntry(DateTimeOffset.Now, Clean(target), Clean(action), Clean(outcome), elapsedMs);
+        lock (displayLock) ActionHistory = new[] { entry }.Concat(ActionHistory).Take(200).ToArray();
+        NINA.Core.Utility.Logger.Info($"Director action: {entry.Target}; {entry.Action}; {entry.Outcome}; elapsed_ms={elapsedMs}");
+        RaisePropertyChanged(nameof(ActionHistory));
+    }
     public ICommand ReportEquipmentCommand => reportEquipmentCommand;
     public string SessionStatus => Display.Phase;
     public string Readiness => !Options.EnableAcquisition ? AcquisitionGate :
@@ -205,6 +248,11 @@ public sealed class DirectorSessionContainer : SequentialContainer
         // Reuse the native deep-clone checks, including trigger runner settings.
         var native = (SequentialContainer)base.Clone();
         NinaInstructionSlots.CopyExecutionSettings(this, native);
+        var originals = GetTriggersSnapshot().ToArray();
+        var clonedTriggers = native.GetTriggersSnapshot().ToArray();
+        lock (runtimeTriggers)
+            for (var i = 0; i < originals.Length; i++)
+                if (runtimeTriggers.Contains(originals[i])) native.Remove(clonedTriggers[i]);
         foreach (var item in native.Items.ToArray()) { native.Remove(item); clone.Add(item); }
         foreach (var trigger in native.Triggers.ToArray()) { native.Remove(trigger); clone.Add(trigger); }
         foreach (var condition in native.Conditions.ToArray()) { native.Remove(condition); clone.Add(condition); }
@@ -217,6 +265,9 @@ public sealed class DirectorSessionContainer : SequentialContainer
         base.ResetProgress();
         foreach (var block in InstructionBlocks) block.ResetAll();
         Report(DirectorSessionDisplay.Empty);
+        lock (displayLock) ActionHistory = [];
+        ShowSky(null, null);
+        RaisePropertyChanged(nameof(ActionHistory));
     }
 
     public override void AfterParentChanged()

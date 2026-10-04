@@ -13,7 +13,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 
 internal static class SessionUiProbe
 {
-    internal static Task RenderAsync(string directory, DirectorSessionDisplay? display = null) => Application.Current.Dispatcher.InvokeAsync(() =>
+    internal static Task RenderAsync(string directory, DirectorSessionDisplay? display = null, DirectorSessionContainer? source = null) => Application.Current.Dispatcher.InvokeAsync(() =>
     {
         // NINA gives each plugin its own AssemblyLoadContext. The test plugin's
         // reference has a different CLR identity from the actual exported type.
@@ -24,6 +24,12 @@ internal static class SessionUiProbe
         foreach (var width in new[] { 640, 1000 })
         {
             var session = Activator.CreateInstance(exportedType)!;
+            if (source is not null)
+            {
+                exportedType.GetMethod("ShowSky", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(session, [source.SkyTarget, source.SkyNighttime]);
+                var record = exportedType.GetMethod("RecordAction", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                foreach (var entry in source.ActionHistory.Reverse()) record.Invoke(session, [entry.Target, entry.Action, entry.Outcome, entry.ElapsedMs]);
+            }
             if (display is not null)
             {
                 var report = exportedType.GetMethod("Report", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -43,7 +49,7 @@ internal static class SessionUiProbe
                 || reportButton.ActualWidth < 80)
                 throw new InvalidOperationException("Equipment report button lost its native style, binding or idle-service guard.");
             var tabs = Descendants(host).OfType<TabControl>().Single();
-            for (var tab = 0; tab < 4; tab++)
+            for (var tab = 0; tab < tabs.Items.Count; tab++)
             {
                 tabs.SelectedIndex = tab;
                 Layout();
@@ -59,6 +65,8 @@ internal static class SessionUiProbe
                 }
                 if (tab == 1 && Descendants(host).OfType<Expander>().Count(expander => expander.DataContext is NINA.Sequencer.Container.SequentialContainer) < 7)
                     throw new InvalidOperationException("Director did not render all seven native instruction editors.");
+                if (tab == 5 && Descendants(host).OfType<DataGrid>().Single().Columns.Any(column => column.ActualWidth < 65))
+                    throw new InvalidOperationException("Activity columns collapsed below readable widths.");
                 foreach (var field in controls.Where(c => c is TextBox or ComboBox or CheckBox))
                 {
                     var rect = field.TransformToAncestor(host).TransformBounds(new Rect(field.RenderSize));

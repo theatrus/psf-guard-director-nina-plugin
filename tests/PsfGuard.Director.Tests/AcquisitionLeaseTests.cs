@@ -68,6 +68,7 @@ public sealed class AcquisitionLeaseTests
         Assert.Contains(DirectorAcquisition.PolicyIssues(options), x => x.Contains("safety monitor"));
         options.Safety = DirectorSafetyPolicy.RequireMonitor;
         options.Focus = DirectorOperationOwner.Director;
-        Assert.NotEmpty(DirectorAcquisition.PolicyIssues(options));
+        Assert.Empty(DirectorAcquisition.PolicyIssues(options));
+        Assert.True(NinaNativeImaging.Required(options));
     }
 }

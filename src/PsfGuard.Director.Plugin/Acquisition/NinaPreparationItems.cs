@@ -19,7 +19,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
 {
     internal NinaIssuedItem Create(PreparationNext next, DirectorProgram program, NinaEquipmentBinding local,
         Func<CancellationToken, Task<Action>> revalidateAtDispatch,
-        Func<IProgress<ApplicationStatus>, CancellationToken, Task>? beforeTarget = null)
+        Func<IProgress<ApplicationStatus>, CancellationToken, Task>? beforeTarget = null,
+        Func<PreparationOperation, IProgress<ApplicationStatus>, CancellationToken, Task>? nativeImaging = null)
     {
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
         if (next is not PreparationNext.Run run) throw new InvalidOperationException("Only a newly issued operation can create a native item.");
@@ -75,6 +76,8 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         });
         item = command.Operation switch
         {
+            PreparationOperation.Center or PreparationOperation.Dither when nativeImaging is not null =>
+                new IssuedBeforeTarget(fence, (p, ct) => nativeImaging(command.Operation, p, ct)) { Name = $"Director {command.Operation.GetType().Name}" },
             PreparationOperation.BeforeTarget when beforeTarget is not null =>
                 new IssuedBeforeTarget(fence, beforeTarget) { Name = "Director target setup" },
             PreparationOperation.Unpark when telescope is not null && local.TelescopeDeviceId is not null =>

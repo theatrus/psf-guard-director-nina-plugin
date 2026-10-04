@@ -1,5 +1,14 @@
 # Unreleased
 
+- Director uses NINA's meridian-flip trigger with checked workflow outcomes,
+  flip activity entries, and runtime defaults that stay out of saved sequences.
+
+- Run Director-owned native centering, autofocus, guiding, dithering and meridian
+  triggers within the shared-core imaging loop. Keep explicit sequence ownership
+  for custom operations, and stop on failed native preparation.
+- Inspect the selected target with NINA's horizon chart and follow timed action
+  outcomes in a local Activity tab and the NINA log.
+
 - Stop and apply the configured abort policy when NINA's site, horizon or
   meridian settings change during acquisition, including slow setup hooks.
   Unreadable horizons also stop the session; restoring settings cannot restart it.

@@ -951,7 +951,7 @@
       "PsfGuard.Director.SimulatorProbe": {
         "type": "Project",
         "dependencies": {
-          "PSF Guard Director": "[0.1.0, )"
+          "PSF Guard Director": "[0.1.0.1, )"
         }
       }
     }

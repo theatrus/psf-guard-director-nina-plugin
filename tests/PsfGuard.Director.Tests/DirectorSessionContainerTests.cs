@@ -18,6 +18,21 @@ namespace PsfGuard.Director.Tests;
 public sealed class DirectorSessionContainerTests
 {
     [Fact]
+    public void ActionHistoryIsBoundedDisplayOnlyAndResetDoesNotCreateAuthority()
+    {
+        var session = new DirectorSessionContainer();
+        for (var i = 0; i < 205; i++) session.RecordAction("Target\nname", "Exposure", i.ToString(), (ulong)i);
+        Assert.Equal(200, session.ActionHistory.Count);
+        Assert.Equal("204", session.ActionHistory[0].Outcome);
+        Assert.Equal("Targetname", session.ActionHistory[0].Target);
+        Assert.DoesNotContain("ActionHistory", JsonConvert.SerializeObject(session, Settings));
+        Assert.Empty(((DirectorSessionContainer)session.Clone()).ActionHistory);
+        session.ResetProgress();
+        Assert.Empty(session.ActionHistory);
+        Assert.Null(session.SkyTarget);
+        Assert.False(session.Options.EnableAcquisition);
+    }
+    [Fact]
     public void MoonWindowsCanCloseAfterCleanPreparationWithoutBecomingAnEquipmentFailure()
     {
         var decision = new PlannerDecision(PlannerAction.CheckIn, "no_authorized_feasible_work");
