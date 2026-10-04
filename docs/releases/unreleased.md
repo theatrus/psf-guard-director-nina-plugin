@@ -1,5 +1,9 @@
 # Unreleased
 
+- Stop and apply the configured abort policy when NINA's site, horizon or
+  meridian settings change during acquisition, including slow setup hooks.
+  Unreadable horizons also stop the session; restoring settings cannot restart it.
+
 - Apply changed project rankings at live check-in boundaries in automatic
   sessions. Finish the current exposure, park and reconcile before requesting
   a fresh workload; preserve pending images and spent attempts. Deferred and
