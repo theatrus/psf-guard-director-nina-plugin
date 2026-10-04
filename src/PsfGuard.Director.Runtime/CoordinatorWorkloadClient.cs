@@ -20,18 +20,19 @@ public sealed class CoordinatorWorkloadClient : IDisposable
     private readonly string executionMode;
 
     public CoordinatorWorkloadClient(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId,
-        DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false, bool localTargetScheduling = false)
-        : this(root, endpoint, binding, clientId, configuration, credential, CoordinatorTransport.Handler(), TimeProvider.System, allowInsecureHttp, localTargetScheduling) { }
+        DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false, bool localTargetScheduling = false, bool nativeImaging = false)
+        : this(root, endpoint, binding, clientId, configuration, credential, CoordinatorTransport.Handler(), TimeProvider.System, allowInsecureHttp, localTargetScheduling, nativeImaging) { }
 
     internal CoordinatorWorkloadClient(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId,
         DirectorConfiguration configuration, Func<CancellationToken, ValueTask<string?>> credential, HttpMessageHandler handler,
-        TimeProvider clock, bool allowInsecureHttp = false, bool localTargetScheduling = false)
+        TimeProvider clock, bool allowInsecureHttp = false, bool localTargetScheduling = false, bool nativeImaging = false)
     {
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")) throw new ArgumentException("Exact client and configuration required.");
         transport = new(endpoint, credential, handler, allowInsecureHttp);
         this.binding = binding; this.clientId = clientId; this.configuration = configuration; this.clock = clock;
-        executionMode = localTargetScheduling ? "local_sequence_v3" : "prepared_target_v3";
+        executionMode = nativeImaging ? localTargetScheduling ? "native_imaging_v1" : "native_single_target_v1"
+            : localTargetScheduling ? "local_sequence_v3" : "prepared_target_v3";
         file = new(root, new { origin = transport.Endpoint.AbsoluteUri, binding, clientId }, "workload-request");
     }
 
@@ -124,7 +125,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             file.Write(p);
         }
         if (p.SchemaVersion != 1 || p.Origin != transport.Endpoint.AbsoluteUri || p.Binding != binding || p.ClientId != clientId
-            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2" or "prepared_target_v3" or "local_sequence_v3")
+            || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2" or "prepared_target_v3" or "local_sequence_v3" or "native_imaging_v1" or "native_single_target_v1")
             || p.Submitted && (p.ConfigurationId != configuration.Id || !CompatibleMode(p.ExecutionMode))
             || p.AllocationFingerprint is not null && (p.AllocationFingerprint.Length != 64 || !p.AllocationFingerprint.All(char.IsAsciiHexDigitLower)))
             throw new InvalidDataException("Outstanding workload request does not match this equipment. Reconciliation is required.");

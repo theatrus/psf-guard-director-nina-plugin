@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <UseWPF>true</UseWPF>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>PsfGuard.Director.SimulatorProbe</AssemblyName>
     <Title>Director Simulator Probe (TEST ONLY)</Title>
@@ -8,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NINA.Plugin" Version="3.3.0.1058-nightly" PrivateAssets="all" />
+    <PackageReference Include="Moq" Version="4.20.72" PrivateAssets="all" />
     <ProjectReference Include="../../src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
   </ItemGroup>
 </Project>

@@ -55,11 +55,17 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly IImageHistoryVM history;
     private readonly IImageDataFactory imageFactory;
     private readonly NINA.Astrometry.Interfaces.INighttimeCalculator nighttime;
+    private readonly INinaActionFactory? factory;
+    private readonly IFocuserMediator? focuser;
+    private readonly IRotatorMediator? rotator;
+    private readonly NINA.Equipment.Interfaces.IDomeFollower? follower;
 
     [ImportingConstructor]
     public SimulatorSequence(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome)
+        IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome,
+        INinaActionFactory? factory = null, IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
+        NINA.Equipment.Interfaces.IDomeFollower? follower = null)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -73,11 +79,15 @@ public sealed class SimulatorSequence : SequenceItem
         this.history = history;
         this.imageFactory = imageFactory;
         this.nighttime = nighttime;
+        this.factory = factory;
+        this.focuser = focuser;
+        this.rotator = rotator;
+        this.follower = follower;
     }
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -112,6 +122,15 @@ public sealed class SimulatorSequence : SequenceItem
         CancellationTokenRegistration safetyCancellation = default;
         var unsafeCancellationVerified = false;
         var constraintChangeVerified = false;
+        NativeImagingProbe? nativeProbe = null;
+        var nativeFailureVerified = false;
+        var nativeOptions = new DirectorSessionOptions();
+        void ConfigureImaging(DirectorSessionOptions options)
+        {
+            options.SlewCenter = options.Focus = options.Guiding = options.Dither = options.MeridianFlip =
+                coordinator?.NativeImaging == true ? DirectorOperationOwner.Director : DirectorOperationOwner.Sequence;
+            options.DitherEveryExposures = 1;
+        }
         var enclosureCancellationVerified = false;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
@@ -186,6 +205,22 @@ public sealed class SimulatorSequence : SequenceItem
             await filters.Rescan();
             CheckProfile();
             if (!await filters.Connect()) throw new IOException("Simulator filter wheel connection failed.");
+            ConfigureImaging(nativeOptions);
+            if (coordinator?.NativeImaging == true)
+            {
+                if (factory is null || focuser is null || rotator is null || follower is null) throw new InvalidOperationException("Native test services unavailable.");
+                Step("Connecting ASCOM OmniSim focuser and native direct guider; synthetic optical results only");
+                profiles.ActiveProfile.FocuserSettings.Id = "ASCOM.OmniSim.Focuser";
+                profiles.ActiveProfile.GuiderSettings.GuiderName = "Direct_Guider";
+                profiles.ActiveProfile.CameraSettings.PixelSize = 3.76;
+                profiles.ActiveProfile.TelescopeSettings.FocalLength = 250;
+                profiles.ActiveProfile.GuiderSettings.SettleTime = 1;
+                await focuser.Rescan();
+                if (!await focuser.Connect() || focuser.GetInfo().DeviceId != "ASCOM.OmniSim.Focuser") throw new IOException("Simulator focuser connection failed.");
+                await guider.Rescan();
+                if (!await guider.Connect() || guider.GetInfo().DeviceId != "Direct_Guider") throw new IOException("Direct guider connection failed.");
+                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure);
+            }
             await Revalidate(lifetime.Token);
             Step("Refreshing native site and fixture horizon constraints");
             var horizonPath = Path.Combine(run, "fixture.hpts");
@@ -198,8 +233,8 @@ public sealed class SimulatorSequence : SequenceItem
             var equipmentBinding = new NinaEquipmentBinding(profileId, rigId, constraints.Revision,
                 "ASCOM.OmniSim.Camera", "ASCOM.OmniSim.FilterWheel",
                 profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Select(f =>
-                    new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), false, 0,
-                "ASCOM.OmniSim.Telescope");
+                    new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(), coordinator?.NativeImaging == true, coordinator?.NativeImaging == true ? 1U : 0U,
+                "ASCOM.OmniSim.Telescope", NativeImagingScope: nativeProbe is null ? null : NinaNativeImaging.ScopeFor(profiles, nativeOptions));
             var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
             equipment = equipmentReader.Read(equipmentBinding);
             Step("Parking simulator for Rust-issued unpark");
@@ -234,12 +269,12 @@ public sealed class SimulatorSequence : SequenceItem
                 {
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome)
+                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome,
+                        nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
-                    sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
-                        sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                    ConfigureImaging(sessionContainer.Options);
                     Step("Reporting native equipment with acquisition disabled");
                     if (!sessionContainer.ReportEquipmentCommand.CanExecute(null)) throw new InvalidDataException("Native report button was disabled.");
                     await sessionContainer.ReportEquipmentAsync();
@@ -260,7 +295,8 @@ public sealed class SimulatorSequence : SequenceItem
                 Step("Running the public Director Session acquisition path");
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome)
+                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome,
+                    nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
@@ -274,12 +310,11 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
-                sessionContainer.Options.SlewCenter = sessionContainer.Options.Focus = sessionContainer.Options.Guiding =
-                    sessionContainer.Options.Dither = sessionContainer.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                ConfigureImaging(sessionContainer.Options);
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
-                if (coordinator.LocalTargetScheduling)
+                if (coordinator.LocalTargetScheduling && !coordinator.NativeImaging)
                     sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
                 var slowSetup = new SlowSetupProbe();
                 if (coordinator.ConstraintChange is not null) sessionContainer.BeforeNewTarget.Add(slowSetup);
@@ -289,6 +324,24 @@ public sealed class SimulatorSequence : SequenceItem
                 var executing = sessionContainer.Execute(progress, publicLifetime.Token);
                 try
                 {
+                    if (coordinator.NativeImagingFailure is { } fault)
+                    {
+                        Exception? failure = null;
+                        // Native AbortOnError cancels the parent NINA sequence too.
+                        // Await actual shutdown with an independent deadline.
+                        try { await executing.WaitAsync(TimeSpan.FromSeconds(90)); }
+                        catch (Exception error) when (error is not TimeoutException) { failure = error; }
+                        if (failure is null || nativeProbe?.FailureInjected != true || !nativeProbe.Operations.Contains(fault == "center" ? "Center" : "Autofocus")
+                            || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || AcquisitionLease.IsActive
+                            || sessionHookEvents.Contains("AfterEachExposure")
+                            || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Any())
+                            throw new InvalidDataException("Failed native preparation did not stop before capture and park.", failure);
+                        nativeFailureVerified = true;
+                        Step($"Native {fault} failure prevented capture, parked and released local ownership without restarting");
+                        using var reportFailure = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await coordinator.ReportStatusAsync(programTarget, "native_preparation_failed", reportFailure.Token);
+                        return;
+                    }
                     while (!executing.IsCompleted && (coordinator.ConstraintChange is not null
                         ? !slowSetup.Entered.Task.IsCompleted : sessionContainer.Display.Phase != "Acquiring"))
                         await Task.Delay(50, lifetime.Token);
@@ -484,14 +537,18 @@ public sealed class SimulatorSequence : SequenceItem
                 retry.Options.Enclosure = sessionContainer.Options.Enclosure;
                 retry.Options.MaximumAltitude = 89;
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
-                retry.Options.SlewCenter = retry.Options.Focus = retry.Options.Guiding = retry.Options.Dither = retry.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+                ConfigureImaging(retry.Options);
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
                 Step("Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
+                if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
+                    || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")
+                    || sessionContainer.GetTriggersSnapshot().Any()))
+                    throw new InvalidDataException("Native target centering/autofocus did not run for both targets.");
                 if (!coordinator.LocalTargetScheduling && !sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
                     throw new InvalidDataException("Public session hooks did not follow confirmed save boundaries.");
-                await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
                 return;
             }
             sessionContainer = new DirectorSessionContainer();
@@ -744,6 +801,10 @@ public sealed class SimulatorSequence : SequenceItem
             }
             if (filters.GetInfo().Connected && filters.GetInfo().DeviceId == "ASCOM.OmniSim.FilterWheel")
                 await Cleanup("Disconnecting simulator filter wheel", filters.Disconnect);
+            if (guider.GetInfo().Connected && guider.GetInfo().DeviceId == "Direct_Guider")
+                await Cleanup("Disconnecting direct guider", guider.Disconnect);
+            if (focuser?.GetInfo().Connected == true && focuser.GetInfo().DeviceId == "ASCOM.OmniSim.Focuser")
+                await Cleanup("Disconnecting simulator focuser", focuser.Disconnect);
             if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
             if (safety.GetInfo().Connected && safety.GetInfo().DeviceId == SafetySimulatorId)
@@ -758,8 +819,11 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
                 enclosureCancellationVerified,
+                nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
+                nativeFailureVerified,
+                nativeOperations = nativeProbe?.Operations,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
                 ninaApi = "3.3.0.1058-nightly",
                 runtime = RuntimeContract.RuntimeVersion,
@@ -893,8 +957,8 @@ public sealed class SimulatorSequence : SequenceItem
             || profile.ImageFileSettings.FilePath != Path.Combine(root, "images")
             || profile.ImageFileSettings.FilePattern != "$$DATETIME$$_$$FILTER$$_$$FRAMENR$$"
             || profile.ImageFileSettings.FileType != NINA.Core.Enum.FileTypeEnum.FITS
-            || profile.FocuserSettings.Id != "No_Device" || profile.RotatorSettings.Id != "No_Device"
-            || profile.GuiderSettings.GuiderName != "No_Guider"
+            || profile.FocuserSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Focuser") || profile.RotatorSettings.Id != "No_Device"
+            || profile.GuiderSettings.GuiderName is not ("No_Guider" or "Direct_Guider")
             || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
             || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
             || profile.WeatherDataSettings.Id != "No_Device")

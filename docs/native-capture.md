@@ -1,5 +1,66 @@
 # Native capture adapter
 
+## Native imaging defaults
+
+Director ownership now uses NINA's native Center/CenterAndRotate, Run Autofocus,
+Start/Stop Guiding, Restore Guiding, autofocus triggers and Meridian Flip trigger.
+The shared Rust core still selects targets, issues preparation and decides dither
+cadence. Preparation receipts record elapsed time and success/failure locally.
+This adds no Target Scheduler dependency and does not change PSF Guard Sync.
+
+For automatic imaging, connect and cool equipment using the outer NINA sequence,
+review the resulting Director equipment report, and select Director ownership
+for the desired operations. A configured focuser/guider must be connected when
+Director owns it; choose Sequence for manual focus or an unguided setup. Native
+focus runs on target entry and after filter changes, 30 minutes or 5 degrees of
+temperature change. Native meridian settings remain in the NINA profile. Custom
+cadences and optional plugin alternatives use Sequence ownership and the normal
+slots/ancestor triggers. Known overlapping native actions fail validation.
+
+Director stops guiding before centering, focuses before starting guiding, checks
+native triggers before capture, and parks at shutdown. The seven instruction
+slots remain active. Connect/cool and warm/disconnect are outer-sequence steps,
+not hidden effects of the Session's Unpark/Track and Park settings. Dither uses
+NINA's guider algorithm with a checked native Dither subclass: the pinned NINA
+action discards a false result, which Director must treat as failure. Failed or
+unfinished operations cannot credit preparation or silently start another frame.
+
+### Meridian flips
+
+With Meridian Flip owned by Director, the Session installs NINA's built-in
+trigger. It evaluates the upcoming instruction duration and uses the active
+profile's earliest/latest flip time, pause-before-meridian and pier-side rules.
+NINA runs the flip workflow, including its before/after flip events, configured
+autofocus, recenter, guiding and settling. Director does not issue an independent
+flip command or implement a second timing policy. Sequence ownership leaves
+your own native flip trigger in charge; duplicate native triggers are rejected
+when Director owns the operation.
+
+The adapter checks both the VM result and exposed workflow-step completion,
+since the pinned NINA implementation can otherwise discard a false result.
+A failed or canceled Director-owned flip cannot authorize another capture.
+Activity and the NINA log record its start, outcome and elapsed time. After
+inherited triggers finish, dispatch rechecks pointing, safety, current geometry
+and allocation validity. The instruction timeout also bounds native flip waits;
+set it long enough for your profile's pause and recovery workflow. The explicit
+rig meridian exclusion remains a planning constraint, not permission to flip.
+NINA treats some recovery operations (notably recenter and dome sync) as best
+effort; a finished workflow is not proof of a new pixel-derived plate solve.
+
+Native workload requests use `native_imaging_v1` for local multi-target work or
+`native_single_target_v1` for one target. Older execution modes remain limited to
+sequence-owned setup. A changed, unresolved request cannot upgrade/downgrade its
+capability. Rotation requires native centering and a connected configured rotator.
+Nominal preparation estimates are conservative initial budgets, not a learned
+duration model; real elapsed time is checked before the next command/capture.
+
+The Sky tab reuses NINA's AltitudeChart and the selected target's native horizon,
+following Target Scheduler's display pattern. It is a local display, not a new
+planner or a guarantee that Moon/meridian constraints permit an exposure. Activity
+shows the most recent 200 planner/preparation/capture entries with outcomes and
+elapsed milliseconds. The same entries go to the NINA diagnostic log; durable
+operation receipts remain in the sidecar ledger. Neither display is launch authority.
+
 ## Live and Deferred Check-In
 
 Session **Capture delivery** selects Live (the default) or Deferred. Live sends
@@ -256,8 +317,7 @@ renewal. Keep the local state for reconciliation. There is no automatic restart
 recovery, rejected-image feedback or attempt-budget increase yet. Manual
 allocations cannot be switched into this release protocol retroactively.
 Without **Local target scheduling**, this mode still requires one prepared
-target and the ownership settings below. Neither mode adds automatic
-centering/focus/guiding/flip defaults.
+target. Both can now use the native imaging defaults described above.
 
 `Director Session` can opt in to prepared-target acquisition. It requires the
 server's one-shot allocation-start API, online first launch, a connected safe
@@ -265,12 +325,11 @@ monitor, matching commissioned equipment/site/horizon, and dated NINA IERS
 data. Sequence files cannot store launch authority. Lost launch responses and
 restarts require reconciliation; this mode never reuses a consumed allocation.
 
-Enable acquisition in the Session tab. Select **Sequence** for
-centering, autofocus, guiding, dithering and meridian flips, and **Director**
-for startup/shutdown. Prepare one allocated target through normal NINA
-instructions or the Before New Target hook. The executor requires reported
+Enable acquisition in the Session tab. Select **Director** for native imaging
+defaults or **Sequence** for operations supplied by normal NINA instructions,
+hooks or plugins. Keep **Director** for unpark/park. The executor requires reported
 pointing within three arcminutes and tracking before exposure; this check is
-not plate-solve evidence. Rotation requests are not supported yet. Unsupported
+not plate-solve evidence. Rotation needs native centering and the bound rotator. Unsupported
 policies fail validation, not silent fallback.
 
 The shared core selects recipes and owns preparation/capture budgets. Native
@@ -824,10 +883,10 @@ of success. The original receipt is retained if a reset attempts redispatch.
 Operation durations use a monotonic clock from dispatch validation through the
 native result check. They exclude preceding inherited triggers. They are not
 whole-target timing observations. This helper does not persist authority or
-authorize recovery, and its callback is not yet a production server/core permit.
-Native trigger exceptions can be swallowed by NINA; a production session must
-observe hook failures and enforce safety independently. Slew/center, autofocus,
-guiding, dither, and the complete session container remain unfinished.
+authorize recovery. The public Session now binds its callback to the shared-core
+dispatch permit. Native trigger exceptions can be swallowed by NINA; the Session
+checks default-trigger results and enforces safety independently. See Native
+imaging defaults above for the current centering, focus, guide and dither flow.
 
 Regression tests run the native container strategy with inherited triggers,
 condition-based skipping, cancellation, altered settings, driver failures,

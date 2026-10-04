@@ -12,7 +12,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 internal sealed record NinaFilterBinding(string Id, short? Position, string? ExpectedName);
 internal sealed record NinaEquipmentBinding(Guid ProfileId, string RigId, string ConstraintRevision,
     string CameraDeviceId, string? FilterWheelDeviceId, ImmutableArray<NinaFilterBinding> Filters,
-    bool EnableSlewCenter, uint DitherEvery, string? TelescopeDeviceId = null);
+    bool EnableSlewCenter, uint DitherEvery, string? TelescopeDeviceId = null, string? NativeImagingScope = null);
 
 internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMediator camera, IFilterWheelMediator wheel,
     ITelescopeMediator? telescope = null)
@@ -125,6 +125,7 @@ internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMed
             Readouts = readouts,
             Filters = binding.Filters.OrderBy(f => f.Position).ThenBy(f => f.Id, StringComparer.Ordinal)
         });
+        if (binding.NativeImagingScope is not null) fingerprint = Hash(new { fingerprint, binding.NativeImagingScope });
         if (binding.TelescopeDeviceId is { } expectedMount)
         {
             var info = telescope?.GetInfo();

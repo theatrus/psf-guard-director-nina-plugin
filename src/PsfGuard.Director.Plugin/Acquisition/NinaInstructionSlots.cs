@@ -66,6 +66,17 @@ internal sealed class NinaInstructionSlots
         AfterTargetComplete = CloneBlock(AfterTargetComplete)
     };
 
+    internal void AppendTargetDefaults(IEnumerable<ISequenceItem> defaults)
+    {
+        var items = defaults.ToArray();
+        if (items.Length == 0) return;
+        // Disabling a user's hook must not disable Director-owned preparation.
+        var user = BeforeNewTarget;
+        BeforeNewTarget = New("Director target setup");
+        BeforeNewTarget.Add(user);
+        foreach (var item in items) BeforeNewTarget.Add(item);
+    }
+
     internal NinaInstructionInvocation CreateInvocation(NinaInstructionSlot slot) =>
         new(CloneBlock(this[slot]), Enter, Leave);
 

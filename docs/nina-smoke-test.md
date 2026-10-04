@@ -779,3 +779,38 @@ constraint stop, duplicate capture or replenished attempt budget. Evidence:
 `-PublicAcquisition -PublicUnsafe` also passed with the final package: abort
 the active exposure, park and remain stopped after safety recovery. Evidence:
 `artifacts/nina-smoke-556e22db895444cab9b1ed04c3bb4119/probe/9e7dac1ca5dc4208a756c6531a1b5b48/result.json`.
+## Native imaging flow validation (2026-10-03)
+
+The native-flow increment was tested with NINA 3.3.0.1064, pinned API
+3.3.0.1058-nightly, bundled runtime 0.10.0 / IPC 10, ASCOM OmniSim camera,
+telescope, filter wheel and focuser, NINA Direct Guider, and an isolated local
+PSF Guard server. No real profile or live catalog was modified.
+
+Use `run-server-plan-smoke.ps1` with `-PublicAcquisition -LocalTargetScheduling
+-NativeImaging`. Add `-AutomaticWorkloads` for commissioned intake/release; omit
+it for a server outage during local acquisition and deferred reconnect delivery.
+The test changes targets, executes native Center and Autofocus, starts guiding,
+switches filters/readout, dithers the simulated mount, saves three correlated
+FITS files and parks. Native autofocus/meridian/restore-guiding triggers remain
+attached during execution and are removed before terminal release. The probe
+renders all six Session tabs at 640 and 1000 pixels, including NINA's altitude
+chart and the populated action history.
+
+With automatic workloads, add `-NativeImagingFailure center` or
+`-NativeImagingFailure autofocus` to verify that injected failure saves no
+exposure, completes parking, releases local ownership and does not restart.
+Autofocus's native AbortOnError also cancels the outer NINA sequence; the probe
+waits for actual shutdown independently before checking that result.
+
+**Optical evidence is synthetic.** The test-only probe substitutes solver/focus
+results while using the real NINA actions, sequencing and ASCOM device mediators.
+This proves dispatch, hook and failure orchestration, not optical accuracy or
+autofocus quality. It does not force an actual meridian flip or rotate a device.
+Those tests and real-sky acceptance remain open. The probe and its Moq dependency
+are never included in the published plugin ZIP.
+
+Meridian regression tests use the pinned native trigger, inherited sequence
+runner and a controlled flip VM result. They cover upcoming instruction timing,
+the pre-meridian pause, unavailable mounts, failed workflow steps, cancellation,
+blocking dispatch after failure, Activity entries, and exclusion of runtime
+defaults from saved/cloned sequences. These tests do not claim a physical flip.

@@ -43,6 +43,9 @@ if ($AscomSequence) {
         }
     }
     Copy-Item -LiteralPath (Join-Path $probeOutput 'PsfGuard.Director.SimulatorProbe.dll') -Destination $plugins
+    foreach ($name in @('Moq.dll', 'Castle.Core.dll')) {
+        Copy-Item -LiteralPath (Join-Path $probeOutput $name) -Destination $plugins
+    }
     $profileId = [Guid]::NewGuid().ToString('D')
     $profiles = Join-Path $root 'Profiles'
     New-Item -ItemType Directory -Path $profiles, (Join-Path $root 'images') | Out-Null

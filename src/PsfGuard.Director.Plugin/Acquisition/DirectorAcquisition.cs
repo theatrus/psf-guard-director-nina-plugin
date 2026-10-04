@@ -27,6 +27,10 @@ public sealed class DirectorAcquisition
     private readonly IFilterWheelMediator filters;
     private readonly ISafetyMonitorMediator safety;
     private readonly IDomeMediator dome;
+    private readonly INinaActionFactory? sequenceFactory;
+    private readonly IGuiderMediator? guider;
+    private readonly IFocuserMediator? focuser;
+    private readonly IRotatorMediator? rotator;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -40,11 +44,14 @@ public sealed class DirectorAcquisition
     [ImportingConstructor]
     public DirectorAcquisition(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging,
-        IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome)
+        IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome,
+        INinaActionFactory? sequenceFactory = null, IGuiderMediator? guider = null,
+        IFocuserMediator? focuser = null, IRotatorMediator? rotator = null)
     {
         this.profiles = profiles; this.camera = camera; this.telescope = telescope; this.filters = filters;
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
         this.dome = dome;
+        this.sequenceFactory = sequenceFactory; this.guider = guider; this.focuser = focuser; this.rotator = rotator;
     }
 
     internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options, bool requireEnabled = true)
@@ -54,8 +61,6 @@ public sealed class DirectorAcquisition
         if (requireEnabled && options.Enclosure == DirectorEnclosurePolicy.Unconfigured)
             issues.Add("Select an enclosure clearance policy before acquisition.");
         if (options.Safety != DirectorSafetyPolicy.RequireMonitor) issues.Add("Public acquisition requires a connected safety monitor.");
-        if (new[] { options.SlewCenter, options.Focus, options.Guiding, options.Dither, options.MeridianFlip }.Any(x => x != DirectorOperationOwner.Sequence))
-            issues.Add("Current acquisition modes require sequence ownership for centering, autofocus, guiding, dithering and meridian flips.");
         if (options.Startup != DirectorOperationOwner.Director || options.Shutdown != DirectorOperationOwner.Director)
             issues.Add("Acquisition requires Director startup and shutdown (unpark/park).");
         return issues;
@@ -66,6 +71,9 @@ public sealed class DirectorAcquisition
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options, false)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
+        using var native = CreateNativeImaging(options);
+        native?.CheckEquipment();
+        NinaNativeImaging.ValidateOwnership(container, options);
         using var owner = new AcquisitionLease(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var settings = new PluginOptionsAccessor(profiles, PluginId);
@@ -117,7 +125,10 @@ public sealed class DirectorAcquisition
             profiles.ActiveProfile.CameraSettings.Id, wheel == "No_Device" ? null : wheel,
             wheel == "No_Device" ? [new("fixed-filter", null, null)] : profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters
                 .Select(f => new NinaFilterBinding($"filter-{f.Position}", f.Position, f.Name)).ToImmutableArray(),
-            false, 0, profiles.ActiveProfile.TelescopeSettings.Id);
+            options.SlewCenter == DirectorOperationOwner.Director,
+            options.Dither == DirectorOperationOwner.Director ? checked((uint)options.DitherEveryExposures) : 0,
+            profiles.ActiveProfile.TelescopeSettings.Id,
+            NinaNativeImaging.Required(options) ? NinaNativeImaging.ScopeFor(profiles, options) : null);
         return (constraints, equipment, new NinaEquipmentSnapshot(profiles, camera, filters, telescope).Read(equipment));
     }
 
@@ -151,6 +162,9 @@ public sealed class DirectorAcquisition
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
+        using var native = CreateNativeImaging(options);
+        native?.CheckEquipment();
+        NinaNativeImaging.ValidateOwnership(container, options);
         var profile = profiles.ActiveProfile.Id;
         var settings = new PluginOptionsAccessor(profiles, PluginId);
         using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
@@ -167,6 +181,8 @@ public sealed class DirectorAcquisition
             return ValueTask.FromResult<string?>(current.Token);
         }
         var rig = pairing.Binding.RigId.ToString("D");
+        DirectorTarget? target = null;
+        string? lastLoggedPhase = null;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime.CancelAfter(TimeSpan.FromHours(options.MaximumHours));
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
@@ -189,7 +205,7 @@ public sealed class DirectorAcquisition
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
-            connection.AllowInsecureHttp, options.LocalTargetScheduling);
+            connection.AllowInsecureHttp, options.LocalTargetScheduling, native is not null);
         using var previews = new CoordinatorProgramClient(endpoint, Credential, connection.AllowInsecureHttp);
         CoordinatorAllocation allocation;
         if (options.AutomaticWorkloads)
@@ -222,13 +238,13 @@ public sealed class DirectorAcquisition
             allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
         }
         var program = allocation.Envelope.Snapshot.Program;
-        if (program.Targets.IsEmpty || !options.LocalTargetScheduling && program.Targets.Length != 1 || program.Targets.Any(t => t.PositionAngleMas is not null)
-            || program.Configuration.EnableSlewCenter || program.Configuration.DitherEvery != 0
-            || program.Recipes.Any(r => r.DitherOverride is > 0))
+        if (program.Targets.IsEmpty || !options.LocalTargetScheduling && program.Targets.Length != 1
+            || program.Targets.Any(t => t.PositionAngleMas is not null) && (native?.RotatorConnected != true || !program.Configuration.EnableSlewCenter)
+            || options.Dither == DirectorOperationOwner.Sequence && program.Recipes.Any(r => r.DitherOverride is > 0))
             throw new InvalidOperationException("The allocation exceeds this mode's target, rotation or sequence-owned preparation capabilities.");
-        DirectorTarget? target = null;
         DirectorPointing? previousPointing = null;
         var targetContexts = new Dictionary<string, NinaTargetContainer>(StringComparer.Ordinal);
+        var filterCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
         var assignment = program.Assignment;
         var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
@@ -254,6 +270,7 @@ public sealed class DirectorAcquisition
         CoordinatorSessionReporter? telemetry = null;
         Exception? executionError = null;
         Exception? reportingError = null;
+        Exception? shutdownError = null;
         Exception? constraintError = null;
         var released = false;
         var priorityRefresh = 0;
@@ -277,7 +294,8 @@ public sealed class DirectorAcquisition
             checkpoint = new(runRoot, endpoint, pairing.Binding, ledger, Credential, connection.AllowInsecureHttp);
             telemetry = new CoordinatorSessionReporter(endpoint, pairing.Binding, Credential, connection.AllowInsecureHttp);
             if (options.LiveStatus) telemetryTask = TelemetryAsync(telemetry, ledger.LedgerId);
-            var hooks = new NinaSessionHooks(container, TimeProvider.System);
+            var hooks = new NinaSessionHooks(container, TimeProvider.System, native is null ? null : native.ConfigureTargetSetup);
+            native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
                 TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System);
@@ -310,7 +328,11 @@ public sealed class DirectorAcquisition
                         QueueCheckIn();
                         nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
                     }
-                    if (options.ParkOnWait) await Park(lifetime.Token);
+                    if (options.ParkOnWait)
+                    {
+                        if (native is not null) await native.StopGuidingAsync(progress, lifetime.Token);
+                        await Park(lifetime.Token);
+                    }
                     await hooks.WaitAsync(ct => Task.Delay(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
                     // Waiting ends the target visit, so re-enter its setup on
                     // the next core selection even if the mount has not moved.
@@ -330,11 +352,16 @@ public sealed class DirectorAcquisition
                 }
                 var selectedTarget = target;
                 var selectedContext = context;
+                container.ShowSky(context.Target.DeepSkyObject, context.NighttimeData);
                 var newTarget = previousPointing?.Target.Id != target.Id;
                 var id = Guid.NewGuid().ToString("D");
                 var begin = await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
-                    new(configuration, previousPointing, telescope.GetInfo().AtPark, false, 0),
-                    new(30000, 0, 0, 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token);
+                    new(configuration, previousPointing, telescope.GetInfo().AtPark,
+                        native?.RotatorConnected == true && target.PositionAngleMas is not null,
+                        filterCounts.GetValueOrDefault(program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId)),
+                    new(30000, native is not null && configuration.EnableSlewCenter ? 60000UL : 0,
+                        options.Focus == DirectorOperationOwner.Director ? 120000UL : 0,
+                        configuration.DitherEvery > 0 ? 30000UL : 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token);
                 if (begin.Error == LedgerError.PreparationNotSelected)
                 {
                     // No operation was issued. Conditions/time can change
@@ -361,24 +388,35 @@ public sealed class DirectorAcquisition
                     }
                     if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
                     var block = TargetBlock();
-                    var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, block.ValidateContext),
+                    var operationName = ((PreparationNext.Run)next).Command.Operation.GetType().Name;
+                    container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = operationName });
+                    container.RecordAction(selectedTarget.Name, operationName, "Started");
+                    var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, () =>
+                        { native?.CheckTriggers(); block.ValidateContext(); }),
                         async (p, ct) =>
                         {
                             container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = "Target setup" });
                             await hooks.SelectTargetAsync(selectedTarget.Id, selectedContext, p, ct);
                             Check(); CheckPointing();
+                            if (previousPointing?.Target.Id != selectedTarget.Id) filterCounts.Clear();
                             previousPointing = new(configuration.Id, selectedTarget);
-                        });
+                        }, native is null ? null : (operation, p, ct) => native.PrepareAsync(operation, block, p, ct));
                     using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                     operationDeadline.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds));
                     try { await RunItem(block, issued.Item, operationDeadline.Token); }
                     finally
                     {
                         if (issued.Fence.Completion is { } completed)
+                        {
                             Require(await runtime.CompletePreparationAsync(completed, CancellationToken.None));
+                            container.RecordAction(selectedTarget.Name, operationName, completed.Outcome.GetType().Name, completed.ElapsedMs);
+                        }
+                        else container.RecordAction(selectedTarget.Name, operationName, "Not dispatched");
                     }
                     if (issued.Fence.Completion?.Outcome is not PreparationOutcome.Succeeded)
                         throw new InvalidOperationException("Native preparation failed.");
+                    if (next is PreparationNext.Run { Command.Operation: PreparationOperation.Dither })
+                        filterCounts[program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId] = 0;
                 }
                 if (reselect) continue;
                 if (Volatile.Read(ref priorityRefresh) != 0)
@@ -409,10 +447,17 @@ public sealed class DirectorAcquisition
                         throw new InvalidOperationException("Mount is not tracking and ready to expose.");
                 }));
                 container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
-                await RunItem(captureBlock, exposure, lifetime.Token);
+                container.RecordAction(target.Name, "Exposure", "Started");
+                using var captureDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                captureDeadline.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
+                    + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs));
+                try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
+                catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
                 var evidence = exposure.Evidence;
                 if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
                 Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
+                container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
+                filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
                 await hooks.ExposureSavedAsync(captureId, progress, lifetime.Token);
                 if (DateTimeOffset.UtcNow >= nextCheckIn)
                 {
@@ -514,12 +559,23 @@ public sealed class DirectorAcquisition
                 var aborted = executionError is not null || lifetime.IsCancellationRequested;
                 try
                 {
+                    // A guider failure must not prevent physical mount shutdown.
+                    if (native is not null)
+                        try
+                        {
+                            using var guiderStop = CancellationTokenSource.CreateLinkedTokenSource(cleanup.Token);
+                            guiderStop.CancelAfter(TimeSpan.FromSeconds(15));
+                            await native.StopGuidingAsync(progress, guiderStop.Token).WaitAsync(guiderStop.Token);
+                        }
+                        catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
                     if (aborted && options.OnAbort == DirectorAbortPolicy.StopMount)
                     {
                         NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
                         stopped = true;
                     }
                     else { await Park(cleanup.Token); parked = true; }
+                    native?.CheckTriggers();
+                    native?.Dispose();
                     if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
                     {
                         if (Require(await runtime.FindUnresolvedAttemptAsync(cleanup.Token)).Attempt is not null
@@ -563,12 +619,14 @@ public sealed class DirectorAcquisition
             else { telemetry?.Dispose(); checkpoint?.Dispose(); }
         }
         if (reportingError is not null) throw new InvalidOperationException("Director check-in failed.", reportingError);
+        if (shutdownError is not null) throw new InvalidOperationException("Director guider shutdown failed; reconciliation required.", shutdownError);
         return released;
 
         static ulong Now() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         void Check()
         {
             lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
+            native?.CheckEquipment();
             if (profiles.ActiveProfile.Id != profile || interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted
                 || runtime.Status.State != RuntimeState.Ready || Now() >= assignment.ExpiresAtMs)
                 throw new InvalidOperationException("Director context, safety, runtime or allocation validity changed.");
@@ -582,6 +640,7 @@ public sealed class DirectorAcquisition
         }
         void CheckPointing()
         {
+            native?.CheckTriggers();
             if (target is null) throw new InvalidOperationException("No core-selected target.");
             var info = telescope.GetInfo();
             if (!info.Connected || info.DeviceId != equipmentBinding.TelescopeDeviceId || info.Slewing)
@@ -656,11 +715,21 @@ public sealed class DirectorAcquisition
         void Report(string phase, string? connectivity)
         {
             container.UpdateDisplay(d => d with { Phase = phase, Rig = rig, Connectivity = connectivity ?? d.Connectivity, Safety = interlock.Read().Safety.ToString() });
-            Logger.Info($"PSF Guard Director: {phase}");
+            if (lastLoggedPhase != phase)
+            {
+                container.RecordAction(target?.Name ?? "", "Planner", phase.Replace('_', ' '));
+                lastLoggedPhase = phase;
+            }
             try { progress.Report(new ApplicationStatus { Status = phase }); }
             catch (Exception error) { Logger.Error(error); }
         }
     }
+
+    private NinaNativeImaging? CreateNativeImaging(DirectorSessionOptions options) => !NinaNativeImaging.Required(options) ? null
+        : new(sequenceFactory ?? throw new InvalidOperationException("NINA's sequence action factory is unavailable."), profiles,
+            guider ?? throw new InvalidOperationException("NINA guider service unavailable."),
+            focuser ?? throw new InvalidOperationException("NINA focuser service unavailable."),
+            rotator ?? throw new InvalidOperationException("NINA rotator service unavailable."), options);
 
     private static bool OfflineFailure(CoordinatorIntakeFailure failure) => failure is CoordinatorIntakeFailure.Transport
         or CoordinatorIntakeFailure.Timeout or CoordinatorIntakeFailure.ServerUnavailable or CoordinatorIntakeFailure.Busy;

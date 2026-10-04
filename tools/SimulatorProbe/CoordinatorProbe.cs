@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -34,6 +34,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ProjectOrder { get; private init; }
     internal bool PriorityRefresh { get; private init; }
     internal string? ConstraintChange { get; private init; }
+    internal bool NativeImaging { get; private init; }
+    internal string? NativeImagingFailure { get; private init; }
     internal bool PriorityRefreshVerified { get; private set; }
     private Guid[] rankedProjects = [];
     internal bool LocalTargetsVerified { get; private set; }
@@ -81,7 +83,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure };
         }
         catch
         {
@@ -247,7 +249,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     template_guid = (Guid?)null,
                     template_id = (int?)null,
                     name = $"Simulator filter {i}",
-                    filter_name = filterNames[$"filter-{i}"],
+                    filter_name = filterNames[$"filter-{(NativeImaging ? targetIndex == 1 ? 1 : 0 : i)}"],
                     gain = (int?)null,
                     offset = (int?)null,
                     bin = 1,
@@ -333,7 +335,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 }
             }, token);
             using var work = new CoordinatorWorkloadClient(Path.Combine(Path.GetDirectoryName(root)!, "public-state"), endpoint, binding, pairing.ClientId, configuration, Credential,
-                localTargetScheduling: LocalTargetScheduling);
+                localTargetScheduling: LocalTargetScheduling, nativeImaging: NativeImaging);
             allocation = (await work.RequestAsync(token)).Allocation ?? throw new InvalidDataException("Commissioned work was not issued.");
             if ((await work.RequestAsync(token)).Allocation?.Fingerprint != allocation.Fingerprint)
                 throw new InvalidDataException("Automatic request retry changed its immutable grant.");
@@ -455,7 +457,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal async Task VerifyAutomaticWorkloadAsync(string root, DirectorConfiguration configuration, CancellationToken token)
     {
         using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
-            localTargetScheduling: LocalTargetScheduling);
+            localTargetScheduling: LocalTargetScheduling, nativeImaging: NativeImaging);
         var waiting = await client.RequestAsync(token);
         if (OfflineWorkloadRelease && waiting.Allocation is null && waiting.RetryAfterSeconds == 5)
             waiting = await client.RequestAsync(token);
@@ -470,7 +472,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             catalog_id = pairing.Binding.CatalogId,
             request_id = AllocationId,
             configuration_id = configuration.Id,
-            execution_mode = LocalTargetScheduling ? "local_sequence_v3" : "prepared_target_v3"
+            execution_mode = NativeImaging ? "native_imaging_v1" : LocalTargetScheduling ? "local_sequence_v3" : "prepared_target_v3"
         });
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();

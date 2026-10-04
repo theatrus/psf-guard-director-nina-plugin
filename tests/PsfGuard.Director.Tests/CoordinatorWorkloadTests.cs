@@ -89,8 +89,29 @@ public sealed class CoordinatorWorkloadTests
             e.Revision, Now - 500, e with { Program = e.Program with { Assignment = e.Program.Assignment with { Id = $"allocation-{id:D}" } } });
     }
     private static string Root() => Path.Combine(Path.GetTempPath(), $"director-workload-{Guid.NewGuid():N}");
-    private static CoordinatorWorkloadClient Create(string root, Handler handler, bool localTargets = false) => new(root, Endpoint, Binding, Client, Configuration,
-        _ => ValueTask.FromResult<string?>("test-token"), handler, new Clock(), localTargetScheduling: localTargets);
+    private static CoordinatorWorkloadClient Create(string root, Handler handler, bool localTargets = false, bool native = false) => new(root, Endpoint, Binding, Client, Configuration,
+        _ => ValueTask.FromResult<string?>("test-token"), handler, new Clock(), localTargetScheduling: localTargets, nativeImaging: native);
+
+    [Theory]
+    [InlineData(false, "native_single_target_v1")]
+    [InlineData(true, "native_imaging_v1")]
+    public async Task NativeCapabilitiesAreExplicitAndCannotChangeAfterLostReply(bool localTargets, string mode)
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(async request =>
+            {
+                var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+                Assert.Equal(mode, body.GetProperty("execution_mode").GetString());
+                throw new HttpRequestException();
+            }), localTargets, true))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            using var changed = Create(root, new(_ => throw new Xunit.Sdk.XunitException("No HTTP after an ambiguous mode change.")), localTargets);
+            await Assert.ThrowsAsync<InvalidDataException>(() => changed.RequestAsync());
+        }
+        finally { Directory.Delete(root, true); }
+    }
 
     [Fact]
     public async Task LostReplyCannotChangeTheExecutorsMode()
