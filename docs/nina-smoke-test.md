@@ -805,8 +805,8 @@ waits for actual shutdown independently before checking that result.
 **Optical evidence is synthetic.** The test-only probe substitutes solver/focus
 results while using the real NINA actions, sequencing and ASCOM device mediators.
 This proves dispatch, hook and failure orchestration, not optical accuracy or
-autofocus quality. It does not force an actual meridian flip or rotate a device.
-Those tests and real-sky acceptance remain open. The probe and its Moq dependency
+autofocus quality. The base test does not force a flip; use the additional case
+below. Rotation and real-sky acceptance remain open. The probe and its Moq dependency
 are never included in the published plugin ZIP.
 
 Meridian regression tests use the pinned native trigger, inherited sequence
@@ -814,3 +814,36 @@ runner and a controlled flip VM result. They cover upcoming instruction timing,
 the pre-meridian pause, unavailable mounts, failed workflow steps, cancellation,
 blocking dispatch after failure, Activity entries, and exclusion of runtime
 defaults from saved/cloned sequences. These tests do not claim a physical flip.
+
+## Forced native meridian workflow
+
+Run `run-server-plan-smoke.ps1` with `-PublicAcquisition -LocalTargetScheduling
+-AutomaticWorkloads -NativeImaging -ForceNativeFlip`. Add
+`-NativeImagingFailure meridian` for a failed mount-command result.
+
+The fixture places its target east of the meridian, arms after two saved frames,
+and gives NINA's native trigger a bounded deadline through the actual crossing.
+NINA's real flip VM pauses/resumes tracking, calls the ASCOM mount flip, runs
+autofocus, settles, and raises the native before/after events. The success case
+requires a live device pier-side change followed by a third saved exposure.
+The failure case requires a failed native workflow step, exactly two saved
+frames, no third exposure, parked shutdown and released local ownership.
+Both cases record ordered save/flip events and workflow steps in `result.json`.
+
+The flip deadline, optical focus/solve results, status display and window
+presentation are test substitutes; the failure case also returns false at the
+mount-command boundary. Mount motion and the flip workflow are real NINA operations
+against ASCOM OmniSim. Recenter is disabled: this is not a sky-solving test.
+Direct Guider does not exercise a PHD2 stop/reacquire cycle. Native rotation,
+real-sky recentering, external plugin callbacks and full-night acceptance remain
+separate gates. The test-only helpers are not shipped in the plugin package.
+
+Validated on 2026-10-04 with NINA 3.3.0.1064, bundled runtime 0.10.0 and
+an isolated PSF Guard server. Both success and injected mount-failure runs passed.
+The pinned NINA VM reports an overall successful result/event even when its
+`Flip` step returns false. Director's workflow-step check catches this and
+prevents the next exposure; do not replace it with a boolean/event-only check.
+Local evidence:
+
+- Success: `artifacts/nina-smoke-f353cf1360cc4ca3b42548c4b20e1153/probe/bec80c8443aa4a69a84ad591d25fb41a/result.json`.
+- Failure: `artifacts/nina-smoke-abdc212581824960baf0f55ba8ef320e/probe/77b8e8d961a2453ab9d747132d73bc82/result.json`.

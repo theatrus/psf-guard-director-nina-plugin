@@ -93,6 +93,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     private void Add<T>() where T : ISequenceTrigger
     {
         var trigger = factory.GetTrigger<T>() ?? throw new InvalidOperationException($"NINA action {typeof(T).Name} is unavailable.");
+        if (string.IsNullOrWhiteSpace(trigger.Name))
+            trigger.Name = trigger is MeridianFlipTrigger ? "Meridian flip" : typeof(T).Name;
         session!.AddRuntimeTrigger(trigger);
         installed.Add(trigger);
         trigger.Initialize();

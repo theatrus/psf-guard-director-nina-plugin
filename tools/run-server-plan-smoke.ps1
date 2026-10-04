@@ -18,13 +18,16 @@ param(
     [switch]$ProjectOrder,
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
-    [ValidateSet('center', 'autofocus')][string]$NativeImagingFailure,
+    [switch]$ForceNativeFlip,
+    [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
     [ValidateSet('horizon', 'site', 'meridian')][string]$ConstraintChange,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
 if ($NativeImaging -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $ConstraintChange -or $PublicUnsafe -or $EnclosureClosure -or $PriorityRefresh)) { throw 'NativeImaging requires safe public local scheduling.' }
 if ($NativeImagingFailure -and (!$NativeImaging -or !$AutomaticWorkloads)) { throw 'NativeImagingFailure requires native automatic workloads.' }
+if ($ForceNativeFlip -and (!$NativeImaging -or !$AutomaticWorkloads -or ($NativeImagingFailure -and $NativeImagingFailure -ne 'meridian'))) { throw 'ForceNativeFlip requires native automatic workloads without other faults.' }
+if ($NativeImagingFailure -eq 'meridian' -and !$ForceNativeFlip) { throw 'Meridian failure requires ForceNativeFlip.' }
 if ($ConstraintChange -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $DeferredCheckIn -or $EnclosureClosure)) { throw 'ConstraintChange requires only PublicAcquisition.' }
 if ($ProjectOrder -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $ObservingPreferences -or $MoonAvoidance -or $PublicUnsafe)) { throw 'ProjectOrder requires safe public local scheduling without weights or Moon-only waits.' }
 if ($PriorityRefresh -and (!$ProjectOrder -or !$AutomaticWorkloads -or $OfflineWorkloadRelease -or $DeferredCheckIn)) { throw 'PriorityRefresh requires live automatic ranked workloads.' }
@@ -85,7 +88,7 @@ try {
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
-        ForEach-Object { $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
+        ForEach-Object { $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
         ConvertTo-Json | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -127,6 +130,7 @@ try {
     if ($ConstraintChange -and !$evidence.constraint_change_verified) { throw 'Constraint-change cancellation and no-restart were not verified.' }
     if ($NativeImagingFailure -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
     if ($NativeImaging -and !$NativeImagingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
+    if ($ForceNativeFlip -and (!$evidence.native_flip -or $evidence.native_flip.attempts -ne 1)) { throw 'Forced native flip was not exercised.' }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {
