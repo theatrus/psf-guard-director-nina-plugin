@@ -177,11 +177,11 @@ the complete acquisition lifecycle remains separate work.
 
 ## Preview releases
 
-Version 0.1.0.1 updates the bundled runtime to 0.6.0 / IPC 7 and includes the
-internal durable-ledger, geometry, and post-hook dispatch clients. Its public
-settings still control only Start/Stop and runtime status. It does not add
-pairing, server assignments, or a production acquisition container. See the
-[preview release notes](docs/releases/0.1.0.1.md).
+Version 0.1.0.2 includes the bundled runtime 0.10.0 / IPC 10, pairing and the
+opt-in Director Session acquisition container. It adds local multi-target
+scheduling, automatic workloads, live/deferred check-ins and native NINA
+equipment defaults with configurable sequence hooks. See the
+[preview release notes](docs/releases/0.1.0.2.md).
 
 Run `./build-release.ps1` after the full test suite passes. It builds the same
 seven-file bundle, checks its assembly version against the registry template,
@@ -197,7 +197,9 @@ The registry uses a single feed and rejects non-Release channels, so the manifes
 omits `Channel`. The description and GitHub prerelease label explicitly identify
 Director as experimental; feed placement does not make it stable. It requires
 N.I.N.A. 3.3 nightly #58 or newer.
-This runtime preview is not an acquisition controller and does not change Sync.
+This acquisition preview is simulator-validated, not approved for unattended
+imaging. Real-sky full-night acceptance and restart/resume remain open. Sync is
+unchanged.
 
 ## License
 

@@ -1,7 +1,7 @@
 {
   "Name": "PSF Guard Director",
   "Identifier": "03a1d13e-67eb-4e24-a407-82bce7e576a5",
-  "Version": { "Major": 0, "Minor": 1, "Patch": 0, "Build": 1 },
+  "Version": { "Major": 0, "Minor": 1, "Patch": 0, "Build": 2 },
   "Author": "Yann Ramin (@theatrus)",
   "Homepage": "https://psf-guard.com",
   "Repository": "https://github.com/theatrus/psf-guard-director-nina-plugin",
@@ -12,6 +12,6 @@
   "MinimumApplicationVersion": { "Major": 3, "Minor": 3, "Patch": 0, "Build": 1058 },
   "Descriptions": {
     "ShortDescription": "Experimental PSF Guard Director with bounded local target scheduling.",
-    "LongDescription": "Experimental Director with shared-core target priorities and Moon avoidance inside bounded allocations. Supports commissioned automatic workload requests and local execution during coordinator outages. Requires NINA safety monitoring and sequence-owned centering, focus, guiding, dithering and meridian flips. Automatic equipment defaults and restart/resume are not yet available. Director is separate from PSF Guard Sync and does not replace or change Sync."
+    "LongDescription": "Experimental Director with shared-core local target scheduling, ranked priorities and Moon avoidance inside bounded allocations. Supports pairing, automatic workload requests, live or deferred check-ins, native NINA centering, rotation, autofocus, guiding, dithering and meridian flips, plus custom sequence hooks. Requires explicit acquisition, safety and enclosure policies. Restart/resume and real-sky full-night acceptance remain unavailable. Do not use for unattended imaging. Director is separate from PSF Guard Sync and does not replace or change Sync."
   }
 }
