@@ -5,6 +5,7 @@ using NINA.Core.Model.Equipment;
 using NINA.Core.Enum;
 using NINA.Core.Utility;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Equipment.Interfaces;
 using NINA.Equipment.Model;
 using NINA.Image.ImageData;
 using NINA.Profile.Interfaces;
@@ -27,7 +28,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     private Task<SaveReceipt>? pendingSave;
     private Action? detachSave;
     private long interruptedStarted, interruptedDownloaded;
-    private bool disposed;
+    private volatile bool disposed;
 
     // Only the live owner can prove that its invocation ended before enqueue.
     // A journal recovered after a crash deliberately has no such authority.
@@ -42,13 +43,11 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             if (journal is null)
             {
                 if (completed?.Intent.CaptureId.ToString("D") != captureId) return null;
-                CheckLocalContext(completed.Intent);
-                if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is not quiescent.");
+                RequireQuiescent(profiles, camera, completed.Intent.ProfileId, completed.Intent.CameraDeviceId);
                 return completed;
             }
             if (journal.Evidence.Intent.CaptureId.ToString("D") != captureId) return null;
-            CheckLocalContext(journal.Evidence.Intent);
-            if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is not quiescent.");
+            RequireQuiescent(profiles, camera, journal.Evidence.Intent.ProfileId, journal.Evidence.Intent.CameraDeviceId);
             if (journal.Evidence.Phase == CapturePhase.SaveUncertain)
             {
                 if (pendingSave is null) return null;
@@ -191,12 +190,21 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             }
             var savedAttached = false;
             var failedAttached = false;
+            var detached = 0;
+            void Detach()
+            {
+                if (Interlocked.Exchange(ref detached, 1) != 0) return;
+                try { if (savedAttached) saves.ImageSaved -= Saved; }
+                finally { if (failedAttached) saves.ImageSaveFailed -= Failed; }
+            }
             try
             {
                 saves.ImageSaved += Saved;
                 savedAttached = true;
                 saves.ImageSaveFailed += Failed;
                 failedAttached = true;
+                Interlocked.Exchange(ref detachSave, Detach)?.Invoke();
+                ObjectDisposedException.ThrowIf(disposed, this);
                 pendingSave = receipt.Task;
                 // Persist before enqueue: a crash here is uncertain, never an
                 // authorization to repeat the exposure with this identity.
@@ -234,14 +242,12 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             }
             finally
             {
-                void Detach()
+                if (journal.Evidence.Phase != CapturePhase.SaveQueued || receipt.Task.IsCompleted || disposed)
                 {
-                    try { if (savedAttached) saves.ImageSaved -= Saved; }
-                    finally { if (failedAttached) saves.ImageSaveFailed -= Failed; }
+                    DetachSaveObservers();
+                    // Subscription itself can fail before the owner is installed.
+                    Detach();
                 }
-                if (journal.Evidence.Phase == CapturePhase.SaveQueued && !receipt.Task.IsCompleted)
-                    detachSave = Detach;
-                else Detach();
             }
         }
         catch (Exception error)
@@ -308,5 +314,16 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         var info = camera.GetInfo();
         if (!info.Connected || info.DeviceId != intent.CameraDeviceId)
             throw new InvalidOperationException("NINA camera no longer matches the capture intent.");
+    }
+
+    internal static void RequireQuiescent(IProfileService profiles, ICameraMediator camera, Guid profile, string deviceId)
+    {
+        // IsExposing is NINA's invocation flag and is cleared on abort even if
+        // the driver failed to stop. Require the bound driver's idle state too.
+        var info = camera.GetInfo();
+        if (profiles.ActiveProfile.Id != profile || !info.Connected || info.DeviceId != deviceId || info.IsExposing
+            || camera.GetDevice() is not ICamera device || !device.Connected || device.Id != deviceId
+            || device.CameraState != CameraStates.Idle)
+            throw new InvalidOperationException("The bound camera driver has not confirmed Idle; weather resume requires reconciliation.");
     }
 }

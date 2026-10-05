@@ -410,6 +410,7 @@ public sealed class DirectorAcquisition
                 Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
                 if (held.StableSinceMs is not null && remaining <= 0)
                 {
+                    NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
                     await recovery.ResumeWeatherAsync(lifetime.Token, idle: true);
                     interlock.Rearm(safetyRevision); enclosure.Rearm(enclosureRevision);
                     operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
@@ -792,6 +793,7 @@ public sealed class DirectorAcquisition
                     container.UpdateDisplay(d => d with { WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used" });
                     if (held.StableSinceMs is not null && remaining <= 0)
                     {
+                        NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
                         await recovery.ResumeWeatherAsync(lifetime.Token);
                         interlock.Rearm(safetyRevision);
                         enclosure.Rearm(enclosureRevision);

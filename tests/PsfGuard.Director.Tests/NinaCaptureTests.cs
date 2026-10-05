@@ -5,6 +5,7 @@ using NINA.Core.Utility;
 using NINA.Equipment.Equipment.MyCamera;
 using NINA.Equipment.Equipment.MyFilterWheel;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Equipment.Interfaces;
 using NINA.Equipment.Model;
 using NINA.Image.ImageData;
 using NINA.Image.FileFormat.FITS;
@@ -231,6 +232,28 @@ public sealed partial class NinaCaptureTests
         f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName), Times.Once);
     }
 
+    [Theory]
+    [InlineData(CameraStates.NoState)]
+    [InlineData(CameraStates.Waiting)]
+    [InlineData(CameraStates.Exposing)]
+    [InlineData(CameraStates.Reading)]
+    [InlineData(CameraStates.Download)]
+    [InlineData(CameraStates.Error)]
+    [InlineData(CameraStates.LoadingFile)]
+    public async Task SettlementRequiresDriverIdleEvenAfterInvocationFlagClears(CameraStates state)
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .ThrowsAsync(new OperationCanceledException());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run());
+        f.CameraInfo.IsExposing = false;
+        f.CameraInfo.CameraState = state;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reconcile());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        f.CameraInfo.CameraState = CameraStates.Idle;
+        Assert.Equal(CapturePhase.Failed, (await f.Reconcile())!.Phase);
+    }
+
     [Fact]
     public async Task SettlementRefusesChangedCameraOrProfile()
     {
@@ -326,6 +349,18 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(520, evidence!.TotalMs);
         Assert.Equal(320, evidence.ProcessingAndSaveMs);
         f.Acknowledge();
+    }
+
+    [Fact]
+    public async Task DisposalDuringEnqueueDetachesObserversEvenBeforeInvocationSettles()
+    {
+        using var f = new Fixture(TimeSpan.FromMilliseconds(50));
+        f.Saves.Setup(x => x.Enqueue(It.IsAny<IImageData>(), It.IsAny<Task<IRenderedImage>>(), f.Progress, It.IsAny<CancellationToken>()))
+            .Callback(f.DisposeAdapter).Returns(Task.CompletedTask);
+        await Assert.ThrowsAsync<TimeoutException>(() => f.Run());
+        f.AssertDetached();
+        Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => f.Reconcile());
     }
 
     [Fact]
@@ -630,7 +665,7 @@ public sealed partial class NinaCaptureTests
         public Mock<IImagingMediator> Imaging { get; } = new(MockBehavior.Strict);
         public Mock<IImageSaveMediator> Saves { get; } = new(MockBehavior.Strict);
         public Mock<IImageData> Image { get; } = new();
-        public CameraInfo CameraInfo { get; } = new() { Connected = true, DeviceId = "camera" };
+        public CameraInfo CameraInfo { get; } = new() { Connected = true, DeviceId = "camera", CameraState = CameraStates.Idle };
         public FilterWheelInfo WheelInfo { get; } = new() { Connected = true, DeviceId = "wheel", SelectedFilter = new() { Position = 2, Name = "L" } };
         public NinaEquipmentBinding Local { get; private set; } = null!;
         public NinaProgramCapture BoundCapture { get; private set; } = null!;
@@ -653,6 +688,11 @@ public sealed partial class NinaCaptureTests
             profiles.SetupGet(x => x.ActiveProfile).Returns(Profile.Object);
             var camera = new Mock<ICameraMediator>();
             camera.Setup(x => x.GetInfo()).Returns(CameraInfo);
+            var device = new Mock<ICamera>();
+            device.SetupGet(x => x.Connected).Returns(() => CameraInfo.Connected);
+            device.SetupGet(x => x.Id).Returns(() => CameraInfo.DeviceId);
+            device.SetupGet(x => x.CameraState).Returns(() => CameraInfo.CameraState);
+            camera.Setup(x => x.GetDevice()).Returns(device.Object);
             var cameraSettings = new Mock<ICameraSettings>();
             cameraSettings.SetupGet(x => x.Id).Returns("camera");
             Profile.SetupGet(x => x.CameraSettings).Returns(cameraSettings.Object);

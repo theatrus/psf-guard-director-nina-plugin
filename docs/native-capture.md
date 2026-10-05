@@ -212,6 +212,10 @@ requires an exact NINA image ID and Director capture ID receipt, within the save
 timeout; a late saved frame remains pending assessment. Its After Each Exposure
 hook runs only after stable Safe/Open readmission.
 
+Every weather readmission also requires the bound camera driver to report Idle.
+NINA's cleared exposure flag alone is not confirmation. Drivers that report an
+unknown state cannot automatically resume; they require operator reconciliation.
+
 Missing files, a restarted process, uncertain preparation, and interrupted user
 hooks or native triggers remain reconciliation-required, not automatic retries.
 Startup and between-allocation waits use the same persisted weather budget.
