@@ -43,6 +43,40 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
+    internal async Task<JsonElement> ReadRigStatusAsync(CancellationToken token)
+    {
+        var rows = await OperatorAsync(HttpMethod.Get, "rigs/status", null, token);
+        return rows.EnumerateArray().Single(row => row.GetProperty("rig").GetProperty("id").GetGuid() == pairing.Binding.RigId).Clone();
+    }
+
+    internal async Task VerifyPluginTelemetryAsync(CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        while (true)
+        {
+            var row = await ReadRigStatusAsync(deadline.Token);
+            var payload = row.GetProperty("status").GetProperty("payload");
+            if (payload.TryGetProperty("operation_elapsed_ms", out var elapsed) && elapsed.ValueKind == JsonValueKind.Number
+                && payload.GetProperty("operation").ValueKind == JsonValueKind.String
+                && payload.GetProperty("goal_id").ValueKind == JsonValueKind.String
+                && payload.GetProperty("pointing").GetProperty("ra_degrees").GetDouble() is >= 0 and < 360
+                && payload.GetProperty("fresh_for_ms").GetInt32() == 15000 && !row.GetProperty("status_stale").GetBoolean()) return;
+            await Task.Delay(250, deadline.Token);
+        }
+    }
+
+    internal async Task VerifyOperationReplayAsync(JsonElement before, CancellationToken token)
+    {
+        var after = await ReadRigStatusAsync(token);
+        if (before.GetProperty("status").GetRawText() != after.GetProperty("status").GetRawText())
+            throw new InvalidDataException("Batch replay changed the live status snapshot.");
+        var operations = after.GetProperty("recent_operations").EnumerateArray().ToArray();
+        if (operations.Length == 0 || operations.Any(op => op.GetProperty("event").GetProperty("event").GetProperty("kind").GetString() != "completed"))
+            throw new InvalidDataException("Completed preparation history was not replayed.");
+        if (after.GetProperty("checkins").EnumerateArray().Single().GetProperty("highest_contiguous").GetUInt64() != 6)
+            throw new InvalidDataException("Operation receipts changed the capture cursor.");
+    }
     internal bool EquipmentReviewVerified { get; private set; }
     internal Guid? AllocationId => allocation?.Envelope.AllocationId;
     private CoordinatorAllocation? allocation;

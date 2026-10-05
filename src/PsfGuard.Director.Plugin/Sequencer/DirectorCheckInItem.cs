@@ -42,7 +42,7 @@ public sealed class DirectorCheckInItem : SequenceItem, IValidatable
         var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p =>
         {
             progress.Report(new ApplicationStatus
-            { Source = Name, Status = $"{p.Runs} runs; {p.DeliveredEvents} events; cursor {p.AcknowledgedThrough}" });
+            { Source = Name, Status = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" });
         });
         try { await service.RunAsync(updates, token); }
         finally { progress.Report(new ApplicationStatus { Source = Name, Status = "" }); }

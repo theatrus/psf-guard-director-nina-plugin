@@ -20,8 +20,8 @@ public sealed class CoordinatorDeliveryTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request, token);
     }
-    private CoordinatorCheckpointClient Client(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send, TimeSpan? timeout = null) =>
-        new(root, Endpoint, Binding, ledger, _ => ValueTask.FromResult<string?>("psfdrc_test"), new Handler(send), timeout ?? TimeSpan.FromSeconds(2));
+    private CoordinatorCheckpointClient Client(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send, TimeSpan? timeout = null, CoordinatorEventFeed feed = CoordinatorEventFeed.Capture) =>
+        new(root, Endpoint, Binding, ledger, _ => ValueTask.FromResult<string?>("psfdrc_test"), new Handler(send), timeout ?? TimeSpan.FromSeconds(2), feed: feed);
     private LedgerEventPage Page(ulong after, int count) => new(ledger,
         Enumerable.Range(1, count).Select(i => new LedgerEvent(after + (ulong)i,
             new("capture-" + i, "goal", 100, new LedgerEvidence.Saved("image-" + i, 200)))).ToImmutableArray(), after + (ulong)count);
@@ -50,6 +50,61 @@ public sealed class CoordinatorDeliveryTests : IDisposable
     };
     private static HttpResponseMessage Response(JsonNode body) => new(HttpStatusCode.OK)
     { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
+
+    private Task<PreparationEventPage> PreparationPage(ulong after, int limit, CancellationToken token) => Task.FromResult(
+        new PreparationEventPage(ledger, after == 0 ? [new PreparationEvent(1, "prep", new PreparationEventData.Completed(
+            new(new("prep", 1, "goal", "target", "recipe", new PreparationOperation.BeforeTarget()), 100,
+                new("prep", 1, 200, 90, new PreparationOutcome.Succeeded()))))] : [], after == 0 ? 1UL : after));
+
+    [Fact]
+    public async Task PreparationReplayUsesIndependentDurableCursorAndExactWire()
+    {
+        using (var capture = Client((_, _) => Task.FromResult(Response(Ack(2)))))
+            await capture.DeliverAsync(OnePage);
+        string? first = null;
+        using (var lost = Client(async (request, token) =>
+        {
+            Assert.EndsWith("/operations", request.RequestUri!.AbsolutePath);
+            first = await request.Content!.ReadAsStringAsync(token);
+            var receipt = JsonNode.Parse(first)!["events"]![0]!;
+            Assert.Equal("completed", receipt["event"]!["kind"]!.GetValue<string>());
+            Assert.Equal("before_target", receipt["event"]!["observation"]!["command"]!["operation"]!["operation"]!.GetValue<string>());
+            Assert.Equal(90UL, receipt["event"]!["observation"]!["completion"]!["elapsed_ms"]!.GetValue<ulong>());
+            throw new HttpRequestException("lost response");
+        }, feed: CoordinatorEventFeed.Preparation))
+            await Assert.ThrowsAsync<CoordinatorIntakeException>(() => lost.DeliverPreparationAsync(PreparationPage));
+        using (var retry = Client(async (request, token) =>
+        {
+            Assert.Equal(first, await request.Content!.ReadAsStringAsync(token));
+            var ack = Ack(1, 1);
+            ack["data"]!["outcomes"] = new JsonArray("duplicate");
+            ack["data"]!["applied"] = 0;
+            ack["data"]!["duplicates"] = 1;
+            return Response(ack);
+        }, feed: CoordinatorEventFeed.Preparation))
+            Assert.True((await retry.DeliverPreparationAsync(PreparationPage)).CaughtUp);
+        using var restarted = Client((_, _) => throw new Exception("No network expected"), feed: CoordinatorEventFeed.Preparation);
+        Assert.Equal(1UL, (await restarted.DeliverPreparationAsync(PreparationPage)).AcknowledgedThrough);
+        using var captureAgain = Client((_, _) => throw new Exception("No network expected"));
+        Assert.Equal(2UL, (await captureAgain.DeliverAsync(OnePage)).AcknowledgedThrough);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.DeliverAsync(OnePage));
+    }
+
+    [Fact]
+    public async Task PreparationConflictDoesNotAcknowledgeOrSkipHistory()
+    {
+        using var client = Client((_, _) =>
+        {
+            var ack = Ack(1, 1);
+            ack["data"]!["outcomes"] = new JsonArray("conflict");
+            ack["data"]!["applied"] = 0;
+            ack["data"]!["conflicts"] = new JsonArray(1);
+            return Task.FromResult(Response(ack));
+        }, feed: CoordinatorEventFeed.Preparation);
+        var error = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.DeliverPreparationAsync(PreparationPage));
+        Assert.Equal(CoordinatorIntakeFailure.ReceiptConflict, error.Failure);
+        Assert.Empty(Directory.GetFiles(root, "*.json"));
+    }
 
     [Fact]
     public async Task DeliversCaptureWireAndRestartsAtDurableCursor()

@@ -1,5 +1,29 @@
 # Native capture adapter
 
+## Central telemetry and batch replay
+
+When status reporting is enabled, Director sends the current native operation,
+monotonic elapsed time, goal, safety, wait/queue state and connected mount's
+J2000 position in degrees. Reports expire after three reporting intervals,
+bounded to 15 seconds through ten minutes. These are fresh snapshots, not a
+replay of the local action log. Transport failures obey Allow Offline.
+
+Live, end-of-session, settings Check In and the Director Check In instruction
+also deliver the Rust preparation outbox to `POST /rigs/{rig}/operations`.
+The server must support that endpoint before deploying this plugin increment.
+Capture and preparation cursors are independent and scoped to the exact
+coordinator/catalog/rig/profile/ledger tuple. Lost acknowledgements resend the
+same receipts. Deferred mode keeps both streams local until an explicit batch
+check-in. Neither stream is pruned by an acknowledgement, and batch replay does
+not resend old live status or dispatch hardware.
+
+Central history currently records shared-core preparation operations, including
+aggregate Before Target duration. Nested focus/guiding/flip entries remain in
+the NINA log and session action history; they are not separately durable central
+receipts. Duration learning, complete hook instrumentation and quality-driven
+park/retry remain future increments. Local paths and credential/device IDs are
+not part of the telemetry projection.
+
 ## Native imaging defaults
 
 Director ownership now uses NINA's native Center/CenterAndRotate, Run Autofocus,

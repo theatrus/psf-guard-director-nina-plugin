@@ -144,7 +144,7 @@ public sealed class DirectorAcquisition
             {
                 container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
                 var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
-                { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; cursor {p.AcknowledgedThrough}" }));
+                { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" }));
                 await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, session.Token);
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
@@ -265,8 +265,10 @@ public sealed class DirectorAcquisition
         using var background = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         using var checkpointWake = new SemaphoreSlim(0, 1);
         using var checkpointDelivery = new SemaphoreSlim(1, 1);
+        var priorityPollRequested = 0;
         NinaTargetContainer? context = null;
         CoordinatorCheckpointClient? checkpoint = null;
+        CoordinatorCheckpointClient? operationCheckpoint = null;
         CoordinatorSessionReporter? telemetry = null;
         Exception? executionError = null;
         Exception? reportingError = null;
@@ -292,6 +294,7 @@ public sealed class DirectorAcquisition
             watchdog = WatchdogAsync();
             constraintWatchdog = Task.Run(ConstraintWatchdogAsync);
             checkpoint = new(runRoot, endpoint, pairing.Binding, ledger, Credential, connection.AllowInsecureHttp);
+            operationCheckpoint = new(runRoot, endpoint, pairing.Binding, ledger, Credential, connection.AllowInsecureHttp, CoordinatorEventFeed.Preparation);
             telemetry = new CoordinatorSessionReporter(endpoint, pairing.Binding, Credential, connection.AllowInsecureHttp);
             if (options.LiveStatus) telemetryTask = TelemetryAsync(telemetry, ledger.LedgerId);
             var hooks = new NinaSessionHooks(container, TimeProvider.System, native is null ? null : native.ConfigureTargetSetup);
@@ -409,6 +412,7 @@ public sealed class DirectorAcquisition
                         if (issued.Fence.Completion is { } completed)
                         {
                             Require(await runtime.CompletePreparationAsync(completed, CancellationToken.None));
+                            QueueCheckIn(refreshPriority: false);
                             container.RecordAction(selectedTarget.Name, operationName, completed.Outcome.GetType().Name, completed.ElapsedMs);
                         }
                         else container.RecordAction(selectedTarget.Name, operationName, "Not dispatched");
@@ -470,13 +474,14 @@ public sealed class DirectorAcquisition
             Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
                 : "Allocation finished; awaiting assessment or a new reconciled plan", null);
 
-            void QueueCheckIn()
+            void QueueCheckIn(bool refreshPriority = true)
             {
                 if (options.CheckInMode != DirectorCheckInMode.Live)
                 {
                     container.UpdateDisplay(d => d with { QueueDepth = "Deferred" });
                     return;
                 }
+                if (refreshPriority) Interlocked.Exchange(ref priorityPollRequested, 1);
                 if (checkpointWake.CurrentCount == 0) checkpointWake.Release();
             }
             async Task CheckpointPumpAsync()
@@ -486,26 +491,29 @@ public sealed class DirectorAcquisition
                     while (true)
                     {
                         await checkpointWake.WaitAsync(background.Token);
-                        await CheckIn(background.Token);
+                        await CheckIn(background.Token, refreshPriority: Interlocked.Exchange(ref priorityPollRequested, 0) != 0);
                     }
                 }
                 catch (OperationCanceledException) when (background.IsCancellationRequested) { }
                 catch (Exception error) { Logger.Error(error); lifetime.Cancel(); throw; }
             }
-            async Task CheckIn(CancellationToken? cancellation = null, bool drain = false)
+            async Task CheckIn(CancellationToken? cancellation = null, bool drain = false, bool refreshPriority = true)
             {
                 var ct = cancellation ?? lifetime.Token;
                 await checkpointDelivery.WaitAsync(ct);
                 try
                 {
                     CoordinatorCheckpointResult result;
+                    CoordinatorCheckpointResult operations;
                     do
                     {
                         result = await checkpoint.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
                             allocation.Envelope.PreviewRevision, token: ct);
-                        container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
-                    } while (drain && !result.CaughtUp);
-                    if (!drain && result.CaughtUp && options.AutomaticWorkloads && options.CheckInMode == DirectorCheckInMode.Live)
+                        operations = await operationCheckpoint.DeliverPreparationAsync(async (after, limit, ct) => Require(await runtime.ReadPreparationEventsAsync(after, limit, ct)),
+                            allocation.Envelope.PreviewRevision, token: ct);
+                        container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp && operations.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
+                    } while (drain && (!result.CaughtUp || !operations.CaughtUp));
+                    if (refreshPriority && !drain && result.CaughtUp && options.AutomaticWorkloads && options.CheckInMode == DirectorCheckInMode.Live)
                     {
                         // Progress alone changes the preview revision. Compare
                         // priority intent so ordinary saves cannot churn grants.
@@ -587,6 +595,9 @@ public sealed class DirectorAcquisition
                             var final = await checkpoint!.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
                                 allocation.Envelope.PreviewRevision, maxPages: 256, token: cleanup.Token);
                             if (!final.CaughtUp) throw new InvalidOperationException("Capture feed is not fully delivered; workload remains outstanding.");
+                            var finalOperations = await operationCheckpoint!.DeliverPreparationAsync(async (after, limit, ct) => Require(await runtime.ReadPreparationEventsAsync(after, limit, ct)),
+                                allocation.Envelope.PreviewRevision, maxPages: 256, token: cleanup.Token);
+                            if (!finalOperations.CaughtUp) throw new InvalidOperationException("Operation feed is not fully delivered; workload remains outstanding.");
                             await workloads.ReleaseAsync(allocation, LastLedger!, final.AcknowledgedThrough, cleanup.Token);
                             archive.MarkReleased();
                             released = true;
@@ -609,14 +620,15 @@ public sealed class DirectorAcquisition
                     Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
-                        try { await telemetry.ReportAsync(allocation, LastLedger.LedgerId, phase, target?.Name ?? "", interlock.Read().Safety.ToString(), cleanup.Token); }
+                        try { await telemetry.ReportAsync(allocation, LastLedger.LedgerId, LiveSnapshot(), cleanup.Token); }
                         catch (Exception error) { Logger.Error(error); }
                     }
                     telemetry?.Dispose();
                     checkpoint?.Dispose();
+                    operationCheckpoint?.Dispose();
                 }
             }
-            else { telemetry?.Dispose(); checkpoint?.Dispose(); }
+            else { telemetry?.Dispose(); checkpoint?.Dispose(); operationCheckpoint?.Dispose(); }
         }
         if (reportingError is not null) throw new InvalidOperationException("Director check-in failed.", reportingError);
         if (shutdownError is not null) throw new InvalidOperationException("Director guider shutdown failed; reconciliation required.", shutdownError);
@@ -703,7 +715,7 @@ public sealed class DirectorAcquisition
             {
                 while (true)
                 {
-                    try { await reporter.ReportAsync(allocation, sessionId, container.Display.Phase, container.Display.Target, interlock.Read().Safety.ToString(), background.Token); }
+                    try { await reporter.ReportAsync(allocation, sessionId, LiveSnapshot(), background.Token); }
                     catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
                     { Logger.Info("Director telemetry offline; evidence remains in the local ledger."); }
                     await Task.Delay(TimeSpan.FromSeconds(options.StatusSeconds), background.Token);
@@ -711,6 +723,28 @@ public sealed class DirectorAcquisition
             }
             catch (OperationCanceledException) when (background.IsCancellationRequested) { }
             catch (Exception e) { Logger.Error(e); lifetime.Cancel(); }
+        }
+        CoordinatorLiveStatus LiveSnapshot()
+        {
+            var snapshot = container.TelemetrySnapshot();
+            var display = snapshot.Display;
+            CoordinatorPointing? pointing = null;
+            try
+            {
+                if (telescope.GetInfo().Connected)
+                {
+                    var position = telescope.GetCurrentPosition().Transform(Epoch.J2000);
+                    if (double.IsFinite(position.RA) && double.IsFinite(position.Dec) && position.RA is >= 0 and < 24 && position.Dec is >= -90 and <= 90)
+                        pointing = new(position.RA * 15, position.Dec);
+                }
+            }
+            catch (Exception error) { Logger.Warning($"Director pointing unavailable: {error.GetType().Name}"); }
+            var phase = camera.GetInfo() is { Connected: true, IsExposing: true } ? "exposing" : display.Phase;
+            return new(phase, display.Target, interlock.Read().Safety.ToString(), snapshot.Operation,
+                snapshot.StartedMs, snapshot.ElapsedMs, display.Goal == "-" ? null : display.Goal,
+                display.WaitReason == "-" ? null : display.WaitReason, display.QueueDepth,
+                int.TryParse(display.QueueDepth, out var depth) && depth >= 0 ? depth : null, pointing,
+                Math.Clamp(options.StatusSeconds * 3000, 15000, 600000));
         }
         void Report(string phase, string? connectivity)
         {

@@ -352,6 +352,7 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.Options.AutomaticWorkloads = coordinator.AutomaticWorkloads;
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
+                sessionContainer.Options.StatusSeconds = 5;
                 ConfigureImaging(sessionContainer.Options);
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
@@ -399,6 +400,11 @@ public sealed class SimulatorSequence : SequenceItem
                         ? !slowSetup.Entered.Task.IsCompleted : sessionContainer.Display.Phase != "Acquiring"))
                         await Task.Delay(50, lifetime.Token);
                     if (executing.IsCompleted) await executing;
+                    if (coordinator.ConstraintChange is null && !coordinator.PublicUnsafe && !coordinator.EnclosureClosure)
+                    {
+                        await coordinator.VerifyPluginTelemetryAsync(lifetime.Token);
+                        Step("Plugin live telemetry reported operation duration, goal, pointing and freshness");
+                    }
                     await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
                     if (coordinator.ConstraintChange is { } change)
                     {
@@ -557,8 +563,10 @@ public sealed class SimulatorSequence : SequenceItem
                     return;
                 }
                 await coordinator.EndOutageAsync(root, lifetime.Token);
-                if (coordinator.DeferredCheckIn && Directory.GetFiles(service.LastRunDirectory!, "capture-cursor-*.json").Length != 0)
-                    throw new InvalidDataException("Deferred mode delivered capture events before explicit check-in.");
+                if (coordinator.DeferredCheckIn && (Directory.GetFiles(service.LastRunDirectory!, "capture-cursor-*.json").Length != 0
+                    || Directory.GetFiles(service.LastRunDirectory!, "preparation-cursor-*.json").Length != 0))
+                    throw new InvalidDataException("Deferred mode delivered events before explicit check-in.");
+                var statusBeforeReplay = await coordinator.ReadRigStatusAsync(lifetime.Token);
                 var savedCheckIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
                 var delivered = await savedCheckIn.RunAsync(null, lifetime.Token);
                 if (delivered.Runs != 1 || !delivered.CaughtUp || delivered.AcknowledgedThrough != 6)
@@ -573,6 +581,7 @@ public sealed class SimulatorSequence : SequenceItem
                 if (repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
                     throw new InvalidDataException("Saved-run check-in did not preserve its acknowledgement cursor.");
                 await new DirectorCheckInItem(savedCheckIn).Execute(progress, lifetime.Token);
+                await coordinator.VerifyOperationReplayAsync(statusBeforeReplay, lifetime.Token);
                 Step("Saved-run batch check-in and sequencer action replayed no hardware or acknowledged events");
                 await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
                 await reopened.StartAsync(rigId, lifetime.Token);

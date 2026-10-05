@@ -28,6 +28,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private readonly DirectorAcquisition? acquisition;
     private readonly object executionLock = new();
     private readonly object displayLock = new();
+    private readonly List<(DirectorActionEntry Entry, long Timestamp)> activeActions = [];
     private CancellationTokenSource? executionCancellation;
     private Task? execution;
     private DirectorSessionOptions options = new();
@@ -111,11 +112,34 @@ public sealed class DirectorSessionContainer : SequentialContainer
     {
         static string Clean(string value) => new(value.Where(c => !char.IsControl(c)).Take(512).ToArray());
         var entry = new DirectorActionEntry(DateTimeOffset.Now, Clean(target), Clean(action), Clean(outcome), elapsedMs);
-        lock (displayLock) ActionHistory = new[] { entry }.Concat(ActionHistory).Take(200).ToArray();
+        lock (displayLock)
+        {
+            ActionHistory = new[] { entry }.Concat(ActionHistory).Take(200).ToArray();
+            if (outcome == "Started")
+            {
+                if (activeActions.Count == 32) activeActions.RemoveAt(0);
+                activeActions.Add((entry, System.Diagnostics.Stopwatch.GetTimestamp()));
+            }
+            else
+            {
+                var index = activeActions.FindLastIndex(item => item.Entry.Action == entry.Action && item.Entry.Target == entry.Target);
+                if (index >= 0) activeActions.RemoveRange(index, activeActions.Count - index);
+            }
+        }
         NINA.Core.Utility.Logger.Info($"Director action: {entry.Target}; {entry.Action}; {entry.Outcome}; elapsed_ms={elapsedMs}");
         RaisePropertyChanged(nameof(ActionHistory));
     }
     public ICommand ReportEquipmentCommand => reportEquipmentCommand;
+    internal (DirectorSessionDisplay Display, string? Operation, long? StartedMs, ulong? ElapsedMs) TelemetrySnapshot()
+    {
+        lock (displayLock)
+        {
+            if (activeActions.Count == 0) return (Display, null, null, null);
+            var active = activeActions[^1];
+            return (Display, active.Entry.Action, active.Entry.Time.ToUnixTimeMilliseconds(),
+                (ulong)System.Diagnostics.Stopwatch.GetElapsedTime(active.Timestamp).TotalMilliseconds);
+        }
+    }
     public string SessionStatus => Display.Phase;
     public string Readiness => !Options.EnableAcquisition ? AcquisitionGate :
         $"{(Options.LocalTargetScheduling ? "Local target scheduling; target setup in Before New Target" : "Prepared target")}; " +
@@ -149,7 +173,11 @@ public sealed class DirectorSessionContainer : SequentialContainer
     internal void UpdateDisplay(Func<DirectorSessionDisplay, DirectorSessionDisplay> update)
     {
         ArgumentNullException.ThrowIfNull(update);
-        lock (displayLock) Display = update(Display) ?? throw new InvalidOperationException("Missing Director status.");
+        lock (displayLock)
+        {
+            Display = update(Display) ?? throw new InvalidOperationException("Missing Director status.");
+            if (Display.Operation.Length == 0) activeActions.Clear();
+        }
         RaisePropertyChanged(nameof(Display));
         RaisePropertyChanged(nameof(SessionStatus));
     }

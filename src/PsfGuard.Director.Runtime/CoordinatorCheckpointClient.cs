@@ -6,10 +6,13 @@ using System.Text.Json.Nodes;
 namespace PsfGuard.Director.Runtime;
 
 public sealed record CoordinatorCheckpointResult(ulong AcknowledgedThrough, int DeliveredEvents, bool CaughtUp, bool ProgramChanged);
+public enum CoordinatorEventFeed { Capture, Preparation }
 
-/// <summary>Delivers capture ledger evidence only. Never deletes evidence, changes allocations, or dispatches equipment.</summary>
-public sealed class CoordinatorCheckpointClient : IDisposable
+/// <summary>Delivers one independently acknowledged ledger feed. Never dispatches equipment or changes allocations.</summary>
+public sealed partial class CoordinatorCheckpointClient : IDisposable
 {
+    private sealed record EncodedPage(JsonArray Events, ulong NextCursor);
+    private readonly CoordinatorEventFeed feed;
     private sealed record Cursor(int SchemaVersion, string Origin, CoordinatorBinding Binding, LedgerIdentity Ledger, ulong Through,
         string? ProgramRevision, string Checksum);
     private sealed record Acknowledgement(Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId, string LedgerId,
@@ -22,11 +25,12 @@ public sealed class CoordinatorCheckpointClient : IDisposable
     private readonly TimeSpan timeout;
 
     public CoordinatorCheckpointClient(string stateRoot, Uri endpoint, CoordinatorBinding binding, LedgerIdentity ledger,
-        Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false)
-        : this(stateRoot, endpoint, binding, ledger, credential, CoordinatorTransport.Handler(), TimeSpan.FromSeconds(30), allowInsecureHttp) { }
+        Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false, CoordinatorEventFeed feed = CoordinatorEventFeed.Capture)
+        : this(stateRoot, endpoint, binding, ledger, credential, CoordinatorTransport.Handler(), TimeSpan.FromSeconds(30), allowInsecureHttp, feed) { }
 
     internal CoordinatorCheckpointClient(string stateRoot, Uri endpoint, CoordinatorBinding binding, LedgerIdentity ledger,
-        Func<CancellationToken, ValueTask<string?>> credential, HttpMessageHandler handler, TimeSpan timeout, bool allowInsecureHttp = false)
+        Func<CancellationToken, ValueTask<string?>> credential, HttpMessageHandler handler, TimeSpan timeout, bool allowInsecureHttp = false,
+        CoordinatorEventFeed feed = CoordinatorEventFeed.Capture)
     {
         ValidateBinding(binding);
         if (!Guid.TryParseExact(ledger.LedgerId, "D", out var id) || id == Guid.Empty || ledger.RigId != binding.RigId.ToString("D")
@@ -36,8 +40,11 @@ public sealed class CoordinatorCheckpointClient : IDisposable
         this.binding = binding;
         this.ledger = ledger;
         this.timeout = timeout;
+        if (!Enum.IsDefined(feed)) throw new ArgumentOutOfRangeException(nameof(feed));
+        this.feed = feed;
         transport = new(endpoint, credential, handler, allowInsecureHttp);
-        cursorFile = new(stateRoot, new { origin = transport.Endpoint.AbsoluteUri, binding, ledger }, "capture-cursor");
+        cursorFile = new(stateRoot, new { origin = transport.Endpoint.AbsoluteUri, binding, ledger },
+            feed == CoordinatorEventFeed.Capture ? "capture-cursor" : "preparation-cursor");
     }
 
     internal static void ValidateBinding(CoordinatorBinding binding)
@@ -47,11 +54,23 @@ public sealed class CoordinatorCheckpointClient : IDisposable
             throw new ArgumentException("An exact coordinator/catalog/rig/profile binding is required.", nameof(binding));
     }
 
-    public async Task<CoordinatorCheckpointResult> DeliverAsync(
+    public Task<CoordinatorCheckpointResult> DeliverAsync(
         Func<ulong, int, CancellationToken, Task<LedgerEventPage>> readCaptureEvents,
         string? programRevision = null, int maxPages = 16, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(readCaptureEvents);
+        if (feed != CoordinatorEventFeed.Capture) throw new InvalidOperationException("This cursor belongs to the preparation feed.");
+        return DeliverPagesAsync(async (after, limit, ct) =>
+        {
+            var page = await readCaptureEvents(after, limit, ct).ConfigureAwait(false);
+            return new EncodedPage(Encode(page, after), page.NextCursor);
+        }, programRevision, maxPages, token);
+    }
+
+    private async Task<CoordinatorCheckpointResult> DeliverPagesAsync(
+        Func<ulong, int, CancellationToken, Task<EncodedPage>> readEvents,
+        string? programRevision, int maxPages, CancellationToken token)
+    {
         if (maxPages is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maxPages));
         if (programRevision is not null && !ValidRevision(programRevision)) throw new ArgumentException("Invalid program revision.", nameof(programRevision));
         // Serialize delivery across instances/processes; never overwrite a newer cursor with a stale one.
@@ -73,8 +92,9 @@ public sealed class CoordinatorCheckpointClient : IDisposable
             deadline.CancelAfter(timeout);
             try
             {
-                var page = await readCaptureEvents(through, LedgerContract.MaxPage, deadline.Token).WaitAsync(deadline.Token).ConfigureAwait(false);
-                var events = Encode(page, through);
+                var page = await readEvents(through, feed == CoordinatorEventFeed.Capture ? LedgerContract.MaxPage : PreparationContract.MaxPage,
+                    deadline.Token).WaitAsync(deadline.Token).ConfigureAwait(false);
+                var events = page.Events;
                 deadline.Token.ThrowIfCancellationRequested();
                 if (events.Count == 0) return new(through, delivered, true, Changed());
                 var request = JsonSerializer.SerializeToUtf8Bytes(new
@@ -86,7 +106,8 @@ public sealed class CoordinatorCheckpointClient : IDisposable
                     events
                 }, CoordinatorProgramContract.Options);
                 if (request.Length > PlannerContract.MaxRequestBytes) throw new InvalidDataException("Director checkpoint page is too large.");
-                var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/checkin", request,
+                var route = feed == CoordinatorEventFeed.Capture ? "checkin" : "operations";
+                var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/{route}", request,
                     deadline.Token, binding.ProfileId).ConfigureAwait(false);
                 var ack = ReadAcknowledgement(response.Bytes, page, programRevision);
                 deadline.Token.ThrowIfCancellationRequested();
@@ -95,7 +116,7 @@ public sealed class CoordinatorCheckpointClient : IDisposable
                 cursorFile.Write(new Cursor(1, transport.Endpoint.AbsoluteUri, binding, ledger, page.NextCursor,
                     observedRevision, CursorChecksum(page.NextCursor, observedRevision)));
                 through = page.NextCursor;
-                delivered += page.Events.Length;
+                delivered += page.Events.Count;
             }
             catch (OperationCanceledException) when (!token.IsCancellationRequested)
             { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
@@ -140,7 +161,7 @@ public sealed class CoordinatorCheckpointClient : IDisposable
         return result;
     }
 
-    private Acknowledgement ReadAcknowledgement(byte[] bytes, LedgerEventPage page, string? revision)
+    private Acknowledgement ReadAcknowledgement(byte[] bytes, EncodedPage page, string? revision)
     {
         try
         {
@@ -152,10 +173,10 @@ public sealed class CoordinatorCheckpointClient : IDisposable
                 || root.GetProperty("status").GetString() != "ready") throw new InvalidDataException();
             var ack = root.GetProperty("data").Deserialize<Acknowledgement>(CoordinatorProgramContract.Options) ?? throw new InvalidDataException();
             if (ack.CoordinatorInstanceId != binding.CoordinatorInstanceId || ack.CatalogId != binding.CatalogId
-                || ack.RigId != binding.RigId || ack.LedgerId != ledger.LedgerId || ack.Outcomes.Length != page.Events.Length
+                || ack.RigId != binding.RigId || ack.LedgerId != ledger.LedgerId || ack.Outcomes.Length != page.Events.Count
                 || ack.Outcomes.Any(o => o is not ("applied" or "duplicate" or "conflict"))
                 || ack.Applied != ack.Outcomes.Count(o => o == "applied") || ack.Duplicates != ack.Outcomes.Count(o => o == "duplicate")
-                || !ack.Conflicts.SequenceEqual(ack.Outcomes.Select((o, i) => (o, i)).Where(x => x.o == "conflict").Select(x => page.Events[x.i].Sequence))
+                || !ack.Conflicts.SequenceEqual(ack.Outcomes.Select((o, i) => (o, i)).Where(x => x.o == "conflict").Select(x => page.Events[x.i]!["sequence"]!.GetValue<ulong>()))
                 || ack.HighestSeen < ack.AcknowledgedThrough || ack.HighestSeen > long.MaxValue
                 || ack.ProgramRevision is not null && !ValidRevision(ack.ProgramRevision)
                 || ack.ProgramChanged != (ack.ProgramRevision is not null && ack.ProgramRevision != revision)) throw new InvalidDataException();
@@ -170,6 +191,8 @@ public sealed class CoordinatorCheckpointClient : IDisposable
 
     private static bool ValidRevision(string value) => value.Length == 64 && value.All(char.IsAsciiHexDigitLower);
     private string CursorChecksum(ulong through, string? programRevision) => Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
-        new { origin = transport.Endpoint.AbsoluteUri, binding, ledger, through, programRevision }, CoordinatorProgramContract.Options)));
+        feed == CoordinatorEventFeed.Capture
+            ? (object)new { origin = transport.Endpoint.AbsoluteUri, binding, ledger, through, programRevision }
+            : new { origin = transport.Endpoint.AbsoluteUri, binding, ledger, through, programRevision, feed = "preparation" }, CoordinatorProgramContract.Options)));
     public void Dispose() => transport.Dispose();
 }
