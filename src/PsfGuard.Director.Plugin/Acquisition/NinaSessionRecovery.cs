@@ -38,11 +38,13 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         await RefreshAsync(token);
     }
 
-    internal async Task RefreshAsync(CancellationToken token)
+    internal async Task<bool> RefreshAsync(CancellationToken token, bool allowNightEnd = false)
     {
         await ApplyAsync(new RecoveryEvent.Tick(), token);
-        if (record!.Snapshot.Phase is not RecoveryPhase.Acquiring)
-            throw new InvalidOperationException("The observing session no longer permits acquisition.");
+        if (record!.Snapshot.Phase is RecoveryPhase.Acquiring) return true;
+        if (allowNightEnd && record.Snapshot.Phase is RecoveryPhase.Stopping { Cause: RecoveryCause.NightEnded }
+            or RecoveryPhase.Stopped { Cause: RecoveryCause.NightEnded, Shutdown: RecoveryShutdown.NoParkRequested or RecoveryShutdown.Parked }) return false;
+        throw new InvalidOperationException("The observing session no longer permits acquisition.");
     }
 
     internal async Task ExecuteAsync(RecoveryOperation operation, string device, string target,
@@ -106,6 +108,33 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
     {
         if (record is not null && record.Snapshot.Phase is not (RecoveryPhase.Stopping or RecoveryPhase.Stopped))
             await ApplyAsync(new RecoveryEvent.StopNight(), token);
+    }
+
+    internal async Task EndNightAsync(CancellationToken token, string? expectedNight = null)
+    {
+        record ??= Require(await runtime.ReadRecoveryAsync(token)).Record;
+        if (record is null) return;
+        if (expectedNight is not null && record.Snapshot.Identity.NightId != expectedNight)
+        {
+            // A night with no admitted workload must not relabel or acknowledge
+            // shutdown for a historical observing session.
+            record = null;
+            return;
+        }
+        if (Now() < record.Snapshot.Identity.EndsAtMs)
+            throw new InvalidOperationException("The observing night has not ended.");
+        // Tick records the core's NightEnded cause, not an operator stop.
+        await ApplyAsync(new RecoveryEvent.Tick(), token);
+        var cause = record!.Snapshot.Phase switch
+        {
+            RecoveryPhase.Stopping stopping => stopping.Cause,
+            RecoveryPhase.Stopped stopped => stopped.Cause,
+            _ => null
+        };
+        if (cause is not RecoveryCause.NightEnded)
+            throw new InvalidOperationException("Recovery stopped for a reason other than normal night completion.");
+        if (record.Snapshot.Phase is RecoveryPhase.Stopped { Shutdown: not (RecoveryShutdown.Parked or RecoveryShutdown.NoParkRequested) })
+            throw new InvalidOperationException("Night-end shutdown is unresolved or failed.");
     }
 
     internal async Task<RecoveryIssued?> BeginParkAsync(CancellationToken token)
