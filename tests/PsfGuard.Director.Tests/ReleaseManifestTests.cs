@@ -42,7 +42,11 @@ public sealed class ReleaseManifestTests
         Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
         Assert.Contains("Experimental", metadata["ShortDescription"]);
         Assert.Contains("local target scheduling", metadata["ShortDescription"]);
-        Assert.Contains("Automatic equipment defaults and restart/resume are not yet available", template["Descriptions"]!["LongDescription"]!.GetValue<string>());
+        var description = template["Descriptions"]!["LongDescription"]!.GetValue<string>();
+        Assert.Equal(metadata["LongDescription"], description);
+        Assert.Contains("native NINA centering", description);
+        Assert.Contains("Restart/resume and real-sky full-night acceptance remain unavailable", description);
+        Assert.Contains("Do not use for unattended imaging", description);
         Assert.Null(template["Channel"]);
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "experimental");
         Assert.Null(template["Installer"]);
