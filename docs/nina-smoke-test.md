@@ -315,7 +315,7 @@ administrative extraction (`msiexec /a ... /qn TARGETDIR=...`) to unpack the app
 The test launcher takes the resulting directory containing `NINA.exe`.
 Check the [official download page](https://nighttime-imaging.eu/download/) before
 a new test campaign. On 2026-09-30 its latest nightly was #64 (`3.3.0.1064`).
-The launcher allows #58, #59 and #64, while the plugin keeps #58
+The launcher allows #58, #59, #64 and #65, while the plugin keeps #58
 as its minimum API baseline. The #59 SOFA, NOVAS and JPLEPH files match the pinned
 test dependencies exactly. Review newer host contracts before adding them to
 this allowlist; a minimum-version declaration alone is not compatibility evidence.
@@ -847,3 +847,62 @@ Local evidence:
 
 - Success: `artifacts/nina-smoke-f353cf1360cc4ca3b42548c4b20e1153/probe/bec80c8443aa4a69a84ad591d25fb41a/result.json`.
 - Failure: `artifacts/nina-smoke-abdc212581824960baf0f55ba8ef320e/probe/77b8e8d961a2453ab9d747132d73bc82/result.json`.
+
+## PHD2 recovery, recentering and rotation
+
+Add `-Phd2Executable C:/test/PHD2/phd2.exe` to the successful forced-flip
+command above. Use an extracted PHD2 2.6.14 executable. The helper allocates
+an unused instance in the 2000-2999 range, with its own registry profile,
+loopback port and log directory. It verifies the **Simulator** camera and
+**On Camera** guide output before NINA connects. Existing PHD2 instances and
+equipment profiles are not reused. The helper shuts down its child and removes
+its owned test registry profile; failure logs remain in the server artifacts.
+
+This scenario additionally requires ASCOM OmniSim Rotator. The server's rig
+optics declare a rotator and the framing plan requests 30 degrees. NINA's real
+Center and Rotate action moves the device from a synthetic zero to that angle.
+All three capture intents must retain the requested angle.
+
+The real PHD2 process calibrates and guides its simulated stars. NINA's flip VM
+stops guiding, crosses the meridian, flips, runs autofocus, captures a recenter
+snapshot, selects a new guide star, restarts guiding and settles. The test
+requires each native workflow step and the next saved exposure. An external
+test-only ASTAP-shaped process supplies the recenter solution. The guard also
+requires NINA's centering solver to consume a successful parsed solution;
+the VM's best-effort `Recenter.Finished` flag alone is insufficient.
+
+This remains synthetic optical evidence: neither an actual plate-solving
+algorithm nor a focus curve is validated. The rotator's optical zero is
+synthetic, and PHD2's simulated guide mount is not physically coupled to OmniSim's
+pier-side change. Calibration parity across a physical flip, real-sky focus and
+recenter accuracy, clouds and third-party equipment/plugin combinations remain
+field acceptance work. No test helper is included in the plugin ZIP.
+
+The campaign uses NINA nightly #65 (`3.3.0.1065`) from the official download
+page, the pinned #58 API and runtime 0.10.0, and PSF Guard main `a035e56`.
+The native flip, centering and rotation contracts were checked against upstream
+NINA source before admitting #65 to the launcher. Download SHA-256 values:
+
+- NINA #65 bundle: `af3ca920f0888b46ef9c68ebce4040e6100f0109ac442be652f781a2305a1bf6`.
+- PHD2 2.6.14 installer: `d7a21f67de32b901c6d173da9a27d765a0d98874798f898df6ca51cd5453b5ff`.
+
+Run `tools/run-simulator-matrix.ps1` with `-PsfGuardExe`, `-NinaDirectory`
+and `-PluginZip` to repeat the remaining existing automated host scenarios.
+It runs serially because ASCOM simulators share device state, stops at the first
+failure, and retains a JSON report with each case's evidence path. The cases
+cover offline native acquisition/workload release, both unsafe shutdown choices,
+enclosure closure, horizon/site/meridian changes, Moon wait, ranked-priority
+refresh, deferred check-in, and centering/autofocus/flip failures.
+
+All 13 matrix cases passed on 2026-10-04. Local report:
+`artifacts/matrix-06150df6662a4d63ac7c66f260141be9.json`.
+The report links each isolated host result and server log directory. The full
+unit suite also passed (827 tests), along with locked package build, formatter
+verification and PowerShell parser checks. Session templates were rendered at
+640 and 1000 pixels across all six tabs; the narrow sky and activity views were
+also visually inspected.
+
+The combined PHD2/rotator/flip repeat passed with the final harness:
+`artifacts/nina-smoke-21dc98a6347e475b840c53476aa23cd2/probe/c7a5d23dbc1f40d48b16e8bceb0a42ae/result.json`.
+It records 30 degrees, one parsed recenter solution, `pierWest` to `pierEast`,
+all eight native workflow steps finished, and `Saved 3` after the flip events.

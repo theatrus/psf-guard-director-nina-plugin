@@ -31,12 +31,15 @@ internal sealed class NativeFlipProbe
     internal List<string> Events { get; } = [];
     internal MeridianFlipTrigger Trigger { get; }
     internal MeridianFlipVM? Workflow { get; private set; }
+    internal int RecenterSolutions { get; private set; }
+    private readonly bool checkGuider;
 
     internal NativeFlipProbe(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
         IFocuserMediator focuser, IGuiderMediator guider, IFilterWheelMediator wheel,
         IDomeMediator dome, IDomeFollower follower, IImagingMediator imaging, IImageHistoryVM history,
         ISafetyMonitorMediator safety, IAutoFocusVMFactory focus, IWindowServiceFactory windows, bool fail)
     {
+        checkGuider = profiles.ActiveProfile.GuiderSettings.GuiderName == "PHD2_Single";
         var mount = new Mock<ITelescopeMediator>(MockBehavior.Strict);
         mount.Setup(x => x.GetInfo()).Returns(() =>
         {
@@ -57,7 +60,13 @@ internal sealed class NativeFlipProbe
                     ? Math.Max(0, Math.IEEERemainder(info.Coordinates.Transform(Epoch.JNOW).RA - info.SiderealTime, 24) + 10.0 / 3600) : 2
             };
         });
-        mount.Setup(x => x.GetCurrentPosition()).Returns(telescope.GetCurrentPosition);
+        mount.Setup(x => x.GetCurrentPosition()).Returns(() =>
+        {
+            // CenteringSolver reads the mount position only after a successful
+            // parsed solve. A failed best-effort recenter must not pass this test.
+            if (Workflow?.Steps.ActiveStep?.Id == "Recenter") RecenterSolutions++;
+            return telescope.GetCurrentPosition();
+        });
         mount.Setup(x => x.SetTrackingEnabled(It.IsAny<bool>())).Returns((bool value) => telescope.SetTrackingEnabled(value));
         mount.Setup(x => x.RaiseBeforeMeridianFlip(It.IsAny<BeforeMeridianFlipEventArgs>()))
             .Returns(async (BeforeMeridianFlipEventArgs e) => { Events.Add("Before flip"); await telescope.RaiseBeforeMeridianFlip(e); });
@@ -111,5 +120,8 @@ internal sealed class NativeFlipProbe
             throw new InvalidOperationException("Native flip did not change pier side or finish all workflow steps.");
         if (failed && Workflow?.Steps.Single(x => x.Id == "Flip").Finished != false)
             throw new InvalidOperationException("Injected mount failure did not reach the native workflow.");
+        if (!failed && checkGuider && (RecenterSolutions != 1 || Workflow is null || new[] { "StopAutoguider", "Recenter", "SelectNewGuideStar", "ResumeAutoguider" }
+            .Any(id => !Workflow.Steps.Any(step => step.Id == id && step.Finished))))
+            throw new InvalidOperationException("Native flip did not complete the PHD2 guider recovery steps.");
     }
 }

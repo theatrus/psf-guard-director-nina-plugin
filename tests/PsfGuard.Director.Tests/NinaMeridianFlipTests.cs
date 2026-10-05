@@ -50,15 +50,20 @@ public sealed class NinaMeridianFlipTests
         Assert.Single(((DirectorSessionContainer)session.Clone()).GetTriggersSnapshot());
     }
 
-    [Fact]
-    public async Task FailedNativeWorkflowStepCannotBeHiddenBySuccessfulVmResult()
+    [Theory]
+    [InlineData("Flip")]
+    [InlineData("StopAutoguider")]
+    [InlineData("SelectNewGuideStar")]
+    [InlineData("ResumeAutoguider")]
+    [InlineData("Recenter")]
+    public async Task FailedNativeWorkflowStepCannotBeHiddenBySuccessfulVmResult(string step)
     {
         var f = new Fixture();
         // NINA's legacy collection assumes a WPF context, or no context.
         var steps = await Task.Run(() =>
         {
             var workflow = new NINA.WPF.Base.ViewModel.AutomatedWorkflow();
-            workflow.Add(new NINA.WPF.Base.ViewModel.WorkflowStep("Flip", "Flip", () => Task.FromResult(false)));
+            workflow.Add(new NINA.WPF.Base.ViewModel.WorkflowStep(step, step, () => Task.FromResult(false)));
             return workflow;
         });
         f.Vm.SetupGet(x => x.Steps).Returns(steps);
