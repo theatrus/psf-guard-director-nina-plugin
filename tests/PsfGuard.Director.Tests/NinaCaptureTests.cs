@@ -311,6 +311,24 @@ public sealed partial class NinaCaptureTests
     }
 
     [Fact]
+    public async Task LateReceiptTimingExcludesTimeSpentWaitingToReconcile()
+    {
+        using var f = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var run = f.Run(token: cancellation.Token);
+        await f.Enqueued.Task;
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        f.Clock.Advance(20);
+        f.Saved();
+        f.Clock.Advance(60000);
+        var evidence = await f.Reconcile();
+        Assert.Equal(520, evidence!.TotalMs);
+        Assert.Equal(320, evidence.ProcessingAndSaveMs);
+        f.Acknowledge();
+    }
+
+    [Fact]
     public async Task MalformedSaveReceiptCannotClaimSaved()
     {
         using var f = new Fixture();

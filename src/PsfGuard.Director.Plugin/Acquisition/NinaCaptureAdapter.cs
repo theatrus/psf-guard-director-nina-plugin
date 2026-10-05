@@ -23,7 +23,8 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     private readonly SemaphoreSlim captureGate = new(1, 1);
     private CaptureJournal? interrupted;
     private CaptureEvidence? completed;
-    private Task<string>? pendingSave;
+    private sealed record SaveReceipt(string Path, long Timestamp, DateTimeOffset ObservedAt);
+    private Task<SaveReceipt>? pendingSave;
     private Action? detachSave;
     private long interruptedStarted, interruptedDownloaded;
     private bool disposed;
@@ -53,15 +54,15 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 if (pendingSave is null) return null;
                 try
                 {
-                    var path = await pendingSave.WaitAsync(saveTimeout, token).ConfigureAwait(false);
+                    var saved = await pendingSave.WaitAsync(saveTimeout, token).ConfigureAwait(false);
                     CheckLocalContext(journal.Evidence.Intent);
                     journal.Record(journal.Evidence with
                     {
                         Phase = CapturePhase.Saved,
-                        SavedPath = path,
-                        UpdatedAt = clock.GetUtcNow(),
-                        ProcessingAndSaveMs = clock.GetElapsedTime(interruptedDownloaded).TotalMilliseconds,
-                        TotalMs = clock.GetElapsedTime(interruptedStarted).TotalMilliseconds
+                        SavedPath = saved.Path,
+                        UpdatedAt = saved.ObservedAt,
+                        ProcessingAndSaveMs = clock.GetElapsedTime(interruptedDownloaded, saved.Timestamp).TotalMilliseconds,
+                        TotalMs = clock.GetElapsedTime(interruptedStarted, saved.Timestamp).TotalMilliseconds
                     });
                 }
                 catch (ImageSaveFailedException)
@@ -167,7 +168,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             CheckLocalContext(intent);
             token.ThrowIfCancellationRequested();
 
-            var receipt = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var receipt = new TaskCompletionSource<SaveReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
             ObserveFault(receipt.Task);
             bool Matches(ImageMetaData? data) => data?.Image.Id == metadata.Image.Id
                 && data.GenericHeaders.OfType<StringMetaDataHeader>().Any(header =>
@@ -177,7 +178,11 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 if (!Matches(args.MetaData)) return;
                 if (args.PathToImage is not { IsAbsoluteUri: true, IsFile: true } path)
                     receipt.TrySetException(new InvalidDataException("NINA save receipt has no local file path."));
-                else receipt.TrySetResult(path.LocalPath);
+                else
+                {
+                    try { receipt.TrySetResult(new(path.LocalPath, clock.GetTimestamp(), clock.GetUtcNow())); }
+                    catch (Exception error) { receipt.TrySetException(error); }
+                }
             }
             Task Failed(object sender, ImageSaveFailedEventArgs args)
             {
@@ -199,18 +204,18 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 Report("Waiting for image save");
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
                 deadline.CancelAfter(saveTimeout);
-                string path;
+                SaveReceipt saved;
                 try
                 {
                     var enqueue = saves.Enqueue(new ProfileScopedImageData(image, fileSettings), Task.FromResult(prepared), progress, deadline.Token);
                     ObserveFault(enqueue);
                     await enqueue.WaitAsync(deadline.Token).ConfigureAwait(false);
-                    path = await receipt.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    saved = await receipt.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (receipt.Task.IsCompleted)
                 {
                     // An observed save result wins a simultaneous stop.
-                    path = await receipt.Task.ConfigureAwait(false);
+                    saved = await receipt.Task.ConfigureAwait(false);
                 }
                 catch (OperationCanceledException error) when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
                 {
@@ -219,10 +224,10 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 journal.Record(journal.Evidence with
                 {
                     Phase = CapturePhase.Saved,
-                    UpdatedAt = clock.GetUtcNow(),
-                    SavedPath = path,
-                    ProcessingAndSaveMs = clock.GetElapsedTime(downloaded).TotalMilliseconds,
-                    TotalMs = clock.GetElapsedTime(started).TotalMilliseconds
+                    UpdatedAt = saved.ObservedAt,
+                    SavedPath = saved.Path,
+                    ProcessingAndSaveMs = clock.GetElapsedTime(downloaded, saved.Timestamp).TotalMilliseconds,
+                    TotalMs = clock.GetElapsedTime(started, saved.Timestamp).TotalMilliseconds
                 });
                 completed = journal.Evidence;
                 return completed;

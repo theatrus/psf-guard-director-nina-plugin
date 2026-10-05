@@ -140,6 +140,19 @@ public sealed class DirectorAcquisition
         var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
+        using var owner = new AcquisitionLease(LocalStateRoot);
+        var firstAllocation = true;
+        do
+        {
+            token.ThrowIfCancellationRequested();
+            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, token);
+            firstAllocation = false;
+            if (!more) break;
+        } while (container.Options.AutomaticWorkloads);
+    }
+
+    private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, CancellationToken token)
+    {
         if (container.Options.CheckInAtStart)
         {
             using var checkInDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -156,16 +169,10 @@ public sealed class DirectorAcquisition
             catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
             { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
         }
-        using var owner = new AcquisitionLease(LocalStateRoot);
-        do
-        {
-            token.ThrowIfCancellationRequested();
-            if (!await ExecuteAllocationAsync(container, progress, owner, night, window, token)) break;
-        } while (container.Options.AutomaticWorkloads);
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, CancellationToken token)
     {
         var options = container.Options.Clone();
         var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
@@ -247,6 +254,16 @@ public sealed class DirectorAcquisition
         {
             if (recovery is not null) await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
             if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
+            // Native interlocks own cancellation before any network wait. Batch
+            // receipts are idempotent if weather interrupts this initial replay.
+            if (firstAllocation)
+                while (true)
+                {
+                    try { await CheckInSavedRunsAsync(container, window, operations.Token); break; }
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
+                    { if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync(); }
+                }
+            if (window.Ended) return await FinishIdleNightAsync();
             if (options.AutomaticWorkloads)
             {
                 while (true)
