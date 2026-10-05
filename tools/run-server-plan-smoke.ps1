@@ -19,6 +19,7 @@ param(
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
     [switch]$ForceNativeFlip,
+    [string]$Phd2Executable,
     [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
     [ValidateSet('horizon', 'site', 'meridian')][string]$ConstraintChange,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
@@ -28,6 +29,7 @@ if ($NativeImaging -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $Co
 if ($NativeImagingFailure -and (!$NativeImaging -or !$AutomaticWorkloads)) { throw 'NativeImagingFailure requires native automatic workloads.' }
 if ($ForceNativeFlip -and (!$NativeImaging -or !$AutomaticWorkloads -or ($NativeImagingFailure -and $NativeImagingFailure -ne 'meridian'))) { throw 'ForceNativeFlip requires native automatic workloads without other faults.' }
 if ($NativeImagingFailure -eq 'meridian' -and !$ForceNativeFlip) { throw 'Meridian failure requires ForceNativeFlip.' }
+if ($Phd2Executable -and (!$ForceNativeFlip -or $NativeImagingFailure)) { throw 'PHD2 simulator requires the successful native flip scenario.' }
 if ($ConstraintChange -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $DeferredCheckIn -or $EnclosureClosure)) { throw 'ConstraintChange requires only PublicAcquisition.' }
 if ($ProjectOrder -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $ObservingPreferences -or $MoonAvoidance -or $PublicUnsafe)) { throw 'ProjectOrder requires safe public local scheduling without weights or Moon-only waits.' }
 if ($PriorityRefresh -and (!$ProjectOrder -or !$AutomaticWorkloads -or $OfflineWorkloadRelease -or $DeferredCheckIn)) { throw 'PriorityRefresh requires live automatic ranked workloads.' }
@@ -53,6 +55,7 @@ $serverArgs = @('server', '--registry', "$root/registry.json", '--director-meta'
     '--cache-dir', "$root/cache", '--host', '127.0.0.1', '--port', $port, '--allow-database-management')
 $script:server = $null
 $nina = $null
+$phd2 = $null
 $generation = 0
 function Start-TestServer {
     $script:generation++
@@ -85,16 +88,18 @@ try {
     $catalog = [Guid]::NewGuid().ToString('D')
     $preview = Json-Request Post "director/v1/catalogs/$slug/rig/preview" @{catalog_id=$catalog}
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
+    if ($Phd2Executable) { $phd2 = & "$PSScriptRoot/start-phd2-simulator.ps1" -Executable $Phd2Executable -ArtifactDirectory $root }
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
         ForEach-Object { $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
-        ConvertTo-Json | Set-Content -LiteralPath $fixture
+        ForEach-Object { if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
+        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
     if (!$started) { throw 'NINA launcher did not return an isolated process.' }
     $nina = Get-Process -Id $started.ProcessId
-    $deadline = [DateTime]::UtcNow.AddMinutes(6)
+    $deadline = [DateTime]::UtcNow.AddMinutes($(if ($phd2) { 10 } else { 6 }))
     $stopped = $false
     $resumed = $false
     $result = $null
@@ -131,6 +136,10 @@ try {
     if ($NativeImagingFailure -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
     if ($NativeImaging -and !$NativeImagingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
     if ($ForceNativeFlip -and (!$evidence.native_flip -or $evidence.native_flip.attempts -ne 1)) { throw 'Forced native flip was not exercised.' }
+    if ($Phd2Executable -and (!$evidence.phd2_simulator -or $evidence.native_flip.recenter_solutions -ne 1 -or
+        $null -eq $evidence.rotator_final_position -or [Math]::Abs($evidence.rotator_final_position - 30) -gt 1)) {
+        throw 'PHD2 recovery, parsed recenter solution and requested rotation were not verified.'
+    }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {
@@ -139,4 +148,15 @@ finally {
         if (!$nina.WaitForExit(15000)) { Write-Warning "Isolated NINA still open: PID $($nina.Id). Close it after inspecting its test sequence." }
     }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id; $server.WaitForExit() }
+    if ($phd2 -and !$phd2.Process.HasExited) {
+        [void]$phd2.Process.CloseMainWindow()
+        if (!$phd2.Process.WaitForExit(10000)) { $phd2.Process.Kill(); $phd2.Process.WaitForExit() }
+    }
+    if ($phd2 -and (Test-Path -LiteralPath $phd2.RegistryKey)) {
+        $expected = "HKEY_CURRENT_USER\Software\StarkLabs\PHDGuidingV2-instance$($phd2.Instance)"
+        $owned = (Get-Item -LiteralPath $phd2.RegistryKey).Name -eq $expected -and
+            (Get-ItemPropertyValue -LiteralPath "$($phd2.RegistryKey)\profile\1" -Name name) -eq 'Director isolated simulator'
+        if ($owned) { Remove-Item -LiteralPath $phd2.RegistryKey -Recurse }
+        else { Write-Warning 'PHD2 test registry identity changed; preserving it for inspection.' }
+    }
 }

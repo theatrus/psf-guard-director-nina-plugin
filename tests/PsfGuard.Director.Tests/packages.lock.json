@@ -953,6 +953,9 @@
         "dependencies": {
           "PSF Guard Director": "[0.1.0.1, )"
         }
+      },
+      "syntheticsolver": {
+        "type": "Project"
       }
     }
   }

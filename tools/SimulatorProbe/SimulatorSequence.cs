@@ -123,6 +123,8 @@ public sealed class SimulatorSequence : SequenceItem
         var unsafeCancellationVerified = false;
         var constraintChangeVerified = false;
         NativeImagingProbe? nativeProbe = null;
+        var phd2 = Phd2Fixture.Read(root);
+        float? rotatorFinalPosition = null;
         var nativeFailureVerified = false;
         var nativeOptions = new DirectorSessionOptions();
         void ConfigureImaging(DirectorSessionOptions options)
@@ -135,7 +137,7 @@ public sealed class SimulatorSequence : SequenceItem
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, stateDirectory);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lifetime.CancelAfter(TimeSpan.FromMinutes(5));
+        lifetime.CancelAfter(TimeSpan.FromMinutes(phd2 is null ? 5 : 9));
         void ProfileChanged(object? sender, EventArgs args) => lifetime.Cancel();
         profiles.ProfileChanged += ProfileChanged;
         void Step(string value)
@@ -209,28 +211,53 @@ public sealed class SimulatorSequence : SequenceItem
             if (coordinator?.NativeImaging == true)
             {
                 if (factory is null || focuser is null || rotator is null || follower is null) throw new InvalidOperationException("Native test services unavailable.");
-                Step("Connecting ASCOM OmniSim focuser and native direct guider; synthetic optical results only");
+                Step(phd2 is null ? "Connecting ASCOM OmniSim focuser and native direct guider; synthetic optical results only"
+                    : "Connecting ASCOM OmniSim focuser/rotator and isolated PHD2 simulator; synthetic optical results only");
                 profiles.ActiveProfile.FocuserSettings.Id = "ASCOM.OmniSim.Focuser";
                 profiles.ActiveProfile.GuiderSettings.GuiderName = "Direct_Guider";
+                phd2?.Configure(profiles);
                 profiles.ActiveProfile.CameraSettings.PixelSize = 3.76;
                 profiles.ActiveProfile.TelescopeSettings.FocalLength = 250;
                 profiles.ActiveProfile.GuiderSettings.SettleTime = 1;
                 await focuser.Rescan();
                 if (!await focuser.Connect() || focuser.GetInfo().DeviceId != "ASCOM.OmniSim.Focuser") throw new IOException("Simulator focuser connection failed.");
                 await guider.Rescan();
-                if (!await guider.Connect() || guider.GetInfo().DeviceId != "Direct_Guider") throw new IOException("Direct guider connection failed.");
+                if (!await guider.Connect() || guider.GetInfo().DeviceId != (phd2 is null ? "Direct_Guider" : "PHD2_Single")) throw new IOException("Simulator guider connection failed.");
+                if (phd2 is not null)
+                {
+                    profiles.ActiveProfile.RotatorSettings.Id = "ASCOM.OmniSim.Rotator";
+                    await rotator.Rescan();
+                    if (!await rotator.Connect() || rotator.GetInfo().DeviceId != "ASCOM.OmniSim.Rotator")
+                        throw new IOException("Simulator rotator connection failed.");
+                    await rotator.MoveMechanical(0, lifetime.Token);
+                    var initialRotation = ((NINA.Equipment.Interfaces.IRotator)rotator.GetDevice()).MechanicalPosition;
+                    if (!float.IsFinite(initialRotation) || Math.Abs(initialRotation) > 1)
+                        throw new IOException("Simulator rotator did not reach its mechanical test zero.");
+                    rotator.Sync(0); // Synthetic optical zero for the isolated simulator only.
+                }
                 if (coordinator.ForceNativeFlip)
                 {
                     var flip = profiles.ActiveProfile.MeridianFlipSettings;
                     flip.MinutesAfterMeridian = 0;
                     flip.MaxMinutesAfterMeridian = 0;
-                    flip.PauseTimeBeforeMeridian = 0;
+                    flip.PauseTimeBeforeMeridian = phd2 is null ? 0 : 5;
                     flip.SettleTime = 1;
                     flip.UseSideOfPier = false;
                     flip.Recenter = false; // No real sky solve is available to this simulator.
                     flip.AutoFocusAfterFlip = true;
+                    if (phd2 is not null)
+                    {
+                        flip.Recenter = true;
+                        var solve = profiles.ActiveProfile.PlateSolveSettings;
+                        solve.ASTAPLocation = Path.Combine(root, "synthetic-solver", "SyntheticSolver.exe");
+                        solve.PlateSolverType = NINA.Core.Enum.PlateSolverEnum.ASTAP;
+                        solve.BlindFailoverEnabled = false;
+                        solve.ExposureTime = 0.2;
+                        solve.NumberOfAttempts = 1;
+                        solve.SearchRadius = 5;
+                    }
                 }
-                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure, coordinator.ForceNativeFlip);
+                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure, coordinator.ForceNativeFlip, phd2 is null ? null : rotator);
             }
             await Revalidate(lifetime.Token);
             Step("Refreshing native site and fixture horizon constraints");
@@ -258,7 +285,7 @@ public sealed class SimulatorSequence : SequenceItem
             // Arrive east of the meridian; after two saves the real flip VM
             // waits through transit before issuing the ASCOM flip slew.
             if (coordinator?.ForceNativeFlip == true)
-                target = new Coordinates((telescope.GetInfo().SiderealTime + 0.025) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
+                target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
             var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
@@ -273,7 +300,7 @@ public sealed class SimulatorSequence : SequenceItem
                     $"filter-{i}", (uint)(3 - i), 1, 0, 0, 1, 1000, 5000, [new(started, started + 180000)])).ToImmutableArray());
             var programTarget = new DirectorTarget("smoke-target", "Director ASCOM Smoke",
                 (uint)((ulong)Math.Round(catalogTarget.RA * 15 * 3600000) % 1296000000),
-                checked((int)Math.Round(catalogTarget.Dec * 3600000)), null);
+                checked((int)Math.Round(catalogTarget.Dec * 3600000)), phd2 is null ? null : 30 * 3600000U);
             var program = new DirectorProgram(1, assignment, equipment, [programTarget],
                 Enumerable.Range(0, 3).Select(i => new ExposureRecipe($"recipe-{i}", 1000, $"filter-{i}", new(1, 1), null, null, 0, null)).ToImmutableArray(),
                 Enumerable.Range(0, 3).Select(i => new GoalBinding($"filter-{i}", programTarget.Id, $"recipe-{i}")).ToImmutableArray());
@@ -490,7 +517,7 @@ public sealed class SimulatorSequence : SequenceItem
                     else if (coordinator.AutomaticWorkloads && !coordinator.OfflineWorkloadRelease)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(coordinator.ForceNativeFlip ? 180 : 90));
+                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(phd2 is not null ? 420 : coordinator.ForceNativeFlip ? 180 : 90));
                         while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for eligible work or quality assessment")
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
@@ -573,6 +600,16 @@ public sealed class SimulatorSequence : SequenceItem
                     || sessionContainer.GetTriggersSnapshot().Any()))
                     throw new InvalidDataException("Native target centering/autofocus did not run for both targets.");
                 nativeProbe?.Flip?.Verify(sessionContainer, failed: false);
+                if (phd2 is not null)
+                {
+                    rotatorFinalPosition = ((NINA.Equipment.Interfaces.IRotator)rotator!.GetDevice()).Position;
+                    if (!float.IsFinite(rotatorFinalPosition.Value) || Math.Abs(rotatorFinalPosition.Value - 30) > 1
+                        || captures.Any(c => c.Intent.PositionAngle != 30))
+                        throw new InvalidDataException("Native rotation did not reach the server-requested position angle.");
+                    if (!File.Exists(Path.Combine(root, "synthetic-solver", "synthetic-solves.log"))
+                        || nativeProbe?.Flip?.Workflow?.Steps.Single(s => s.Id == "Recenter").Finished != true)
+                        throw new InvalidDataException("Native recenter did not capture and run the synthetic solver.");
+                }
                 if (!coordinator.LocalTargetScheduling && !sessionHookEvents.SequenceEqual(new[] { "BeforeNewTarget", "AfterEachExposure", "AfterEachExposure", "AfterEachExposure", "AfterNewTarget", "AfterEachTarget" }))
                     throw new InvalidDataException("Public session hooks did not follow confirmed save boundaries.");
                 await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
@@ -828,10 +865,12 @@ public sealed class SimulatorSequence : SequenceItem
             }
             if (filters.GetInfo().Connected && filters.GetInfo().DeviceId == "ASCOM.OmniSim.FilterWheel")
                 await Cleanup("Disconnecting simulator filter wheel", filters.Disconnect);
-            if (guider.GetInfo().Connected && guider.GetInfo().DeviceId == "Direct_Guider")
-                await Cleanup("Disconnecting direct guider", guider.Disconnect);
+            if (guider.GetInfo().Connected && guider.GetInfo().DeviceId == (phd2 is null ? "Direct_Guider" : "PHD2_Single"))
+                await Cleanup("Disconnecting simulator guider", guider.Disconnect);
             if (focuser?.GetInfo().Connected == true && focuser.GetInfo().DeviceId == "ASCOM.OmniSim.Focuser")
                 await Cleanup("Disconnecting simulator focuser", focuser.Disconnect);
+            if (rotator?.GetInfo().Connected == true && rotator.GetInfo().DeviceId == "ASCOM.OmniSim.Rotator")
+                await Cleanup("Disconnecting simulator rotator", rotator.Disconnect);
             if (camera.GetInfo().Connected && camera.GetInfo().DeviceId == "ASCOM.OmniSim.Camera")
                 await Cleanup("Disconnecting simulator camera", camera.Disconnect);
             if (safety.GetInfo().Connected && safety.GetInfo().DeviceId == SafetySimulatorId)
@@ -851,6 +890,8 @@ public sealed class SimulatorSequence : SequenceItem
                 nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
                 nativeFailureVerified,
                 nativeOperations = nativeProbe?.Operations,
+                phd2Simulator = phd2 is not null,
+                rotatorFinalPosition,
                 nativeFlip = nativeProbe?.Flip is { } flipEvidence ? new
                 {
                     flipEvidence.Attempts,
@@ -860,6 +901,7 @@ public sealed class SimulatorSequence : SequenceItem
                     flipEvidence.PierBefore,
                     flipEvidence.PierAfter,
                     flipEvidence.Events,
+                    flipEvidence.RecenterSolutions,
                     Steps = flipEvidence.Workflow?.Steps.Select(s => new { s.Id, s.Finished }).ToArray()
                 } : null,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
@@ -995,8 +1037,9 @@ public sealed class SimulatorSequence : SequenceItem
             || profile.ImageFileSettings.FilePath != Path.Combine(root, "images")
             || profile.ImageFileSettings.FilePattern != "$$DATETIME$$_$$FILTER$$_$$FRAMENR$$"
             || profile.ImageFileSettings.FileType != NINA.Core.Enum.FileTypeEnum.FITS
-            || profile.FocuserSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Focuser") || profile.RotatorSettings.Id != "No_Device"
-            || profile.GuiderSettings.GuiderName is not ("No_Guider" or "Direct_Guider")
+            || profile.FocuserSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Focuser") || profile.RotatorSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Rotator")
+            || (profile.GuiderSettings.GuiderName is not ("No_Guider" or "Direct_Guider")
+                && Phd2Fixture.Read(root)?.Matches(profile.GuiderSettings) != true)
             || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
             || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
             || profile.WeatherDataSettings.Id != "No_Device")

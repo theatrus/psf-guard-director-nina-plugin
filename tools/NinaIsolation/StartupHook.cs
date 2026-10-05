@@ -17,6 +17,9 @@ internal static class StartupHook
             ?? throw new MissingFieldException("NINA data directory contract changed.");
         field.SetValue(null, root);
         File.WriteAllText(Path.Combine(root, "isolation-ready.txt"), (string)field.GetValue(null)!);
+        // Child .NET tools (for example the test solver) must not try to load
+        // NINA.Core. This hook belongs only to the isolated NINA host.
+        Environment.SetEnvironmentVariable("DOTNET_STARTUP_HOOKS", null);
     }
 
     internal static string ValidateRoot(string? root, string? token)

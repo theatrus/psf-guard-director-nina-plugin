@@ -10,8 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $nina = Join-Path (Resolve-Path -LiteralPath $NinaDirectory) 'NINA.exe'
-if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058', '3.3.0.1059', '3.3.0.1064')) {
-    throw 'This smoke test requires a reviewed NINA 3.3 nightly #58, #59 or #64 host.'
+if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058', '3.3.0.1059', '3.3.0.1064', '3.3.0.1065')) {
+    throw 'This smoke test requires a reviewed NINA 3.3 nightly #58, #59, #64 or #65 host.'
 }
 $zip = (Resolve-Path -LiteralPath $PluginZip).Path
 $hookOutput = Join-Path $ArtifactDirectory 'nina-hook-build'
@@ -43,6 +43,11 @@ if ($AscomSequence) {
         }
     }
     Copy-Item -LiteralPath (Join-Path $probeOutput 'PsfGuard.Director.SimulatorProbe.dll') -Destination $plugins
+    dotnet build (Join-Path $PSScriptRoot 'SyntheticSolver/SyntheticSolver.csproj') --configuration Release -p:RestoreLockedMode=true
+    if ($LASTEXITCODE -ne 0) { throw 'Synthetic solver build failed.' }
+    $solver = Join-Path $root 'synthetic-solver'
+    New-Item -ItemType Directory -Path $solver | Out-Null
+    Copy-Item -Path (Join-Path $PSScriptRoot 'SyntheticSolver/bin/Release/net10.0-windows7.0/SyntheticSolver.*') -Destination $solver
     foreach ($name in @('Moq.dll', 'Castle.Core.dll')) {
         Copy-Item -LiteralPath (Join-Path $probeOutput $name) -Destination $plugins
     }

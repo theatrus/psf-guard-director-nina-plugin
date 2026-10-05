@@ -32,7 +32,7 @@ internal sealed class NativeImagingProbe
     internal NativeImagingProbe(INinaActionFactory original, IProfileService profiles, ICameraMediator camera,
         ITelescopeMediator telescope, IFilterWheelMediator wheel, IGuiderMediator guider, IFocuserMediator focuser,
         IDomeMediator dome, IDomeFollower follower, IImagingMediator imaging, IImageHistoryVM history,
-        ISafetyMonitorMediator safety, string? failure, bool forceFlip = false)
+        ISafetyMonitorMediator safety, string? failure, bool forceFlip = false, IRotatorMediator? rotator = null)
     {
         var windows = new Mock<IWindowServiceFactory> { DefaultValue = DefaultValue.Mock };
         var window = new Mock<IWindowService>();
@@ -70,12 +70,33 @@ internal sealed class NativeImagingProbe
             {
                 Operations.Add("Center");
                 if (failure == "center") FailureInjected = true;
-                return new PlateSolveResult { Success = failure != "center", Coordinates = telescope.GetCurrentPosition() };
+                return new PlateSolveResult
+                {
+                    Success = failure != "center",
+                    Coordinates = telescope.GetCurrentPosition(),
+                    PositionAngle = rotator is null ? 0 : ((IRotator)rotator.GetDevice()).Position
+                };
             });
         var plates = new Mock<IPlateSolverFactory>();
         plates.Setup(f => f.GetCenteringSolver(It.IsAny<IPlateSolver>(), It.IsAny<IPlateSolver>(), imaging, telescope, wheel, dome, follower)).Returns(solver.Object);
+        var rotationSolver = new Mock<ICaptureSolver>();
+        rotationSolver.Setup(s => s.Solve(It.IsAny<CaptureSequence>(), It.IsAny<CaptureSolverParameter>(),
+            It.IsAny<IProgress<PlateSolveProgress>>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                Operations.Add("RotateSolve");
+                return new PlateSolveResult
+                {
+                    Success = true,
+                    Coordinates = telescope.GetCurrentPosition(),
+                    PositionAngle = ((IRotator)rotator!.GetDevice()).Position
+                };
+            });
+        plates.Setup(f => f.GetCaptureSolver(It.IsAny<IPlateSolver>(), It.IsAny<IPlateSolver>(), imaging, wheel)).Returns(rotationSolver.Object);
         var factory = new Mock<INinaActionFactory>();
         factory.Setup(f => f.GetItem<Center>()).Returns(() => new Center(profiles, telescope, imaging, wheel, guider, dome, follower, plates.Object, windows.Object));
+        factory.Setup(f => f.GetItem<CenterAndRotate>()).Returns(() => new CenterAndRotate(profiles, telescope, imaging,
+            rotator ?? throw new InvalidOperationException("No simulator rotator"), wheel, guider, dome, follower, plates.Object, windows.Object));
         factory.Setup(f => f.GetItem<RunAutofocus>()).Returns(() => new RunAutofocus(profiles, history, camera, wheel, focuser, focusFactory.Object) { WindowServiceFactory = windows.Object });
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>());

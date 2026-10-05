@@ -28,6 +28,7 @@ public sealed class SimulatorProbeTests
     [InlineData("mount")]
     [InlineData("filter")]
     [InlineData("focuser")]
+    [InlineData("rotator")]
     [InlineData("guider")]
     [InlineData("safety")]
     [InlineData("output")]
@@ -42,12 +43,34 @@ public sealed class SimulatorProbeTests
             case "mount": f.Profile.TelescopeSettings.Id = "ASCOM.Real.Telescope"; break;
             case "filter": f.Profile.FilterWheelSettings.Id = "ASCOM.Real.FilterWheel"; break;
             case "focuser": f.Profile.FocuserSettings.Id = "ASCOM.Real.Focuser"; break;
+            case "rotator": f.Profile.RotatorSettings.Id = "ASCOM.Real.Rotator"; break;
             case "guider": f.Profile.GuiderSettings.GuiderName = "PHD2"; break;
             case "safety": f.Profile.SafetyMonitorSettings.Id = "ASCOM.Real.SafetyMonitor"; break;
             case "output": f.Profile.ImageFileSettings.FilePath = Path.GetTempPath(); break;
             case "pattern": f.Profile.ImageFileSettings.FilePattern = "../escape"; break;
             case "profile": f.Profile.Name = "Live profile"; break;
         }
+        Assert.Throws<InvalidOperationException>(() => f.Validate());
+    }
+
+    [Fact]
+    public void Phd2RequiresTheExactIsolatedBinding()
+    {
+        using var f = new Fixture();
+        var phd = new Phd2Fixture("test-phd2.exe", 2100, 6499);
+        File.WriteAllText(Path.Combine(f.Root, "coordinator-fixture.json"), JsonSerializer.Serialize(new { Phd2 = phd }));
+        var settings = f.Profile.GuiderSettings;
+        settings.GuiderName = "PHD2_Single";
+        settings.PHD2Path = phd.Executable;
+        settings.PHD2ServerUrl = "127.0.0.1";
+        settings.PHD2ServerPort = phd.Port;
+        settings.PHD2InstanceNumber = phd.Instance;
+        settings.PHD2ProfileId = 1;
+        Assert.Equal(f.Root, f.Validate());
+        settings.PHD2ServerPort = 4400;
+        Assert.Throws<InvalidOperationException>(() => f.Validate());
+        settings.PHD2ServerPort = phd.Port;
+        settings.PHD2ServerUrl = "remote-rig";
         Assert.Throws<InvalidOperationException>(() => f.Validate());
     }
 

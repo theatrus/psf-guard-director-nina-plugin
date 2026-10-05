@@ -10,6 +10,7 @@
     <RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.ShouldNotRenderInNonInteractiveWindowStation" Value="false" />
     <ProjectReference Include="../../tools/NinaIsolation/NinaIsolation.csproj" />
     <ProjectReference Include="../../tools/SimulatorProbe/SimulatorProbe.csproj" />
+    <ProjectReference Include="../../tools/SyntheticSolver/SyntheticSolver.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Runtime/PsfGuard.Director.Runtime.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
     <PackageReference Include="NINA.Plugin" Version="3.3.0.1058-nightly" PrivateAssets="all" />

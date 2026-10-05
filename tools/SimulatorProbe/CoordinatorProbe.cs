@@ -138,7 +138,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                         pixel_size_um = 3.76,
                         focal_length_mm = 250.0,
                         aperture_mm = (double?)null,
-                        rotation = new { mode = "fixed", angle_degrees = 0.0 }
+                        rotation = target.PositionAngleMas is null ? (object)new { mode = "fixed", angle_degrees = 0.0 } : new { mode = "rotator" }
                     },
                     source = new { kind = "manual" }
                 },
@@ -182,7 +182,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     pixel_size_um = 3.76,
                     focal_length_mm = 250.0,
                     aperture_mm = (double?)null,
-                    rotation = new { mode = "fixed", angle_degrees = 0.0 }
+                    rotation = target.PositionAngleMas is null ? (object)new { mode = "fixed", angle_degrees = 0.0 } : new { mode = "rotator" }
                 },
                 site = (object?)null,
                 horizon = (object?)null,
@@ -223,7 +223,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 updated_at_ms = 0,
                 target_name = frame.Name,
                 center = new { ra_degrees = frame.IcrsRaMas / 3600000.0, dec_degrees = frame.IcrsDecMas / 3600000.0 },
-                position_angle_degrees = 0.0,
+                position_angle_degrees = (frame.PositionAngleMas ?? 0) / 3600000.0,
                 mosaic = new { rows = 1, columns = 1, overlap_percent = 0 },
                 panel_rig_id = binding.RigId,
                 panel = new { width_degrees = 2.0, height_degrees = 1.5 },
