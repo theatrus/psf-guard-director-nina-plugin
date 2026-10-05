@@ -906,3 +906,26 @@ The combined PHD2/rotator/flip repeat passed with the final harness:
 `artifacts/nina-smoke-21dc98a6347e475b840c53476aa23cd2/probe/c7a5d23dbc1f40d48b16e8bceb0a42ae/result.json`.
 It records 30 degrees, one parsed recenter solution, `pierWest` to `pierEast`,
 all eight native workflow steps finished, and `Saved 3` after the flip events.
+
+## Operation telemetry increment
+
+The telemetry harness also reads the real plugin's current operation, elapsed
+time, goal, connected mount pointing and freshness lease from the local server
+before forcing an outage. After the run, settings and sequencer Check In replay
+preparation history independently of the six capture events. It verifies that
+repeated replay delivers no acknowledged events and leaves live status unchanged.
+Deferred mode must create neither cursor before the explicit check-in.
+
+The native automatic/offline workload case passed on NINA 3.3.0.1065 with the
+bundled runtime 0.10.0 / IPC 10 and a freshly built isolated PSF Guard server:
+`artifacts/nina-smoke-5261e57f09e44af2997b455420f511a9/probe/3108cf6ec81d4cfd8a86a9c85733a5cc/result.json`.
+This is simulator evidence with synthetic optical results, not real-sky focus,
+solve or unattended-night certification.
+
+The separate native/deferred case also passed:
+`artifacts/nina-smoke-fa814c287fc84eedad4b3c0149077a1f/probe/7abb9bf24a3440478c25e4ddf83027df/result.json`.
+The plugin unit suite passed 830 tests.
+
+After keeping priority refresh on its existing target/periodic cadence, the
+live ranked-priority handoff passed too, including two-ledger duplicate replay:
+`artifacts/nina-smoke-fce69738d83f418cb7d4f10d16639db5/probe/1908bf1cc0ec4322b3feb41363fae6b1/result.json`.

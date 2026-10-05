@@ -120,7 +120,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p =>
         {
             if (!ReferenceEquals(checkInCancellation, cancellation)) return;
-            checkInStatus = $"{p.Runs} runs; {p.DeliveredEvents} events delivered; cursor {p.AcknowledgedThrough}";
+            checkInStatus = $"{p.Runs} runs; {p.DeliveredEvents} events delivered; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}";
             Refresh();
         });
         try

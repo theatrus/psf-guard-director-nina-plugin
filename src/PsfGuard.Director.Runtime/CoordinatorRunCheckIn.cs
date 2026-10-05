@@ -1,7 +1,7 @@
 namespace PsfGuard.Director.Runtime;
 
 public sealed record CoordinatorRunCheckInProgress(int Runs, int DeliveredEvents, int ReleasedWorkloads,
-    string RunId, ulong AcknowledgedThrough, bool CaughtUp);
+    string RunId, ulong AcknowledgedThrough, bool CaughtUp, ulong OperationsAcknowledgedThrough = 0);
 
 /// <summary>Reopens original ledgers to deliver evidence. No equipment or allocation-start operations.</summary>
 public static class CoordinatorRunCheckIn
@@ -34,7 +34,7 @@ public static class CoordinatorRunCheckIn
             if (!File.Exists(ledgerFile)) throw new InvalidDataException("Saved Director ledger is missing; check-in cannot recreate it.");
             RefuseLink(ledgerRoot); RefuseLink(ledgerFile);
             if (new FileInfo(ledgerFile).Length < 100) throw new InvalidDataException("Saved Director ledger is empty or truncated.");
-            result = result with { RunId = runId, AcknowledgedThrough = 0, CaughtUp = false };
+            result = result with { RunId = runId, AcknowledgedThrough = 0, OperationsAcknowledgedThrough = 0, CaughtUp = false };
             progress?.Report(result);
             await using var runtime = new RuntimeController(pluginDirectory, ledgerRoot);
             await runtime.StartAsync(binding.RigId.ToString("D"), token).ConfigureAwait(false);
@@ -50,10 +50,26 @@ public static class CoordinatorRunCheckIn
                 {
                     DeliveredEvents = checked(result.DeliveredEvents + batch.DeliveredEvents),
                     AcknowledgedThrough = batch.AcknowledgedThrough,
-                    CaughtUp = batch.CaughtUp
+                    CaughtUp = false
                 };
                 progress?.Report(result);
             } while (!batch.CaughtUp);
+            using var operations = new CoordinatorCheckpointClient(directory, endpoint, binding, identity, credential,
+                allowInsecureHttp, CoordinatorEventFeed.Preparation);
+            CoordinatorCheckpointResult operationBatch;
+            do
+            {
+                operationBatch = await operations.DeliverPreparationAsync(async (after, limit, ct) =>
+                    Require(await runtime.ReadPreparationEventsAsync(after, limit, ct).ConfigureAwait(false)),
+                    run.Allocation.PreviewRevision, token: token).ConfigureAwait(false);
+                result = result with
+                {
+                    DeliveredEvents = checked(result.DeliveredEvents + operationBatch.DeliveredEvents),
+                    OperationsAcknowledgedThrough = operationBatch.AcknowledgedThrough,
+                    CaughtUp = operationBatch.CaughtUp
+                };
+                progress?.Report(result);
+            } while (!operationBatch.CaughtUp);
             if (run.Completed && run.AutomaticWorkload && !run.Released)
             {
                 if (Require(await runtime.FindUnresolvedAttemptAsync(token).ConfigureAwait(false)).Attempt is not null

@@ -18,6 +18,25 @@ namespace PsfGuard.Director.Tests;
 public sealed class DirectorSessionContainerTests
 {
     [Fact]
+    public void TelemetryRestoresOuterActionAndClearsAtSessionEndWithoutCloningIt()
+    {
+        var session = new DirectorSessionContainer();
+        session.UpdateDisplay(d => d with { Operation = "Exposure" });
+        session.RecordAction("Target", "Exposure", "Started");
+        var outer = session.TelemetrySnapshot();
+        session.RecordAction("Target", "Meridian flip", "Started");
+        Assert.Equal("Meridian flip", session.TelemetrySnapshot().Operation);
+        session.RecordAction("Target", "Meridian flip", "Succeeded", 1);
+        Assert.Equal("Exposure", session.TelemetrySnapshot().Operation);
+        Assert.Equal(outer.StartedMs, session.TelemetrySnapshot().StartedMs);
+        Assert.True(session.TelemetrySnapshot().ElapsedMs >= outer.ElapsedMs);
+        Assert.Null(((DirectorSessionContainer)session.Clone()).TelemetrySnapshot().Operation);
+        session.UpdateDisplay(d => d with { Operation = "" });
+        Assert.Null(session.TelemetrySnapshot().Operation);
+        Assert.Null(session.TelemetrySnapshot().ElapsedMs);
+    }
+
+    [Fact]
     public void ActionHistoryIsBoundedDisplayOnlyAndResetDoesNotCreateAuthority()
     {
         var session = new DirectorSessionContainer();

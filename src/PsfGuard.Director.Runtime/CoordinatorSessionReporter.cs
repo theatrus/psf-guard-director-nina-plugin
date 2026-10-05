@@ -2,6 +2,12 @@ using System.Text.Json;
 
 namespace PsfGuard.Director.Runtime;
 
+public sealed record CoordinatorPointing(double RaDegrees, double DecDegrees);
+public sealed record CoordinatorLiveStatus(string Phase, string TargetName, string Safety,
+    string? Operation = null, long? OperationStartedMs = null, ulong? OperationElapsedMs = null,
+    string? GoalId = null, string? WaitReason = null, string? QueueState = null, int? QueueDepth = null,
+    CoordinatorPointing? Pointing = null, int FreshForMs = 45000);
+
 public sealed class CoordinatorSessionReporter : IDisposable
 {
     private sealed record Acknowledgement(bool Accepted, string? ProgramRevision, bool ProgramChanged, ulong ReceivedAtMs);
@@ -16,8 +22,16 @@ public sealed class CoordinatorSessionReporter : IDisposable
         this.binding = binding;
         transport = new(endpoint, credential, handler, allowInsecureHttp);
     }
-    public async Task ReportAsync(CoordinatorAllocation allocation, string sessionId, string phase, string target, string safety, CancellationToken token)
+    public Task ReportAsync(CoordinatorAllocation allocation, string sessionId, string phase, string target, string safety, CancellationToken token) =>
+        ReportAsync(allocation, sessionId, new CoordinatorLiveStatus(phase, target, safety), token);
+
+    public async Task ReportAsync(CoordinatorAllocation allocation, string sessionId, CoordinatorLiveStatus status, CancellationToken token)
     {
+        ArgumentNullException.ThrowIfNull(status);
+        if (status.FreshForMs is < 15000 or > 600000 || status.QueueDepth is < 0
+            || status.Pointing is { } p && (!double.IsFinite(p.RaDegrees) || p.RaDegrees is < 0 or >= 360
+                || !double.IsFinite(p.DecDegrees) || p.DecDegrees is < -90 or > 90))
+            throw new ArgumentException("Invalid live status observation.");
         if (allocation.Envelope.CoordinatorInstanceId != binding.CoordinatorInstanceId || allocation.Envelope.CatalogId != binding.CatalogId
             || allocation.Envelope.RigId != binding.RigId || allocation.Envelope.ProfileId != binding.ProfileId
             || !Guid.TryParseExact(sessionId, "D", out var id) || id == Guid.Empty)
@@ -33,8 +47,23 @@ public sealed class CoordinatorSessionReporter : IDisposable
                 session_id = sessionId,
                 reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 program_revision = allocation.Envelope.PreviewRevision,
-                status = new { phase, target_name = target, allocation_id = allocation.Envelope.AllocationId, safety }
-            }), deadline.Token, binding.ProfileId);
+                status = new
+                {
+                    phase = status.Phase,
+                    target_name = status.TargetName,
+                    allocation_id = allocation.Envelope.AllocationId,
+                    safety = status.Safety,
+                    operation = status.Operation,
+                    operation_started_ms = status.OperationStartedMs,
+                    operation_elapsed_ms = status.OperationElapsedMs,
+                    goal_id = status.GoalId,
+                    wait_reason = status.WaitReason,
+                    queue_state = status.QueueState,
+                    queue_depth = status.QueueDepth,
+                    pointing = status.Pointing,
+                    fresh_for_ms = status.FreshForMs
+                }
+            }, CoordinatorProgramContract.Options), deadline.Token, binding.ProfileId);
             using var body = JsonDocument.Parse(response.Bytes);
             var root = body.RootElement;
             CoordinatorProgramContract.CheckTree(root);
