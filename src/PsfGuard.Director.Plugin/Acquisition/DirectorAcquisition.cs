@@ -734,6 +734,7 @@ public sealed class DirectorAcquisition
                     };
                     Require(await runtime.RecordAsync(unresolved.CaptureId, outcome, lifetime.Token));
                     adapter.AcknowledgeInterrupted(unresolved.CaptureId);
+                    QueueCheckIn(refreshPriority: false);
                     if (settled.Phase == CapturePhase.Saved) lateSavedCapture = unresolved.CaptureId;
                     container.RecordAction(target?.Name ?? "", "Exposure", settled.Phase == CapturePhase.Saved
                         ? "Late save confirmed; pending assessment" : "Interrupted; attempt consumed without saved image");

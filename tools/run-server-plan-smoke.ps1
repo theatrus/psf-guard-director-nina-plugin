@@ -20,7 +20,7 @@ param(
     [switch]$NativeImaging,
     [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
     [ValidateSet('workload-wait', 'target-wait')][string]$NightEndScenario,
-    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'safety-workload')][string]$WeatherHoldScenario,
+    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'roof-startup-night-end', 'safety-workload')][string]$WeatherHoldScenario,
     [switch]$ForceNativeFlip,
     [string]$Phd2Executable,
     [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
