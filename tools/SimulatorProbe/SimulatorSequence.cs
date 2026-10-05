@@ -288,7 +288,7 @@ public sealed class SimulatorSequence : SequenceItem
             if (coordinator?.ForceNativeFlip == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
-            var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
+            using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
             var boundCapture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var nativeItems = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);

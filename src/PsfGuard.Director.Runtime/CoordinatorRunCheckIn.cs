@@ -10,12 +10,23 @@ public static class CoordinatorRunCheckIn
         Uri endpoint, CoordinatorBinding binding, Guid clientId, Func<CancellationToken, ValueTask<string?>> credential,
         IProgress<CoordinatorRunCheckInProgress>? progress = null, bool allowInsecureHttp = false, CancellationToken token = default)
     {
+        using var lease = new AcquisitionLease(stateRoot);
+        return await DeliverBeforeAcquisitionAsync(lease, stateRoot, pluginDirectory, endpoint, binding, clientId,
+            credential, progress, allowInsecureHttp, token).ConfigureAwait(false);
+    }
+
+    internal static async Task<CoordinatorRunCheckInProgress> DeliverBeforeAcquisitionAsync(AcquisitionLease lease,
+        string stateRoot, string pluginDirectory, Uri endpoint, CoordinatorBinding binding, Guid clientId,
+        Func<CancellationToken, ValueTask<string?>> credential, IProgress<CoordinatorRunCheckInProgress>? progress = null,
+        bool allowInsecureHttp = false, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        using var replay = lease.EnterReplay(stateRoot);
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty) throw new ArgumentException("A paired client is required.");
         ArgumentNullException.ThrowIfNull(credential);
-        // Shared with acquisition across processes. A reporting operation must not
-        // reopen a ledger while its native owner is still changing it.
-        using var lease = new AcquisitionLease(stateRoot);
+        // The caller retains ownership throughout replay. Once native execution
+        // starts this path is closed; active feeds use their existing sidecar.
         var profileRoot = Path.Combine(stateRoot, binding.ProfileId.ToString("N"));
         var result = new CoordinatorRunCheckInProgress(0, 0, 0, "", 0, true);
         if (!Directory.Exists(profileRoot)) return result;
@@ -23,6 +34,7 @@ public static class CoordinatorRunCheckIn
         foreach (var directory in Directory.EnumerateDirectories(profileRoot).Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
+            lease.RequireIdle(stateRoot);
             var runId = Path.GetFileName(directory);
             if (!Guid.TryParseExact(runId, "N", out _)) continue;
             RefuseLink(directory);

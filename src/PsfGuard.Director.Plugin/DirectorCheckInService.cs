@@ -16,7 +16,13 @@ public sealed class DirectorCheckInService
     [ImportingConstructor]
     public DirectorCheckInService(IProfileService profiles) => this.profiles = profiles;
 
-    public async Task<CoordinatorRunCheckInProgress> RunAsync(IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token)
+    public Task<CoordinatorRunCheckInProgress> RunAsync(IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token) =>
+        RunCoreAsync(progress, token, null);
+
+    internal Task<CoordinatorRunCheckInProgress> RunBeforeAcquisitionAsync(AcquisitionLease owner,
+        IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token) => RunCoreAsync(progress, token, owner);
+
+    private async Task<CoordinatorRunCheckInProgress> RunCoreAsync(IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token, AcquisitionLease? owner)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         void Changed(object? sender, EventArgs e) => lifetime.Cancel();
@@ -41,9 +47,12 @@ public sealed class DirectorCheckInService
             }
             await Credential(lifetime.Token);
             Logger.Info("Director saved-run check-in started.");
-            var result = await CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
-                Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, endpoint, pairing.Binding, pairing.ClientId,
-                Credential, progress, connection.AllowInsecureHttp, lifetime.Token);
+            var pluginDirectory = Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!;
+            var result = owner is null ? await CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
+                pluginDirectory, endpoint, pairing.Binding, pairing.ClientId,
+                Credential, progress, connection.AllowInsecureHttp, lifetime.Token)
+                : await CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(owner, LocalStateRoot, pluginDirectory,
+                    endpoint, pairing.Binding, pairing.ClientId, Credential, progress, connection.AllowInsecureHttp, lifetime.Token);
             await Credential(lifetime.Token);
             Logger.Info($"Director saved-run check-in: {result.Runs} runs, {result.DeliveredEvents} events, {result.ReleasedWorkloads} workload releases.");
             return result;

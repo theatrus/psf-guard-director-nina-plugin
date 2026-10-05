@@ -151,7 +151,7 @@ public sealed class DirectorAcquisition
         } while (container.Options.AutomaticWorkloads);
     }
 
-    private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, CancellationToken token)
+    private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, AcquisitionLease owner, CancellationToken token)
     {
         if (container.Options.CheckInAtStart)
         {
@@ -162,7 +162,7 @@ public sealed class DirectorAcquisition
                 container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
                 var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
                 { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" }));
-                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, checkInDeadline.Token);
+                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, updates, checkInDeadline.Token);
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
@@ -259,7 +259,7 @@ public sealed class DirectorAcquisition
             if (firstAllocation)
                 while (true)
                 {
-                    try { await CheckInSavedRunsAsync(container, window, operations.Token); break; }
+                    try { await CheckInSavedRunsAsync(container, window, owner, operations.Token); break; }
                     catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
                     { if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync(); }
                 }
@@ -513,6 +513,7 @@ public sealed class DirectorAcquisition
                 }
             }
             var snapshot = Snapshot();
+            owner.BeginExecution();
             var ledger = Require(await runtime.OpenGeometryAsync(program, snapshot.Constraints, snapshot.State, lifetime.Token));
             LastLedger = ledger;
             archive.Store(new(allocation.Envelope, snapshot.Constraints, snapshot.State, ledger,

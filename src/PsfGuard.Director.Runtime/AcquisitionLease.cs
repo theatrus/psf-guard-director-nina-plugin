@@ -10,6 +10,10 @@ public sealed class AcquisitionLease : IDisposable
     private readonly DateTimeOffset utc;
     private static int active;
     private bool disposed;
+    private readonly string root;
+    private bool executionStarted;
+    private bool replaying;
+    private readonly object gate = new();
     public static bool IsActive => Volatile.Read(ref active) != 0;
 
     public AcquisitionLease(string root, TimeProvider? clock = null)
@@ -19,6 +23,7 @@ public sealed class AcquisitionLease : IDisposable
             throw new InvalidOperationException("Another Director session owns the equipment.");
         try
         {
+            this.root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
             this.clock = clock ?? TimeProvider.System;
             timestamp = this.clock.GetTimestamp();
             utc = this.clock.GetUtcNow();
@@ -26,6 +31,45 @@ public sealed class AcquisitionLease : IDisposable
             file = new(Path.Combine(root, "acquisition.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         }
         catch { Interlocked.Exchange(ref active, 0); throw; }
+    }
+
+    public void BeginExecution()
+    {
+        lock (gate)
+        {
+            CheckClock();
+            if (replaying) throw new InvalidOperationException("Batch replay has not settled.");
+            executionStarted = true;
+        }
+    }
+
+    internal IDisposable EnterReplay(string stateRoot)
+    {
+        lock (gate)
+        {
+            RequireIdle(stateRoot);
+            if (replaying) throw new InvalidOperationException("Batch replay is already running.");
+            replaying = true;
+            return new ReplayScope(this);
+        }
+    }
+
+    private sealed class ReplayScope(AcquisitionLease owner) : IDisposable
+    {
+        private AcquisitionLease? lease = owner;
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref lease, null);
+            if (current is not null) lock (current.gate) current.replaying = false;
+        }
+    }
+
+    internal void RequireIdle(string stateRoot)
+    {
+        CheckClock();
+        if (executionStarted || !string.Equals(root, Path.TrimEndingDirectorySeparator(Path.GetFullPath(stateRoot)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new InvalidOperationException("Batch replay requires the idle owner of the same state root.");
     }
 
     public void CheckClock()
@@ -38,9 +82,13 @@ public sealed class AcquisitionLease : IDisposable
 
     public void Dispose()
     {
-        if (disposed) return;
-        disposed = true;
-        try { file.Dispose(); }
-        finally { Interlocked.Exchange(ref active, 0); }
+        lock (gate)
+        {
+            if (disposed) return;
+            if (replaying) throw new InvalidOperationException("Cannot release equipment ownership during batch replay.");
+            disposed = true;
+            try { file.Dispose(); }
+            finally { Interlocked.Exchange(ref active, 0); }
+        }
     }
 }
