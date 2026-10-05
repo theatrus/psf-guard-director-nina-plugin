@@ -136,32 +136,36 @@ public sealed class DirectorAcquisition
     {
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
-        using var session = CancellationTokenSource.CreateLinkedTokenSource(token);
-        session.CancelAfter(TimeSpan.FromHours(container.Options.MaximumHours));
         var night = Guid.NewGuid().ToString("D");
         var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
+        var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
         if (container.Options.CheckInAtStart)
         {
+            using var checkInDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            checkInDeadline.CancelAfter(window.Remaining(TimeSpan.FromHours(24)));
             try
             {
                 container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
                 var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
                 { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" }));
-                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, session.Token);
+                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, checkInDeadline.Token);
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
+            catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
+            { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
         }
         using var owner = new AcquisitionLease(LocalStateRoot);
         do
         {
-            if (!await ExecuteAllocationAsync(container, progress, owner, night, nightStart, nightEnd, session.Token)) break;
+            token.ThrowIfCancellationRequested();
+            if (!await ExecuteAllocationAsync(container, progress, owner, night, window, token)) break;
         } while (container.Options.AutomaticWorkloads);
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, ulong nightStart, ulong nightEnd, CancellationToken token)
+        string night, NinaNightWindow window, CancellationToken token)
     {
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
@@ -188,7 +192,6 @@ public sealed class DirectorAcquisition
         DirectorTarget? target = null;
         string? lastLoggedPhase = null;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lifetime.CancelAfter(TimeSpan.FromHours(options.MaximumHours));
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
         using (var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
@@ -229,6 +232,7 @@ public sealed class DirectorAcquisition
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             connection.AllowInsecureHttp, options.LocalTargetScheduling, native is not null);
         using var previews = new CoordinatorProgramClient(endpoint, Credential, connection.AllowInsecureHttp);
+        if (window.Ended) return await FinishIdleNightAsync();
         CoordinatorAllocation allocation;
         if (options.AutomaticWorkloads)
         {
@@ -239,18 +243,19 @@ public sealed class DirectorAcquisition
                     || constraintsReader.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision
                     || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
                     throw new InvalidOperationException("Workload request context changed.");
+                if (window.Ended) return await FinishIdleNightAsync();
                 try
                 {
                     Report("Requesting commissioned work", "Online");
                     var result = await workloads.RequestAsync(lifetime.Token);
                     if (result.Allocation is not null) { allocation = result.Allocation; break; }
                     Report("Waiting for eligible work or quality assessment", "Online");
-                    await Task.Delay(TimeSpan.FromSeconds(result.RetryAfterSeconds), lifetime.Token);
+                    await window.WaitAsync(TimeSpan.FromSeconds(result.RetryAfterSeconds), lifetime.Token);
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
                 {
                     Report("Offline; waiting for workload authority", "Offline");
-                    await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
+                    await window.WaitAsync(TimeSpan.FromSeconds(30), lifetime.Token);
                 }
             }
         }
@@ -259,6 +264,47 @@ public sealed class DirectorAcquisition
             Report("Reading issued allocation", "Online");
             allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
         }
+        // A slow coordinator response cannot start a grant after the night.
+        // Leave that unstarted grant outstanding; never report it as completed.
+        if (window.Ended) return await FinishIdleNightAsync();
+
+        async Task<bool> FinishIdleNightAsync()
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            NinaSessionRecovery? endingRecovery = recoveryRequired
+                ? new(runtime, options, () => new(interlock.Read().Safety, enclosure.Read().Motion), () => { }, _ => { }, TimeProvider.System) : null;
+            var errors = new List<Exception>();
+            try { if (endingRecovery is not null) await endingRecovery.EndNightAsync(cleanup.Token, night); }
+            catch (Exception error) { errors.Add(error); }
+            try
+            {
+                using var guideStop = CancellationTokenSource.CreateLinkedTokenSource(cleanup.Token);
+                guideStop.CancelAfter(TimeSpan.FromSeconds(15));
+                if (native is not null) await native.StopGuidingAsync(progress, guideStop.Token).WaitAsync(guideStop.Token);
+            }
+            catch (Exception error) { errors.Add(error); }
+            RecoveryIssued? permit = null;
+            try { if (endingRecovery is not null) permit = await endingRecovery.BeginParkAsync(cleanup.Token); }
+            catch (Exception error) { errors.Add(error); }
+            try
+            {
+                await new NinaMountShutdown().ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!,
+                    enclosure.Read, enclosure.Interrupted, progress, cleanup.Token);
+                if (permit is not null) await endingRecovery!.FinishParkAsync(permit, RecoveryParkResult.Parked, cleanup.Token);
+            }
+            catch (Exception error)
+            {
+                errors.Add(error);
+                if (permit is not null)
+                    try { await endingRecovery!.FinishParkAsync(permit, RecoveryParkResult.Uncertain, cleanup.Token); }
+                    catch (Exception journalError) { errors.Add(journalError); }
+            }
+            if (errors.Count != 0) throw new AggregateException("Night-end shutdown failed; review required.", errors);
+            lifetime.Token.ThrowIfCancellationRequested();
+            Report("Night ended; parked", null);
+            return false;
+        }
+
         var program = allocation.Envelope.Snapshot.Program;
         if (program.Targets.IsEmpty || !options.LocalTargetScheduling && program.Targets.Length != 1
             || program.Targets.Any(t => t.PositionAngleMas is not null) && (native?.RotatorConnected != true || !program.Configuration.EnableSlewCenter)
@@ -314,7 +360,7 @@ public sealed class DirectorAcquisition
                         Report(message, null); container.UpdateDisplay(d => d with
                         { WaitReason = recovery?.Record?.Snapshot.Phase is RecoveryPhase.Holding ? message : "-" });
                     }, TimeProvider.System);
-                await recovery.AdmitAsync(rig, configuration.Id, night, nightStart, nightEnd, lifetime.Token);
+                await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
                 if (native is not null && options.RetryFocusAndGuiding)
                 {
                     native.Recovery = recovery;
@@ -348,18 +394,20 @@ public sealed class DirectorAcquisition
             while (true)
             {
                 Check();
-                if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
+                if (window.Ended) break;
+                if (recovery is not null && !await recovery.RefreshAsync(lifetime.Token, allowNightEnd: true)) break;
                 if (Volatile.Read(ref priorityRefresh) != 0)
                 {
                     Report("Priority changed; parking for a refreshed workload", "Online");
                     break;
                 }
                 var current = Snapshot();
+                if (window.Ended) break;
                 var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
                 Report(decision.Reason, null);
                 if (decision.Action == PlannerAction.Complete)
                 {
-                    if (context is not null) await hooks.TargetCompletedAsync(progress, lifetime.Token);
+                    if (context is not null && decision.Reason != "observing_night_ended") await hooks.TargetCompletedAsync(progress, lifetime.Token);
                     break;
                 }
                 if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
@@ -375,7 +423,7 @@ public sealed class DirectorAcquisition
                         if (native is not null) await native.StopGuidingAsync(progress, lifetime.Token);
                         await Park(lifetime.Token);
                     }
-                    await hooks.WaitAsync(ct => Task.Delay(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
+                    await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
                     // Waiting ends the target visit, so re-enter its setup on
                     // the next core selection even if the mount has not moved.
                     previousPointing = null;
@@ -409,7 +457,7 @@ public sealed class DirectorAcquisition
                     // No operation was issued. Conditions/time can change
                     // between selection and preparation admission.
                     Report("Reevaluating local work", null);
-                    await Task.Delay(TimeSpan.FromSeconds(1), lifetime.Token);
+                    await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
                     continue;
                 }
                 var began = Require(begin);
@@ -445,7 +493,7 @@ public sealed class DirectorAcquisition
                             previousPointing = new(configuration.Id, selectedTarget);
                         }, native is null ? null : (operation, p, ct) => native.PrepareAsync(operation, block, p, ct));
                     using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                    operationDeadline.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds));
+                    operationDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds)));
                     try { await RunItem(block, issued.Item, operationDeadline.Token); }
                     finally
                     {
@@ -494,8 +542,8 @@ public sealed class DirectorAcquisition
                 container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
                 container.RecordAction(target.Name, "Exposure", "Started");
                 using var captureDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                captureDeadline.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
-                    + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs));
+                captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
+                    + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
                 try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
                 catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
                 var evidence = exposure.Evidence;
@@ -511,7 +559,8 @@ public sealed class DirectorAcquisition
                 }
             }
             await hooks.FinishAsync(progress, lifetime.Token);
-            if (options.CheckInAtEnd) await CheckIn(drain: true);
+            await EnsureSettledAsync(runtime, lifetime.Token);
+            if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
             Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
                 : "Allocation finished; awaiting assessment or a new reconciled plan", null);
 
@@ -608,9 +657,13 @@ public sealed class DirectorAcquisition
                 var aborted = executionError is not null || lifetime.IsCancellationRequested;
                 try
                 {
-                    if (recovery is not null && (aborted || !options.AutomaticWorkloads))
+                    if (recovery is not null && (aborted || !options.AutomaticWorkloads || window.Ended))
                     {
-                        try { await recovery.StopAsync(cleanup.Token); }
+                        try
+                        {
+                            if (!aborted && window.Ended) await recovery.EndNightAsync(cleanup.Token);
+                            else await recovery.StopAsync(cleanup.Token);
+                        }
                         catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
                     }
                     // A guider failure must not prevent physical mount shutdown.
@@ -650,9 +703,7 @@ public sealed class DirectorAcquisition
                     native?.Dispose();
                     if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
                     {
-                        if (Require(await runtime.FindUnresolvedAttemptAsync(cleanup.Token)).Attempt is not null
-                            || Require(await runtime.FindActivePreparationAsync(cleanup.Token)).Record is not null)
-                            throw new InvalidOperationException("Unresolved operations prevent terminal workload release.");
+                        await EnsureSettledAsync(runtime, cleanup.Token);
                         archive.MarkCompleted();
                         try
                         {
@@ -668,6 +719,8 @@ public sealed class DirectorAcquisition
                         }
                         catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
                         { Report("Parked; terminal check-in pending; no successor authorized", "Offline"); }
+                        catch (OperationCanceledException) when (options.AllowOffline && window.Ended && cleanup.IsCancellationRequested && !lifetime.IsCancellationRequested)
+                        { Report("Night ended; parked; terminal check-in pending", "Offline"); }
                     }
                 }
                 catch (Exception error) when (executionError is not null)
@@ -679,6 +732,7 @@ public sealed class DirectorAcquisition
                         : !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
                         : Volatile.Read(ref constraintError) is not null ? "Stopped; parked; rig constraints changed; review required"
                         : terminalFailed || aborted ? "Stopped; parked; reconciliation required"
+                        : window.Ended ? released || !options.AutomaticWorkloads ? "Night ended; parked" : "Night ended; parked; check-in pending"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
                     container.UpdateDisplay(d => d with { Operation = "" });
                     Report(phase, null);
@@ -696,7 +750,8 @@ public sealed class DirectorAcquisition
         }
         if (reportingError is not null) throw new InvalidOperationException("Director check-in failed.", reportingError);
         if (shutdownError is not null) throw new InvalidOperationException("Director guider shutdown failed; reconciliation required.", shutdownError);
-        return released;
+        token.ThrowIfCancellationRequested();
+        return released && !window.Ended;
 
         static ulong Now() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         void Check()
@@ -711,8 +766,8 @@ public sealed class DirectorAcquisition
         {
             Check();
             var g = geometry.Read(constraintBinding, equipmentBinding, inputs);
-            return new(g.Configuration, g.Constraints, new(rig, configuration.Id, Now(), assignment.ExpiresAtMs,
-                interlock.Read().Safety, true, false, constraintBinding.MeridianExclusion));
+            return new(g.Configuration, g.Constraints, new(rig, configuration.Id, Now(), window.BoundValidity(assignment.ExpiresAtMs),
+                interlock.Read().Safety, true, false, constraintBinding.MeridianExclusion, window.End));
         }
         void CheckPointing()
         {
@@ -832,6 +887,12 @@ public sealed class DirectorAcquisition
     private static bool OfflineFailure(CoordinatorIntakeFailure failure) => failure is CoordinatorIntakeFailure.Transport
         or CoordinatorIntakeFailure.Timeout or CoordinatorIntakeFailure.ServerUnavailable or CoordinatorIntakeFailure.Busy;
     private static T Require<T>(LedgerResult<T> result) where T : class => result.Value ?? throw new InvalidOperationException($"Director ledger refused: {result.Error}");
+    internal static async Task EnsureSettledAsync(RuntimeController runtime, CancellationToken token)
+    {
+        if (Require(await runtime.FindUnresolvedAttemptAsync(token)).Attempt is not null
+            || Require(await runtime.FindActivePreparationAsync(token)).Record is not null)
+            throw new InvalidOperationException("Unresolved operations prevent normal session completion.");
+    }
     internal static bool CanReselect(PlannerDecision? decision, bool moonScheduling = false) => decision is { Action: PlannerAction.Wait }
         or { Action: PlannerAction.CheckIn, Reason: "preparation_goal_changed" }
         || moonScheduling && decision is { Action: PlannerAction.CheckIn, Reason: "no_authorized_feasible_work" };

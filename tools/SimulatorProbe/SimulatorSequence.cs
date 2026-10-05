@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Immutable;
 using NINA.Astrometry;
+using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Core.Model.Equipment;
 using NINA.Core.Utility;
@@ -353,6 +354,11 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
                 sessionContainer.Options.StatusSeconds = 5;
+                if (coordinator.NightEndScenario is not null)
+                {
+                    sessionContainer.Options.MaximumHours = 0.04;
+                    sessionContainer.Options.RetryFocusAndGuiding = coordinator.NightEndScenario == "workload-wait";
+                }
                 if (coordinator.RecoveryScenario is not null)
                 {
                     sessionContainer.Options.RetryFocusAndGuiding = true;
@@ -371,7 +377,17 @@ public sealed class SimulatorSequence : SequenceItem
                 // The public session must own safety cancellation, not this probe.
                 safetyCancellation.Dispose();
                 using var publicLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                var executing = sessionContainer.Execute(progress, publicLifetime.Token);
+                var followingStepRan = false;
+                NINA.Sequencer.Container.SequentialContainer? nightSequence = null;
+                if (coordinator.NightEndScenario is not null)
+                {
+                    sessionContainer.ErrorBehavior = NINA.Sequencer.Utility.InstructionErrorBehavior.AbortOnError;
+                    nightSequence = new();
+                    nightSequence.AttachNewParent(Parent);
+                    nightSequence.Add(sessionContainer);
+                    nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
+                }
+                var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
                     if (coordinator.NativeImagingFailure is { } fault)
@@ -524,9 +540,13 @@ public sealed class SimulatorSequence : SequenceItem
                             || !telescope.GetInfo().AtPark || !sessionHookEvents.Contains("BeforeWait")))
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Moon avoidance did not retain a parked waiting session.");
-                        publicLifetime.Cancel();
-                        try { await executing; throw new InvalidDataException("Moon wait ignored cancellation."); }
-                        catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
+                        else
+                        {
+                            publicLifetime.Cancel();
+                            try { await executing; throw new InvalidDataException("Moon wait ignored cancellation."); }
+                            catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        }
                     }
                     else if (coordinator.AutomaticWorkloads && !coordinator.OfflineWorkloadRelease)
                     {
@@ -536,14 +556,33 @@ public sealed class SimulatorSequence : SequenceItem
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
-                        publicLifetime.Cancel();
-                        try { await executing; throw new InvalidDataException("Automatic session ignored cancellation."); }
-                        catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
+                        else
+                        {
+                            publicLifetime.Cancel();
+                            try { await executing; throw new InvalidDataException("Automatic session ignored cancellation."); }
+                            catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        }
                         if (!coordinator.PriorityRefresh) await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
                     }
                     else await executing;
                 }
-                finally { if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } } }
+                finally
+                {
+                    if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } }
+                    if (nightSequence is not null) { nightSequence.Remove(sessionContainer); nightSequence.AttachNewParent(null); }
+                }
+                async Task VerifyNightEnd()
+                {
+                    await executing.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
+                    if (!followingStepRan || sessionContainer.Status != SequenceEntityStatus.FINISHED || !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled
+                        || camera.GetInfo().IsExposing || AcquisitionLease.IsActive || publicLifetime.IsCancellationRequested
+                        || sessionHookEvents.Contains("AfterTargetComplete")
+                        || sessionContainer.Display.Phase != "Night ended; parked")
+                        throw new InvalidDataException("Night end did not park, release ownership and execute the following native sequence step.");
+                    await File.WriteAllTextAsync(Path.Combine(run, "night-end-verified.txt"), coordinator.NightEndScenario, lifetime.Token);
+                    Step("Normal night end parked and ran the following native sequence step without cancellation");
+                }
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
                 var journalRoots = coordinator.PriorityRefresh
                     ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
@@ -610,7 +649,7 @@ public sealed class SimulatorSequence : SequenceItem
                 ConfigureImaging(retry.Options);
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
-                catch (InvalidOperationException e) when (coordinator.RecoveryScenario is not null && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
+                catch (InvalidOperationException e) when ((coordinator.RecoveryScenario is not null || coordinator.NightEndScenario is not null) && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
                 Step("Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
                 if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
@@ -1006,6 +1045,17 @@ public sealed class SimulatorSequence : SequenceItem
                 && NINA.Sequencer.Utility.ItemUtility.FindDeepSkyObjectContainer(Parent) is not NinaTargetContainer)
                 throw new InvalidOperationException("Director target hook lost its native target context.");
             events.Add(slot);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NightEndMarker(Action completed) : SequenceItem
+    {
+        public override object Clone() => new NightEndMarker(completed);
+        public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            completed();
             return Task.CompletedTask;
         }
     }

@@ -1,5 +1,39 @@
 # Real N.I.N.A. smoke test
 
+## Normal Night End
+
+2026-10-05: packaged Director, runtime 0.11.2 / IPC 11, NINA 3.3.0.1065,
+ASCOM OmniSim and private PSF Guard built from `89947fb` passed:
+
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance -NightEndScenario
+  target-wait`: three eligible frames are saved, then the mount waits parked
+  while the remaining target is Moon-blocked and the server is offline. The
+  fixed Session deadline ends the wait normally. NINA runs the following
+  instruction and end area, without cancellation or an `AfterTargetComplete`
+  hook. Reconnection delivers the original receipts; repeat check-in adds no
+  events or hardware actions, and a second allocation launch is refused.
+  Evidence: `artifacts/nina-smoke-3a93160e497e4565b890bb836638825d/probe/aa51645d96f9469bace6296efc8da8ac/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads
+  -NightEndScenario workload-wait`: completes and releases the three-frame
+  allocation, waits parked for assessment, and reaches the original deadline
+  without extending it on a workload request. The persisted recovery journal
+  records normal night end, and the following native instruction runs. Batch
+  replay leaves the acknowledged events unchanged.
+  Evidence: `artifacts/nina-smoke-7c0a40ce07b04a6ca3fda5d4bc226a9b/probe/1966119f335f4f2d8958b4cb8692dd3b/result.json`.
+- `-PublicAcquisition -PublicUnsafe`: safety loss interrupts native acquisition
+  and parks through the abort path, rather than completing normally.
+  Evidence: `artifacts/nina-smoke-18aced7835d244669b2f404a066ca543/probe/f9982335bed147bba3bb5b8fd319ea93/result.json`.
+
+These cases use the native sequence runner with `AbortOnError`, so continuing
+after a swallowed failure cannot satisfy the following-step assertion. They do
+not prove automatic weather/roof reopening or cloud recovery.
+
+All 851 plugin tests passed with this pinned runtime. Development packaging,
+`dotnet format --verify-no-changes --no-restore`, runtime-fetch regressions and
+`git diff --check` also passed. The shared core/ledger/runtime suite passed 403
+Rust tests and Clippy with warnings denied. Hosted artifact checks are separate
+from these local results.
+
 ## Bounded Native Recovery
 
 2026-10-04: packaged Director, pinned runtime 0.10.0 / IPC 10, NINA 3.3.0.1065,

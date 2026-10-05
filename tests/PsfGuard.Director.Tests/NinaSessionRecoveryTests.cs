@@ -106,6 +106,58 @@ public sealed class NinaSessionRecoveryTests
         Assert.NotEmpty(options.ValidateSettings());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NightEndIsDistinctFromUnsafeOrOperatorStop(bool unsafeWeather)
+    {
+        await using var f = await Fixture.Create();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Recovery.EndNightAsync(default));
+        if (unsafeWeather) f.Conditions = new(PlannerSafety.Unsafe, RecoveryMotion.Permitted);
+        f.Clock.Now = f.End;
+        if (unsafeWeather)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => f.Recovery.EndNightAsync(default));
+        else
+        {
+            Assert.False(await f.Recovery.RefreshAsync(default, allowNightEnd: true));
+            await f.Recovery.EndNightAsync(default);
+            Assert.IsType<RecoveryCause.NightEnded>(Assert.IsType<RecoveryPhase.Stopping>(f.Recovery.Record!.Snapshot.Phase).Cause);
+            var permit = await f.Recovery.BeginParkAsync(default);
+            await f.Recovery.FinishParkAsync(permit!, RecoveryParkResult.Parked, default);
+            await f.Recovery.EndNightAsync(default);
+        }
+    }
+
+    [Fact]
+    public async Task NightEndCannotConcealAnEarlierStopOrFailedPark()
+    {
+        await using var f = await Fixture.Create();
+        await f.Recovery.StopAsync(default);
+        f.Clock.Now = f.End;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Recovery.EndNightAsync(default));
+        await using var g = await Fixture.Create();
+        g.Clock.Now = g.End;
+        await g.Recovery.EndNightAsync(default);
+        var permit = await g.Recovery.BeginParkAsync(default);
+        await g.Recovery.FinishParkAsync(permit!, RecoveryParkResult.Failed, default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => g.Recovery.EndNightAsync(default));
+    }
+
+    [Fact]
+    public async Task UnallocatedNightDoesNotAcknowledgeAnOlderNight()
+    {
+        await using var f = await Fixture.Create();
+        await f.Recovery.StopAsync(default);
+        var old = f.Recovery.Record!;
+        f.Clock.Now = f.End;
+        var next = f.NewRecovery();
+        await next.EndNightAsync(default, "unallocated-night");
+        Assert.Null(await next.BeginParkAsync(default));
+        var current = (await f.Runtime.ReadRecoveryAsync()).Value!.Record!;
+        Assert.Equal(old.Revision, current.Revision);
+        Assert.Equal("night", current.Snapshot.Identity.NightId);
+    }
+
     [Fact]
     public void SavedAndClonedRecoverySettingsRetainLocalPolicy()
     {
@@ -136,8 +188,9 @@ public sealed class NinaSessionRecoveryTests
         internal Action<string>? Report;
         internal ulong Start = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         internal ulong End => Start + 3600000;
+        internal readonly Clock Clock = new();
         internal NinaSessionRecovery NewRecovery() => new(Runtime, new() { RetryFocusAndGuiding = true, RetryCooldownSeconds = 1, MaximumRecoveryAttempts = 1 },
-            () => Conditions, () => { }, message => Report?.Invoke(message), TimeProvider.System);
+            () => Conditions, () => { }, message => Report?.Invoke(message), Clock);
         internal static async Task<Fixture> Create()
         {
             var f = new Fixture();
@@ -150,5 +203,11 @@ public sealed class NinaSessionRecoveryTests
             return f;
         }
         public async ValueTask DisposeAsync() { await Runtime.DisposeAsync(); Directory.Delete(root, true); }
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        internal ulong? Now;
+        public override DateTimeOffset GetUtcNow() => Now is { } now ? DateTimeOffset.FromUnixTimeMilliseconds((long)now) : DateTimeOffset.UtcNow;
     }
 }

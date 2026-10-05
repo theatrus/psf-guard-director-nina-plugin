@@ -21,7 +21,8 @@ public sealed record PlannerTransits(PlannerInterval Searched, ImmutableArray<ul
 public enum PlannerSafety { Safe, Unsafe, Unknown }
 public sealed record PlannerState(string RigId, string ConfigurationId, ulong NowMs,
     ulong ConditionsValidUntilMs, PlannerSafety Safety, bool AtBoundary, bool OperatorStop,
-    PlannerMeridianExclusion MeridianExclusion);
+    PlannerMeridianExclusion MeridianExclusion,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? CompletionDeadlineMs = null);
 public enum PlannerAction { Acquire, Continue, Stop, CheckIn, Wait, Complete }
 public enum PlannerError
 {

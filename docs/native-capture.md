@@ -132,7 +132,7 @@ recovery and default focus/guiding/centering/flip policies remain separate work.
 Director Session > Session > Safety and visibility > **On abort** selects
 **Park mount (clearance required)** or **Stop slew and tracking (no park)**.
 The choice is saved in the sequence and applies to operator cancellation,
-unsafe conditions, session timeout and acquisition errors after launch. Older
+unsafe conditions, operation timeout and acquisition errors after launch. Older
 sequences retain the park default. Normal completion still parks; **Park during
 waits** controls planned waits separately. Aborted workloads are not released
 as successful, and recovery never restarts the stopped owner automatically.
@@ -181,9 +181,35 @@ and preparation check-in do not yet upload that separate recovery journal.
 These screenshots show an unarmed simulator profile in NINA 3.3.0.1065.
 The requested next increment adds an explicit weather/roof **hold and resume**
 policy with stable Safe/Open readings, interrupted-work reconciliation and new
-core-issued commands. Cloud classification/probes and normal night-end
-continuation are also pending. Current unsafe/roof interrupts still stop the
-owner; this focus/guide option does not enable reopening it.
+core-issued commands. Cloud classification/probes remain pending. Current
+unsafe/roof interrupts still stop the owner; this focus/guide option does not
+enable reopening it.
+
+## Normal Night End
+
+**Maximum duration** defines one deadline from Session start, including initial
+check-in and every subsequent workload. Runtime 0.11.2 / IPC 11 supplies that
+deadline to the shared planner separately from dispatch freshness. Remaining
+target setup, exposure and overhead must fit before it; a target that no longer
+fits waits without reserving another exposure.
+
+At a settled boundary, reaching the deadline ends an idle target/workload wait,
+runs the normal target-exit hooks, verifies no capture or preparation is
+unresolved, and parks with current enclosure clearance. The Session then returns
+normally so NINA runs the following instructions and end area. It does not mark
+the target's scientific goals complete. Pending check-in receipts stay available
+for batch replay. Bounded target-exit hooks and shutdown may finish after the
+deadline; no new exposure or preparation starts then.
+
+Operator cancellation and unsafe weather remain stops, not normal completion.
+A native operation that overruns its bound is cancelled and remains an error
+until its outcome is reconciled. Failed parking, failed shutdown journaling and
+uncertain capture/save outcomes also prevent normal continuation. The clock alone
+cannot prove equipment is quiescent or an image was saved. Weather/roof hold
+resumption and quality-probe recovery are still separate unfinished work.
+
+See the [native night-end checks](nina-smoke-test.md#normal-night-end) for
+reproduction commands and simulator evidence.
 
 ## Enclosure Clearance
 
