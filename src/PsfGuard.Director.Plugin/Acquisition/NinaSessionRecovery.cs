@@ -37,7 +37,12 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         record = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token)).Record;
         if (record.Snapshot.Phase is not RecoveryPhase.Acquiring)
             throw new InvalidOperationException("The observing session is stopped or needs recovery reconciliation.");
-        await RefreshAsync(token);
+        if (options.Weather == DirectorWeatherPolicy.HoldAndResume)
+        {
+            await ObserveWeatherAsync(token);
+            if (record.Snapshot.Phase is RecoveryPhase.WeatherHolding) return;
+        }
+        else await RefreshAsync(token);
     }
 
     internal async Task<bool> RefreshAsync(CancellationToken token, bool allowNightEnd = false)
@@ -51,9 +56,11 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
 
     internal Task InterruptWeatherAsync(bool enclosure, CancellationToken token) => ApplyAsync(new RecoveryEvent.WeatherInterrupted(enclosure), token);
     internal Task ObserveWeatherAsync(CancellationToken token) => ApplyAsync(new RecoveryEvent.Tick(), token);
-    internal async Task ResumeWeatherAsync(CancellationToken token)
+    internal async Task ResumeWeatherAsync(CancellationToken token, bool idle = false)
     {
-        await DirectorAcquisition.EnsureSettledAsync(runtime, token);
+        // Idle resumes have no admitted allocation. The runtime independently
+        // requires exclusively leased, unused execution storage in that case.
+        if (!idle) await DirectorAcquisition.EnsureSettledAsync(runtime, token);
         var applied = await ApplyAsync(new RecoveryEvent.ResumeWeather(), token);
         if (!applied.NewlyApplied || applied.Record.Snapshot.Phase is not RecoveryPhase.Acquiring)
             throw new InvalidOperationException("Weather hold did not authorize a fresh acquisition boundary.");

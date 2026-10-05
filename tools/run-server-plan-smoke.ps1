@@ -20,7 +20,7 @@ param(
     [switch]$NativeImaging,
     [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
     [ValidateSet('workload-wait', 'target-wait')][string]$NightEndScenario,
-    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure')][string]$WeatherHoldScenario,
+    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'roof-startup-night-end', 'safety-workload')][string]$WeatherHoldScenario,
     [switch]$ForceNativeFlip,
     [string]$Phd2Executable,
     [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
@@ -31,7 +31,8 @@ $ErrorActionPreference = 'Stop'
 if ($NightEndScenario -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $RecoveryScenario -or $ConstraintChange -or $EnclosureClosure -or $PriorityRefresh -or $DeferredCheckIn -or $OfflineWorkloadRelease)) { throw 'NightEndScenario requires safe public local scheduling without other fault scenarios.' }
 if ($NightEndScenario -eq 'workload-wait' -and (!$AutomaticWorkloads -or $MoonAvoidance)) { throw 'Workload night end requires automatic workloads without Moon avoidance.' }
 if ($NightEndScenario -eq 'target-wait' -and (!$MoonAvoidance -or $AutomaticWorkloads)) { throw 'Target-wait night end requires Moon avoidance without automatic workloads.' }
-if ($WeatherHoldScenario -and $WeatherHoldScenario -notlike '*-exposure' -and $NightEndScenario -ne 'target-wait') { throw 'Weather holds require the target-wait night-end fixture.' }
+if ($WeatherHoldScenario -eq 'safety-workload' -and $NightEndScenario -ne 'workload-wait') { throw 'Idle workload weather test requires workload-wait.' }
+if ($WeatherHoldScenario -and $WeatherHoldScenario -notlike '*-exposure' -and $WeatherHoldScenario -ne 'safety-workload' -and $NightEndScenario -ne 'target-wait') { throw 'Weather holds require the target-wait night-end fixture.' }
 if ($WeatherHoldScenario -eq 'safety-exposure' -and !$PublicUnsafe) { throw 'Safety exposure interruption requires PublicUnsafe.' }
 if ($WeatherHoldScenario -eq 'roof-exposure' -and !$EnclosureClosure) { throw 'Roof exposure interruption requires EnclosureClosure.' }
 if ($NativeImaging -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $ConstraintChange -or $PublicUnsafe -or $EnclosureClosure -or $PriorityRefresh)) { throw 'NativeImaging requires safe public local scheduling.' }
@@ -133,15 +134,16 @@ try {
     }
     if (!$result) { throw "No simulator result; inspect $($started.TestRoot)" }
     $evidence = Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json
-    if (!$evidence.passed -or ((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
+    $idleNightEnd = $WeatherHoldScenario -eq 'roof-startup-night-end'
+    if (!$evidence.passed -or (!$idleNightEnd -and (!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
         throw "Server-plan smoke failed; inspect $($result.FullName)"
     }
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     if ($NightEndScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'night-end-verified.txt'))) { throw 'Normal night end and following native sequence step were not verified.' }
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
     if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
-    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
-    if ($MoonAvoidance -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
+    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
+    if ($MoonAvoidance -and !$idleNightEnd -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
     if ($ObservingPreferences -and !$evidence.observing_preferences_verified) { throw 'Weighted observing preferences did not change native target order.' }
     if ($ProjectOrder -and !$evidence.project_order_verified) { throw 'Ranked project execution was not verified.' }
     if ($PriorityRefresh -and !$evidence.priority_refresh_verified) { throw 'Safe-boundary priority handoff was not verified.' }

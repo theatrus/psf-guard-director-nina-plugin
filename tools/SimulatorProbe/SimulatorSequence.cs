@@ -288,7 +288,7 @@ public sealed class SimulatorSequence : SequenceItem
             if (coordinator?.ForceNativeFlip == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
-            var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
+            using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
             var boundCapture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var nativeItems = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
@@ -363,7 +363,7 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 if (coordinator.NightEndScenario is not null)
                 {
-                    sessionContainer.Options.MaximumHours = coordinator.WeatherHoldScenario == "roof-night-end" ? 0.025 : 0.04;
+                    sessionContainer.Options.MaximumHours = coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end" ? 0.025 : 0.04;
                     sessionContainer.Options.RetryFocusAndGuiding = coordinator.NightEndScenario == "workload-wait";
                 }
                 if (coordinator.RecoveryScenario is not null)
@@ -377,7 +377,7 @@ public sealed class SimulatorSequence : SequenceItem
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 if (nativeProbe?.Flip is { } flipProbe) sessionContainer.AfterEachExposure.Add(flipProbe.SaveMarker());
-                if (coordinator.LocalTargetScheduling && !coordinator.NativeImaging)
+                if ((coordinator.LocalTargetScheduling || coordinator.WeatherHoldScenario is "safety-exposure" or "roof-exposure") && !coordinator.NativeImaging)
                     sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
                 var slowSetup = new SlowSetupProbe();
                 if (coordinator.ConstraintChange is not null) sessionContainer.BeforeNewTarget.Add(slowSetup);
@@ -394,9 +394,41 @@ public sealed class SimulatorSequence : SequenceItem
                     nightSequence.Add(sessionContainer);
                     nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
                 }
+                var startupHold = coordinator.WeatherHoldScenario is "safety-startup" or "roof-startup" or "roof-startup-night-end";
+                if (startupHold)
+                {
+                    if (coordinator.UsesEnclosure) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close before startup."); }
+                    else safetySimulator.IsSafe = false;
+                }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (startupHold)
+                    {
+                        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        startupDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                        while (!executing.IsCompleted && !sessionContainer.Display.Phase.Contains("waiting for Safe/Open before workload", StringComparison.Ordinal))
+                            await Task.Delay(50, startupDeadline.Token);
+                        if (executing.IsCompleted) { await executing; throw new InvalidDataException("Unsafe startup did not hold."); }
+                        if (service.LastLedger is not null || camera.GetInfo().IsExposing || telescope.GetInfo().TrackingEnabled || telescope.GetInfo().Slewing)
+                            throw new InvalidDataException("Unsafe startup admitted work or failed to stop equipment.");
+                        if (coordinator.WeatherHoldScenario == "roof-startup-night-end")
+                        {
+                            await VerifyNightEnd();
+                            if (service.LastLedger is not null || Directory.GetFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Length != 0)
+                                throw new InvalidDataException("Closed-roof startup admitted a ledger or captured an image.");
+                            await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), "Closed roof prevented all work until normal night end and following native step", lifetime.Token);
+                            return;
+                        }
+                        var cleared = System.Diagnostics.Stopwatch.StartNew();
+                        if (coordinator.UsesEnclosure) { if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen."); }
+                        else safetySimulator.IsSafe = true;
+                        while (!executing.IsCompleted && service.LastLedger is null) await Task.Delay(50, startupDeadline.Token);
+                        if (executing.IsCompleted || cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds))
+                            throw new InvalidDataException("Startup bypassed stability or failed to admit fresh work.");
+                        await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), "Startup held without a ledger; fresh work admitted only after stable Safe/Open", lifetime.Token);
+                        Step("Unsafe startup held before workload admission and resumed after stable Safe/Open");
+                    }
                     if (coordinator.NativeImagingFailure is { } fault)
                     {
                         Exception? failure = null;
@@ -488,6 +520,54 @@ public sealed class SimulatorSequence : SequenceItem
                         await coordinator.ReverseProjectOrderAsync(lifetime.Token);
                         Step("Changed global project order while a native exposure was running");
                     }
+                    if (coordinator.WeatherHoldScenario is "safety-exposure" or "roof-exposure")
+                    {
+                        using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        while (!camera.GetInfo().IsExposing && !executing.IsCompleted) await Task.Delay(50, dispatchDeadline.Token);
+                        if (executing.IsCompleted) throw new InvalidDataException("Weather test never entered native exposure.");
+                        var roof = coordinator.WeatherHoldScenario == "roof-exposure";
+                        if (roof) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close."); }
+                        else safetySimulator.IsSafe = false;
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+                        while (!executing.IsCompleted && !sessionContainer.Display.Phase.Contains("hold; waiting", StringComparison.Ordinal))
+                            await Task.Delay(50, deadline.Token);
+                        if (executing.IsCompleted) { await executing; throw new InvalidDataException("Exposure interruption ended the session."); }
+                        if (camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled
+                            || !AcquisitionLease.IsActive || roof && telescope.GetInfo().AtPark)
+                            throw new InvalidDataException("Exposure weather hold did not stop equipment safely.");
+                        var journal = Path.Combine(service.LastRunDirectory!, "journal");
+                        var interruptedCapture = Directory.GetFiles(journal, "*.json", SearchOption.AllDirectories).Select(CaptureJournal.Read).Single();
+                        if (interruptedCapture.Phase != CapturePhase.Failed || interruptedCapture.SavedPath is not null)
+                            throw new InvalidDataException("Canceled native exposure was not settled as a spent failed attempt.");
+                        await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                        var cleared = System.Diagnostics.Stopwatch.StartNew();
+                        if (roof) { if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen."); }
+                        else safetySimulator.IsSafe = true;
+                        while (!executing.IsCompleted && !camera.GetInfo().IsExposing) await Task.Delay(50, deadline.Token);
+                        if (executing.IsCompleted || cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds))
+                            throw new InvalidDataException("Safe/Open did not resume a fresh exposure after stability.");
+                        await executing.WaitAsync(deadline.Token);
+                        var settled = Directory.GetFiles(journal, "*.json", SearchOption.AllDirectories).Select(CaptureJournal.Read).ToArray();
+                        if (settled.Length != 4 || settled.Count(x => x.Phase == CapturePhase.Failed) != 1
+                            || settled.Count(x => x.Phase == CapturePhase.Saved && File.Exists(x.SavedPath)) != 3
+                            || settled.Select(x => x.Intent.CaptureId).Distinct().Count() != 4
+                            || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled || AcquisitionLease.IsActive
+                            || sessionHookEvents.Count(x => x == "AfterEachExposure") != 3)
+                            throw new InvalidDataException("Weather resume replayed/refunded an exposure or skipped fresh saved-image hooks/shutdown.");
+                        await coordinator.EndOutageAsync(root, lifetime.Token);
+                        var checkIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
+                        var replay = await checkIn.RunAsync(null, lifetime.Token);
+                        if (!replay.CaughtUp || replay.AcknowledgedThrough != 8 || (await checkIn.RunAsync(null, lifetime.Token)).DeliveredEvents != 0)
+                            throw new InvalidDataException("Interrupted and resumed captures did not batch replay exactly once.");
+                        ledger = service.LastLedger;
+                        captures.AddRange(settled.Where(x => x.Phase == CapturePhase.Saved));
+                        unsafeCancellationVerified = !roof;
+                        enclosureCancellationVerified = roof;
+                        await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), "Interrupted exposure consumed; fresh captures resumed after stable Safe/Open; batch replay verified", lifetime.Token);
+                        Step("Weather/roof interrupted exposure settled without refund; fresh native captures resumed offline and replayed once");
+                        return;
+                    }
                     if (coordinator.EnclosureClosure)
                     {
                         using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -554,7 +634,7 @@ public sealed class SimulatorSequence : SequenceItem
                             || !telescope.GetInfo().AtPark || !sessionHookEvents.Contains("BeforeWait")))
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Moon avoidance did not retain a parked waiting session.");
-                        if (coordinator.WeatherHoldScenario is not null) await VerifyWeatherHold();
+                        if (coordinator.WeatherHoldScenario is not null && !startupHold) await VerifyWeatherHold();
                         if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
                         else
                         {
@@ -571,6 +651,7 @@ public sealed class SimulatorSequence : SequenceItem
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
+                        if (coordinator.WeatherHoldScenario == "safety-workload") await VerifyWeatherHold();
                         if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
                         else
                         {
@@ -590,22 +671,24 @@ public sealed class SimulatorSequence : SequenceItem
                 async Task VerifyNightEnd()
                 {
                     await executing.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
-                    if (!followingStepRan || sessionContainer.Status != SequenceEntityStatus.FINISHED || !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled
+                    if (!followingStepRan || sessionContainer.Status != SequenceEntityStatus.FINISHED
+                        || coordinator.WeatherHoldScenario != "roof-startup-night-end" && !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled
                         || camera.GetInfo().IsExposing || AcquisitionLease.IsActive || publicLifetime.IsCancellationRequested
                         || sessionHookEvents.Contains("AfterTargetComplete")
-                        || sessionContainer.Display.Phase != (coordinator.WeatherHoldScenario == "roof-night-end"
+                        || sessionContainer.Display.Phase != (coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end"
                             ? "Night ended; tracking off; enclosure blocks parking" : "Night ended; parked"))
                         throw new InvalidDataException("Night end did not park, release ownership and execute the following native sequence step.");
                     await File.WriteAllTextAsync(Path.Combine(run, "night-end-verified.txt"), coordinator.NightEndScenario, lifetime.Token);
-                    Step("Normal night end parked and ran the following native sequence step without cancellation");
+                    Step("Normal night end stopped equipment and ran the following native sequence step without cancellation");
                     // The later duplicate-launch test needs fresh admission
                     // evidence so it reaches the allocation replay guard.
-                    if (coordinator.WeatherHoldScenario == "roof-night-end"
+                    if (coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end"
                         && !await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen after night-end verification.");
                 }
                 async Task VerifyWeatherHold()
                 {
                     var roof = coordinator.UsesEnclosure;
+                    var idle = coordinator.WeatherHoldScenario == "safety-workload";
                     Step(roof ? "Closing simulator roof during offline target wait" : "Making simulator weather unsafe during offline target wait");
                     if (roof)
                     {
@@ -637,10 +720,10 @@ public sealed class SimulatorSequence : SequenceItem
                             await Task.Delay(50, deadline.Token);
                         var cleared = System.Diagnostics.Stopwatch.StartNew();
                         await Clear();
-                        while (!executing.IsCompleted && !sessionContainer.ActionHistory.Any(x => x.Outcome == "Weather cleared; selecting fresh work"))
+                        while (!executing.IsCompleted && !sessionContainer.ActionHistory.Any(x => x.Outcome == (idle ? "Weather cleared; requesting fresh work" : "Weather cleared; selecting fresh work")))
                             await Task.Delay(50, deadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Weather hold ended the observing session.");
-                        if (cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds) || !sessionHookEvents.Contains("AfterWait"))
+                        if (cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds) || !idle && !sessionHookEvents.Contains("AfterWait"))
                             throw new InvalidDataException("Weather hold resumed before stable clearance or skipped the interrupted wait hook.");
                         Step("Stable Safe/Open resumed fresh local selection; flapping reset the delay");
                     }
@@ -1005,7 +1088,7 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : coordinator?.WeatherHoldScenario == "roof-startup-night-end" ? File.Exists(Path.Combine(run, "weather-hold-verified.txt")) && File.Exists(Path.Combine(run, "night-end-verified.txt")) : captures.Count == 3),
                 enclosureCancellationVerified,
                 nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
                 nativeFailureVerified,

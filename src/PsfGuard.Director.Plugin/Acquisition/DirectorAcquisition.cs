@@ -140,6 +140,19 @@ public sealed class DirectorAcquisition
         var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
+        using var owner = new AcquisitionLease(LocalStateRoot);
+        var firstAllocation = true;
+        do
+        {
+            token.ThrowIfCancellationRequested();
+            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, token);
+            firstAllocation = false;
+            if (!more) break;
+        } while (container.Options.AutomaticWorkloads);
+    }
+
+    private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, AcquisitionLease owner, CancellationToken token)
+    {
         if (container.Options.CheckInAtStart)
         {
             using var checkInDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -149,23 +162,17 @@ public sealed class DirectorAcquisition
                 container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
                 var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
                 { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" }));
-                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunAsync(updates, checkInDeadline.Token);
+                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, updates, checkInDeadline.Token);
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
             catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
             { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
         }
-        using var owner = new AcquisitionLease(LocalStateRoot);
-        do
-        {
-            token.ThrowIfCancellationRequested();
-            if (!await ExecuteAllocationAsync(container, progress, owner, night, window, token)) break;
-        } while (container.Options.AutomaticWorkloads);
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, CancellationToken token)
     {
         var options = container.Options.Clone();
         var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
@@ -196,16 +203,15 @@ public sealed class DirectorAcquisition
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
-        using (var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
+        if (!weatherHolds)
         {
+            using var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             fresh.CancelAfter(TimeSpan.FromSeconds(15));
             while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
                 await Task.Delay(100, fresh.Token);
         }
-        interlock.Arm();
-        enclosure.Arm();
-        // Before an allocation is launched there is no settled ledger to resume.
-        void Interrupt() { if (!weatherHolds || !Volatile.Read(ref launched)) lifetime.Cancel(); }
+        if (!weatherHolds) { interlock.Arm(); enclosure.Arm(); }
+        void Interrupt() { if (!weatherHolds) lifetime.Cancel(); }
         using var safetyCancellation = interlock.Interrupted.Register(Interrupt);
         using var enclosureCancellation = enclosure.Interrupted.Register(Interrupt);
         using var operations = new NinaOperationLifetime(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
@@ -226,6 +232,11 @@ public sealed class DirectorAcquisition
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
         await runtime.StartAsync(rig, lifetime.Token);
+        Action recoveryCheck = CheckIdleContext;
+        NinaSessionRecovery? recovery = recoveryRequired
+            ? new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
+                () => recoveryCheck(), message => Report(message, null), TimeProvider.System) : null;
+        var mountShutdown = new NinaMountShutdown();
         if (recoveryRequired)
         {
             var prior = (await runtime.ReadRecoveryAsync(lifetime.Token)).Value
@@ -239,47 +250,186 @@ public sealed class DirectorAcquisition
         using var previews = new CoordinatorProgramClient(endpoint, Credential, connection.AllowInsecureHttp);
         if (window.Ended) return await FinishIdleNightAsync();
         CoordinatorAllocation allocation;
-        if (options.AutomaticWorkloads)
+        try
         {
-            while (true)
-            {
-                lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
-                if (profiles.ActiveProfile.Id != profile || equipmentReader.Read(equipmentBinding).Id != configuration.Id
-                    || constraintsReader.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision
-                    || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
-                    throw new InvalidOperationException("Workload request context changed.");
-                if (window.Ended) return await FinishIdleNightAsync();
-                try
+            if (recovery is not null) await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
+            if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
+            // Native interlocks own cancellation before any network wait. Batch
+            // receipts are idempotent if weather interrupts this initial replay.
+            if (firstAllocation)
+                while (true)
                 {
-                    Report("Requesting commissioned work", "Online");
-                    var result = await workloads.RequestAsync(lifetime.Token);
-                    if (result.Allocation is not null) { allocation = result.Allocation; break; }
-                    Report("Waiting for eligible work or quality assessment", "Online");
-                    await window.WaitAsync(TimeSpan.FromSeconds(result.RetryAfterSeconds), lifetime.Token);
+                    try { await CheckInSavedRunsAsync(container, window, owner, operations.Token); break; }
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
+                    { if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync(); }
                 }
-                catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+            if (window.Ended) return await FinishIdleNightAsync();
+            if (options.AutomaticWorkloads)
+            {
+                while (true)
                 {
-                    Report("Offline; waiting for workload authority", "Offline");
-                    await window.WaitAsync(TimeSpan.FromSeconds(30), lifetime.Token);
+                    lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
+                    CheckIdleContext();
+                    if (window.Ended) return await FinishIdleNightAsync();
+                    if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
+                    try
+                    {
+                        Report("Requesting commissioned work", "Online");
+                        var result = await workloads.RequestAsync(operations.Token);
+                        if (result.Allocation is not null) { allocation = result.Allocation; break; }
+                        Report("Waiting for eligible work or quality assessment", "Online");
+                        await WaitIdleAsync(TimeSpan.FromSeconds(result.RetryAfterSeconds));
+                    }
+                    catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+                    {
+                        Report("Offline; waiting for workload authority", "Offline");
+                        await WaitIdleAsync(TimeSpan.FromSeconds(30));
+                    }
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
+                    {
+                        if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
+                    }
                 }
             }
+            else
+            {
+                Report("Reading issued allocation", "Online");
+                while (true)
+                {
+                    try { allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, operations.Token); break; }
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
+                    { if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync(); }
+                }
+            }
+            // A slow coordinator response cannot start a grant after the night.
+            // Leave that unstarted grant outstanding; never report it as completed.
+            if (window.Ended) return await FinishIdleNightAsync();
+            if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
         }
-        else
+        catch (Exception error)
         {
-            Report("Reading issued allocation", "Online");
-            allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, lifetime.Token);
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var errors = new List<Exception> { error };
+            try { await StopIdleEquipmentAsync(cleanup.Token); }
+            catch (Exception stopError) { errors.Add(stopError); }
+            try { if (recovery?.Record is not null) await recovery.StopAsync(cleanup.Token); }
+            catch (Exception recordError) { errors.Add(recordError); }
+            if (errors.Count == 1 && options.OnAbort == DirectorAbortPolicy.ParkMount
+                && enclosure.Read().Motion == RecoveryMotion.Permitted && mountShutdown.CanResumeWeather)
+            {
+                RecoveryIssued? permit = null;
+                try
+                {
+                    permit = recovery is null ? null : await recovery.BeginParkAsync(cleanup.Token);
+                    enclosure.Arm();
+                    await mountShutdown.ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, enclosure.Read,
+                        enclosure.Interrupted, progress, cleanup.Token);
+                    if (permit is not null) await recovery!.FinishParkAsync(permit, RecoveryParkResult.Parked, cleanup.Token);
+                }
+                catch (Exception parkError)
+                {
+                    errors.Add(parkError);
+                    if (permit is not null)
+                        try { await recovery!.FinishParkAsync(permit, RecoveryParkResult.Uncertain, cleanup.Token); }
+                        catch (Exception recordError) { errors.Add(recordError); }
+                }
+            }
+            Report("Workload admission stopped; review required", null);
+            if (errors.Count > 1) throw new AggregateException("Workload admission and shutdown failed.", errors);
+            throw;
         }
-        // A slow coordinator response cannot start a grant after the night.
-        // Leave that unstarted grant outstanding; never report it as completed.
-        if (window.Ended) return await FinishIdleNightAsync();
+
+        void CheckIdleContext()
+        {
+            lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
+            if (profiles.ActiveProfile.Id != profile || runtime.Status.State != RuntimeState.Ready
+                || equipmentReader.Read(equipmentBinding).Id != configuration.Id
+                || constraintsReader.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision
+                || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
+                throw new InvalidOperationException("Workload request context changed.");
+        }
+        async Task WaitIdleAsync(TimeSpan duration)
+        {
+            var end = DateTimeOffset.UtcNow + duration;
+            while (!window.Ended && DateTimeOffset.UtcNow < end)
+            {
+                CheckIdleContext();
+                if (weatherHolds && !await AdmitIdleWeatherAsync()) return;
+                await window.WaitAsync(TimeSpan.FromMilliseconds(250), lifetime.Token);
+            }
+        }
+        async Task StopIdleEquipmentAsync(CancellationToken ct)
+        {
+            await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, ct);
+            using var stopped = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            stopped.CancelAfter(TimeSpan.FromSeconds(15));
+            if (guider?.GetInfo().Connected == true)
+            {
+                if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
+                    || !await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
+                    throw new InvalidOperationException("Guider stop could not be confirmed.");
+            }
+        }
+        async Task<bool> AdmitIdleWeatherAsync()
+        {
+            CheckIdleContext();
+            if (window.Ended) return false;
+            var clear = interlock.ReadCurrent().Safety == PlannerSafety.Safe && enclosure.ReadCurrent().Motion == RecoveryMotion.Permitted;
+            if (clear && recovery!.Record!.Snapshot.Phase is RecoveryPhase.Acquiring
+                && !interlock.Interrupted.IsCancellationRequested && !enclosure.Interrupted.IsCancellationRequested)
+            { interlock.Arm(); enclosure.Arm(); return true; }
+            Report("Weather/roof hold; stopping idle equipment", null);
+            await StopIdleEquipmentAsync(lifetime.Token);
+            await recovery!.InterruptWeatherAsync(enclosure.ReadCurrent().Motion != RecoveryMotion.Permitted, lifetime.Token);
+            if (camera.GetInfo().IsExposing || !mountShutdown.CanResumeWeather)
+                throw new InvalidOperationException("Idle weather hold requires quiescent equipment.");
+            if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
+            {
+                enclosure.Arm();
+                await mountShutdown.ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, enclosure.Read,
+                    enclosure.Interrupted, progress, lifetime.Token);
+            }
+            var safetyRevision = interlock.RefusalRevision;
+            var enclosureRevision = enclosure.RefusalRevision;
+            while (true)
+            {
+                CheckIdleContext();
+                if (window.Ended) return false;
+                if (safetyRevision != interlock.RefusalRevision || enclosureRevision != enclosure.RefusalRevision)
+                    await recovery.InterruptWeatherAsync(enclosureRevision != enclosure.RefusalRevision, lifetime.Token);
+                safetyRevision = interlock.RefusalRevision; enclosureRevision = enclosure.RefusalRevision;
+                await recovery.ObserveWeatherAsync(lifetime.Token);
+                if (recovery.Record!.Snapshot.Phase is not RecoveryPhase.WeatherHolding held)
+                    throw new InvalidOperationException("Idle weather hold exhausted its observing-night budget.");
+                var remaining = held.StableSinceMs is { } since ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
+                container.UpdateDisplay(d => d with
+                {
+                    Operation = "",
+                    WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used"
+                });
+                Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                if (held.StableSinceMs is not null && remaining <= 0)
+                {
+                    NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
+                    await recovery.ResumeWeatherAsync(lifetime.Token, idle: true);
+                    interlock.Rearm(safetyRevision); enclosure.Rearm(enclosureRevision);
+                    operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
+                    container.UpdateDisplay(d => d with { WaitReason = "-" });
+                    Report("Weather cleared; requesting fresh work", null);
+                    return true;
+                }
+                await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
+            }
+        }
 
         async Task<bool> FinishIdleNightAsync()
         {
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var motionBlocked = weatherHolds && enclosure.Read().Motion != RecoveryMotion.Permitted;
             NinaSessionRecovery? endingRecovery = recoveryRequired
                 ? new(runtime, options, () => new(interlock.Read().Safety, enclosure.Read().Motion), () => { }, _ => { }, TimeProvider.System) : null;
             var errors = new List<Exception>();
-            try { if (endingRecovery is not null) await endingRecovery.EndNightAsync(cleanup.Token, night); }
+            try { if (endingRecovery is not null) await endingRecovery.EndNightAsync(cleanup.Token, night, motionBlocked); }
             catch (Exception error) { errors.Add(error); }
             try
             {
@@ -293,7 +443,8 @@ public sealed class DirectorAcquisition
             catch (Exception error) { errors.Add(error); }
             try
             {
-                await new NinaMountShutdown().ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!,
+                if (motionBlocked) await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, cleanup.Token);
+                else await mountShutdown.ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!,
                     enclosure.Read, enclosure.Interrupted, progress, cleanup.Token);
                 if (permit is not null) await endingRecovery!.FinishParkAsync(permit, RecoveryParkResult.Parked, cleanup.Token);
             }
@@ -306,7 +457,7 @@ public sealed class DirectorAcquisition
             }
             if (errors.Count != 0) throw new AggregateException("Night-end shutdown failed; review required.", errors);
             lifetime.Token.ThrowIfCancellationRequested();
-            Report("Night ended; parked", null);
+            Report(motionBlocked ? "Night ended; tracking off; enclosure blocks parking" : "Night ended; parked", null);
             return false;
         }
 
@@ -326,7 +477,6 @@ public sealed class DirectorAcquisition
         new CoordinatorAllocationCache(runRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, connection.AllowInsecureHttp)
             .Store(allocation, Now());
         LastRunDirectory = runRoot;
-        NinaSessionRecovery? recovery = null;
         Task? watchdog = null;
         Task? constraintWatchdog = null;
         Task? telemetryTask = null;
@@ -346,25 +496,17 @@ public sealed class DirectorAcquisition
         var released = false;
         var priorityRefresh = 0;
         var terminalFailed = false;
-        var mountShutdown = new NinaMountShutdown();
         var archive = new CoordinatorRunArchive(runRoot, endpoint, pairing.Binding, pairing.ClientId, connection.AllowInsecureHttp);
         try
         {
             Check();
             if (recoveryRequired)
             {
-                recovery = new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
-                    () =>
+                recoveryCheck = () =>
                     {
                         Check(); CheckPointing(); if (camera.GetInfo().IsExposing || telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
                             throw new InvalidOperationException("Equipment is not quiescent for recovery.");
-                    },
-                    message =>
-                    {
-                        Report(message, null); container.UpdateDisplay(d => d with
-                        { WaitReason = recovery?.Record?.Snapshot.Phase is RecoveryPhase.Holding ? message : "-" });
-                    }, TimeProvider.System);
-                await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
+                    };
                 if (native is not null && options.RetryFocusAndGuiding)
                 {
                     native.Recovery = recovery;
@@ -372,6 +514,7 @@ public sealed class DirectorAcquisition
                 }
             }
             var snapshot = Snapshot();
+            owner.BeginExecution();
             var ledger = Require(await runtime.OpenGeometryAsync(program, snapshot.Constraints, snapshot.State, lifetime.Token));
             LastLedger = ledger;
             archive.Store(new(allocation.Envelope, snapshot.Constraints, snapshot.State, ledger,
@@ -388,11 +531,12 @@ public sealed class DirectorAcquisition
             var hooks = new NinaSessionHooks(container, TimeProvider.System, native is null ? null : native.ConfigureTargetSetup);
             native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
-            var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
+            using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
                 TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
+            var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
@@ -553,7 +697,14 @@ public sealed class DirectorAcquisition
                     captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
                         + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
                     try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
-                    catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
+                    catch
+                    {
+                        // If the adapter did not report the failure, a native
+                        // trigger may have been interrupted before/after it.
+                        interruptedSequenceTrigger = exposure.ExecutionError is null;
+                        container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile");
+                        throw;
+                    }
                     var evidence = exposure.Evidence;
                     if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
                     Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
@@ -591,10 +742,32 @@ public sealed class DirectorAcquisition
                     }
                 }
                 await recovery.InterruptWeatherAsync(roof, lifetime.Token);
+                string? lateSavedCapture = null;
+                var unresolved = Require(await runtime.FindUnresolvedAttemptAsync(lifetime.Token)).Attempt;
+                if (unresolved is not null)
+                {
+                    Report("Weather hold; settling interrupted exposure", null);
+                    var settled = await adapter.ReconcileInterruptedAsync(unresolved.CaptureId, lifetime.Token);
+                    if (settled is null || settled.Intent.Program is null || settled.Intent.Program.LedgerId != LastLedger?.LedgerId
+                        || settled.Intent.GoalId != unresolved.GoalId || unresolved.Evidence is not LedgerEvidence.Reserved)
+                        throw new InvalidOperationException("Interrupted exposure has no live, matching settlement evidence.");
+                    LedgerEvidence outcome = settled.Phase switch
+                    {
+                        CapturePhase.Saved => new LedgerEvidence.Saved(unresolved.CaptureId, checked((ulong)Math.Ceiling(settled.TotalMs!.Value))),
+                        CapturePhase.Failed or CapturePhase.Interrupted => new LedgerEvidence.Failed("interrupted_capture_not_saved"),
+                        _ => throw new InvalidOperationException("Interrupted exposure remains uncertain.")
+                    };
+                    Require(await runtime.RecordAsync(unresolved.CaptureId, outcome, lifetime.Token));
+                    adapter.AcknowledgeInterrupted(unresolved.CaptureId);
+                    QueueCheckIn(refreshPriority: false);
+                    if (settled.Phase == CapturePhase.Saved) lateSavedCapture = unresolved.CaptureId;
+                    container.RecordAction(target?.Name ?? "", "Exposure", settled.Phase == CapturePhase.Saved
+                        ? "Late save confirmed; pending assessment" : "Interrupted; attempt consumed without saved image");
+                }
                 var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
                 if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
                 await EnsureSettledAsync(runtime, lifetime.Token);
-                if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
+                if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || interruptedSequenceTrigger || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
                     throw new InvalidOperationException("Weather interruption requires operation or sequence-hook reconciliation; automatic resume is blocked.");
                 if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
                     await Park(lifetime.Token);
@@ -620,12 +793,14 @@ public sealed class DirectorAcquisition
                     container.UpdateDisplay(d => d with { WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used" });
                     if (held.StableSinceMs is not null && remaining <= 0)
                     {
+                        NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
                         await recovery.ResumeWeatherAsync(lifetime.Token);
                         interlock.Rearm(safetyRevision);
                         enclosure.Rearm(enclosureRevision);
                         operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
                         previousPointing = null;
                         filterCounts.Clear();
+                        if (lateSavedCapture is not null) await hooks.ExposureSavedAsync(lateSavedCapture, progress, operations.Token);
                         await hooks.ReenterAfterWeatherAsync(progress, operations.Token);
                         container.UpdateDisplay(d => d with { WaitReason = "-" });
                         Report("Weather cleared; selecting fresh work", null);

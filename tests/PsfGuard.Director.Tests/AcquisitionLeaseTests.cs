@@ -7,6 +7,47 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class AcquisitionLeaseTests
 {
+    [Fact]
+    public void StartupReplayBorrowsOnlyTheIdleOwnerAndCannotOverlapExecution()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var lease = new AcquisitionLease(root);
+            Assert.Throws<InvalidOperationException>(() => lease.EnterReplay(root + "-other"));
+            using (lease.EnterReplay(root))
+            {
+                Assert.Throws<InvalidOperationException>(lease.BeginExecution);
+                Assert.Throws<InvalidOperationException>(lease.Dispose);
+                Assert.Throws<InvalidOperationException>(() => lease.EnterReplay(root));
+                Assert.Throws<InvalidOperationException>(() => new AcquisitionLease(root));
+            }
+            Assert.True(AcquisitionLease.IsActive);
+            lease.CheckClock();
+            lease.BeginExecution();
+            Assert.Throws<InvalidOperationException>(() => lease.EnterReplay(root));
+            lease.Dispose();
+            Assert.Throws<ObjectDisposedException>(() => lease.EnterReplay(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task StartupReplayWithNoArchiveRetainsItsCallersLease()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var lease = new AcquisitionLease(root);
+            var result = await CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(lease, root, "unused", new Uri("https://example.invalid"),
+                new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), _ => ValueTask.FromResult<string?>(null));
+            Assert.Equal(0, result.Runs);
+            Assert.True(AcquisitionLease.IsActive);
+            Assert.Throws<InvalidOperationException>(() => new AcquisitionLease(root));
+            lease.BeginExecution();
+        }
+        finally { Directory.Delete(root, true); }
+    }
     private sealed class BrokenClock : TimeProvider { public override long GetTimestamp() => throw new InvalidOperationException("Clock unavailable"); }
 
     [Fact]

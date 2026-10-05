@@ -183,7 +183,7 @@ These screenshots show an unarmed simulator profile in NINA 3.3.0.1065.
 ## Weather and Roof Holds
 
 In **Director Session > Session > Weather and roof**, select **Hold and resume**
-to keep a launched allocation alive through weather or enclosure interruptions.
+to keep the observing night alive through weather or enclosure interruptions.
 **Stop for the night** remains the default. Set the continuous Safe/Open delay
 (default 300 seconds), cumulative hold limit (360 minutes), and maximum
 interruptions per night (10). Rust persists these limits with the observing night;
@@ -204,11 +204,28 @@ canceled. Resume creates a new token generation, asks Rust for fresh work, and
 re-enters target setup. Interrupted idle waits run their After Wait hook once
 after readmission; interrupted user hooks cannot be replayed.
 
-This increment resumes settled boundaries, including offline target waits. It
-does not automatically reconcile a canceled exposure, uncertain preparation or
-user hook; those stop with reconciliation required. Startup and between-allocation
-workload admission still require safe/open conditions and are not resumable
-weather holds. Restart readmission, cloud classification and probes remain
+The live capture owner also settles interrupted exposures before readmission.
+An invocation that ended before queuing a save can consume its attempt as failed
+once the same camera is connected and quiescent. This does not claim the sensor
+never exposed and never refunds or replays that attempt. A queued save instead
+requires an exact NINA image ID and Director capture ID receipt, within the save
+timeout; a late saved frame remains pending assessment. Its After Each Exposure
+hook runs only after stable Safe/Open readmission.
+
+Every weather readmission also requires the bound camera driver to report Idle.
+NINA's cleared exposure flag alone is not confirmation. Drivers that report an
+unknown state cannot automatically resume; they require operator reconciliation.
+
+Missing files, a restarted process, uncertain preparation, and interrupted user
+hooks or native triggers remain reconciliation-required, not automatic retries.
+Startup and between-allocation waits use the same persisted weather budget.
+They stop native motion/guiding, remain bounded by the original night deadline,
+and request work only after continuous Safe/Open clearance. Runtime 0.12.1
+allows idle readmission only with exclusively leased, unused execution storage;
+an unopened historical ledger does not qualify. No idle resume grants a capture
+or preparation permit. Coordinator requests are interrupted when weather changes.
+
+Restart readmission, cloud classification and probes remain
 unfinished. Hold status and spent limits appear in Session/Activity and live
 telemetry when connected; the separate recovery journal remains local.
 

@@ -1,5 +1,60 @@
 # Real N.I.N.A. smoke test
 
+## Live Capture and Idle Weather Recovery
+
+2026-10-05: packaged Director with verified runtime 0.12.1 / IPC 12,
+NINA 3.3.0.1065, ASCOM OmniSim and private PSF Guard built from `ec23f0e`.
+Runtime artifact workflow `37387739516` passed all native platforms. These runs
+extend the initial settled-boundary validation below:
+
+- `-PublicAcquisition -PublicUnsafe -WeatherHoldScenario safety-exposure`
+  passed at `3ef8433`, including the final bound-driver Idle guard. Unsafe weather
+  aborts the exposure, confirms tracking-off and parks. Stable Safe evidence
+  permits fresh target setup and three new exposures while the server is offline.
+  The failed attempt is not refunded; all eight events replay once after recovery.
+  Evidence: `artifacts/nina-smoke-adcb7ac2248947acbe333e276c632cc7/probe/a56e82f2aefb4d7b84a678fb7178a7f2/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance -NightEndScenario
+  target-wait -WeatherHoldScenario roof-startup` passed at `3ef8433`. Closed-roof
+  startup admits no ledger. Stable reopening admits fresh work, takes images and
+  retains local Moon avoidance. The original night deadline runs the following
+  native sequence step; saved evidence batch-replays without duplicates.
+  Evidence: `artifacts/nina-smoke-c294b84b0abc463eac0232cc48af4c09/probe/39eb82ddcaf44d04b63ae2d33590fe10/result.json`.
+- `-PublicAcquisition -EnclosureClosure -WeatherHoldScenario roof-exposure`
+  passed at plugin `2576915`. Closure aborts the active exposure and stops motion
+  without parking under the roof. Stable reopening restores target setup and
+  takes three fresh exposures. The failed attempt remains spent: four attempts,
+  three saved hooks and eight ledger events. Batch replay is duplicate-free.
+  Evidence: `artifacts/nina-smoke-13383c5651a14254a55aa49f1c672778/probe/bb4445b2e04e49db9f57bbea9eb9f481/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance -NightEndScenario
+  target-wait -WeatherHoldScenario roof-startup-night-end` passed at `1d37a87`.
+  A closed roof at startup admits no capture ledger or exposure. At the original
+  deadline, tracking is off, parking remains blocked and the following native
+  sequence step runs.
+  Evidence: `artifacts/nina-smoke-65493d5d6efb4654916945716cf4081b/probe/c142767f006c4a0383306bebf7a6afd2/result.json`.
+- `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads
+  -NightEndScenario workload-wait -WeatherHoldScenario safety-workload` passed
+  at `258be8f`. Startup batch replay retains the idle owner's equipment lease.
+  After acquisition/release, unsafe weather holds the next workload request;
+  flapping resets stability. Stable clearance resumes requests and normal night
+  end, with duplicate-free replay of the three saved frames.
+  Evidence: `artifacts/nina-smoke-b30b35e5cadd42a595b1b33a785d4537/probe/3f7a4efa32a8459789c1442147924772/result.json`.
+- Default-policy regression `-PublicAcquisition -PublicUnsafe` passed at
+  `3ef8433`. With holds disabled, unsafe weather aborts, parks and remains stopped
+  after Safe returns.
+  Evidence: `artifacts/nina-smoke-1b27c961ed0340109382d96f8146485d/probe/548ccc1ebaac405f822415f4ddce9123/result.json`.
+
+These fixtures use a 15-second stability interval; the product default is 300
+seconds. They do not prove crash readmission, cloud classification/probes or
+safe replay of arbitrary interrupted user hooks and native triggers. Those
+outcomes remain blocked. Live late-save identity, timeout, driver Idle and
+observer-disposal cases also have managed regression coverage.
+All 879 managed tests passed. Development packaging completed with zero warnings
+or errors; format verification, runtime-fetch regressions and `git diff --check`
+passed. The native harness rendered the editors and checked their layout at
+640 and 1000 pixels. The 640-pixel Session render was also visually reviewed.
+These renders use unarmed default settings with the recorded live status, not
+the armed fixture's acquisition configuration.
+
 ## Weather and Roof Holds
 
 2026-10-05: packaged Director, runtime 0.12.0 / IPC 12, NINA 3.3.0.1065,
