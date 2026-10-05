@@ -26,11 +26,13 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     private Task<string>? pendingSave;
     private Action? detachSave;
     private long interruptedStarted, interruptedDownloaded;
+    private bool disposed;
 
     // Only the live owner can prove that its invocation ended before enqueue.
     // A journal recovered after a crash deliberately has no such authority.
     internal async Task<CaptureEvidence?> ReconcileInterruptedAsync(string captureId, CancellationToken token)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         if (!await captureGate.WaitAsync(0, token).ConfigureAwait(false))
             throw new InvalidOperationException("Capture invocation has not settled.");
         try
@@ -80,12 +82,14 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         finally { captureGate.Release(); }
     }
 
-    public void Dispose() => Interlocked.Exchange(ref detachSave, null)?.Invoke();
+    private void DetachSaveObservers() => Interlocked.Exchange(ref detachSave, null)?.Invoke();
+    public void Dispose() { disposed = true; DetachSaveObservers(); }
 
     internal async Task<CaptureEvidence> CaptureAsync(CaptureIntent intent,
         Func<CancellationToken, Task<Action>> revalidateAtDispatch,
         IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(revalidateAtDispatch);
         CaptureJournal.Validate(intent);
         if (saveTimeout <= TimeSpan.Zero || saveTimeout > TimeSpan.FromHours(1))
@@ -283,7 +287,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         if (interrupted?.Evidence.Intent.CaptureId.ToString("D") != captureId
             || interrupted.Evidence.Phase is not (CapturePhase.Saved or CapturePhase.Failed or CapturePhase.Interrupted))
             throw new InvalidOperationException("Interrupted capture has no settled outcome.");
-        Dispose();
+        DetachSaveObservers();
         pendingSave = null;
         interrupted = null;
     }

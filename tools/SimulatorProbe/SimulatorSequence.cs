@@ -679,7 +679,7 @@ public sealed class SimulatorSequence : SequenceItem
                             ? "Night ended; tracking off; enclosure blocks parking" : "Night ended; parked"))
                         throw new InvalidDataException("Night end did not park, release ownership and execute the following native sequence step.");
                     await File.WriteAllTextAsync(Path.Combine(run, "night-end-verified.txt"), coordinator.NightEndScenario, lifetime.Token);
-                    Step("Normal night end parked and ran the following native sequence step without cancellation");
+                    Step("Normal night end stopped equipment and ran the following native sequence step without cancellation");
                     // The later duplicate-launch test needs fresh admission
                     // evidence so it reaches the allocation replay guard.
                     if (coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end"

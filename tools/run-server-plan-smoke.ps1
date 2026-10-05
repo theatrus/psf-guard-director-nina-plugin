@@ -134,15 +134,16 @@ try {
     }
     if (!$result) { throw "No simulator result; inspect $($started.TestRoot)" }
     $evidence = Get-Content -LiteralPath $result.FullName -Raw | ConvertFrom-Json
-    if (!$evidence.passed -or ((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
+    $idleNightEnd = $WeatherHoldScenario -eq 'roof-startup-night-end'
+    if (!$evidence.passed -or (!$idleNightEnd -and (!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn -and (!$stopped -or !$resumed)) -or !$evidence.program_revision -or !$evidence.live_status_verified) {
         throw "Server-plan smoke failed; inspect $($result.FullName)"
     }
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     if ($NightEndScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'night-end-verified.txt'))) { throw 'Normal night end and following native sequence step were not verified.' }
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
     if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
-    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
-    if ($MoonAvoidance -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
+    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
+    if ($MoonAvoidance -and !$idleNightEnd -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
     if ($ObservingPreferences -and !$evidence.observing_preferences_verified) { throw 'Weighted observing preferences did not change native target order.' }
     if ($ProjectOrder -and !$evidence.project_order_verified) { throw 'Ranked project execution was not verified.' }
     if ($PriorityRefresh -and !$evidence.priority_refresh_verified) { throw 'Safe-boundary priority handoff was not verified.' }
