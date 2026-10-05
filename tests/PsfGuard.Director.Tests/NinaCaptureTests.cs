@@ -286,6 +286,31 @@ public sealed partial class NinaCaptureTests
     }
 
     [Fact]
+    public async Task ReplacementOwnerCannotInferSettlementFromAnExistingJournal()
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .ThrowsAsync(new OperationCanceledException());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run());
+        f.DisposeAdapter();
+        using var replacement = new NinaCaptureAdapter(Mock.Of<IProfileService>(), Mock.Of<ICameraMediator>(),
+            f.Imaging.Object, f.Saves.Object, Mock.Of<IImageHistoryVM>(), f.Root, TimeSpan.FromSeconds(1), f.Clock);
+        Assert.Null(await replacement.ReconcileInterruptedAsync(f.Intent.CaptureId.ToString("D"), default));
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+    }
+
+    [Fact]
+    public async Task ReconciliationCannotRaceAnActiveCapture()
+    {
+        using var f = new Fixture();
+        var run = f.Run();
+        await f.Enqueued.Task;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reconcile());
+        f.Saved();
+        await run;
+    }
+
+    [Fact]
     public async Task MalformedSaveReceiptCannotClaimSaved()
     {
         using var f = new Fixture();

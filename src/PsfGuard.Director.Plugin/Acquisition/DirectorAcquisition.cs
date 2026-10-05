@@ -385,12 +385,18 @@ public sealed class DirectorAcquisition
                 if (recovery.Record!.Snapshot.Phase is not RecoveryPhase.WeatherHolding held)
                     throw new InvalidOperationException("Idle weather hold exhausted its observing-night budget.");
                 var remaining = held.StableSinceMs is { } since ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
+                container.UpdateDisplay(d => d with
+                {
+                    Operation = "",
+                    WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used"
+                });
                 Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
                 if (held.StableSinceMs is not null && remaining <= 0)
                 {
                     await recovery.ResumeWeatherAsync(lifetime.Token, idle: true);
                     interlock.Rearm(safetyRevision); enclosure.Rearm(enclosureRevision);
                     operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
+                    container.UpdateDisplay(d => d with { WaitReason = "-" });
                     Report("Weather cleared; requesting fresh work", null);
                     return true;
                 }
