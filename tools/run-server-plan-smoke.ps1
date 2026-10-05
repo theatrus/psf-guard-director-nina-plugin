@@ -20,7 +20,7 @@ param(
     [switch]$NativeImaging,
     [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
     [ValidateSet('workload-wait', 'target-wait')][string]$NightEndScenario,
-    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure')][string]$WeatherHoldScenario,
+    [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'safety-workload')][string]$WeatherHoldScenario,
     [switch]$ForceNativeFlip,
     [string]$Phd2Executable,
     [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
@@ -31,7 +31,8 @@ $ErrorActionPreference = 'Stop'
 if ($NightEndScenario -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $RecoveryScenario -or $ConstraintChange -or $EnclosureClosure -or $PriorityRefresh -or $DeferredCheckIn -or $OfflineWorkloadRelease)) { throw 'NightEndScenario requires safe public local scheduling without other fault scenarios.' }
 if ($NightEndScenario -eq 'workload-wait' -and (!$AutomaticWorkloads -or $MoonAvoidance)) { throw 'Workload night end requires automatic workloads without Moon avoidance.' }
 if ($NightEndScenario -eq 'target-wait' -and (!$MoonAvoidance -or $AutomaticWorkloads)) { throw 'Target-wait night end requires Moon avoidance without automatic workloads.' }
-if ($WeatherHoldScenario -and $WeatherHoldScenario -notlike '*-exposure' -and $NightEndScenario -ne 'target-wait') { throw 'Weather holds require the target-wait night-end fixture.' }
+if ($WeatherHoldScenario -eq 'safety-workload' -and $NightEndScenario -ne 'workload-wait') { throw 'Idle workload weather test requires workload-wait.' }
+if ($WeatherHoldScenario -and $WeatherHoldScenario -notlike '*-exposure' -and $WeatherHoldScenario -ne 'safety-workload' -and $NightEndScenario -ne 'target-wait') { throw 'Weather holds require the target-wait night-end fixture.' }
 if ($WeatherHoldScenario -eq 'safety-exposure' -and !$PublicUnsafe) { throw 'Safety exposure interruption requires PublicUnsafe.' }
 if ($WeatherHoldScenario -eq 'roof-exposure' -and !$EnclosureClosure) { throw 'Roof exposure interruption requires EnclosureClosure.' }
 if ($NativeImaging -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $ConstraintChange -or $PublicUnsafe -or $EnclosureClosure -or $PriorityRefresh)) { throw 'NativeImaging requires safe public local scheduling.' }

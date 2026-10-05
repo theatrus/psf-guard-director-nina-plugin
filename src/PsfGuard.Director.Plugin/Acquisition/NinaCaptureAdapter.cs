@@ -55,7 +55,9 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                     CheckLocalContext(journal.Evidence.Intent);
                     journal.Record(journal.Evidence with
                     {
-                        Phase = CapturePhase.Saved, SavedPath = path, UpdatedAt = clock.GetUtcNow(),
+                        Phase = CapturePhase.Saved,
+                        SavedPath = path,
+                        UpdatedAt = clock.GetUtcNow(),
                         ProcessingAndSaveMs = clock.GetElapsedTime(interruptedDownloaded).TotalMilliseconds,
                         TotalMs = clock.GetElapsedTime(interruptedStarted).TotalMilliseconds
                     });

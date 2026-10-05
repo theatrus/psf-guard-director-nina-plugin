@@ -377,7 +377,7 @@ public sealed class SimulatorSequence : SequenceItem
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 if (nativeProbe?.Flip is { } flipProbe) sessionContainer.AfterEachExposure.Add(flipProbe.SaveMarker());
-                if (coordinator.LocalTargetScheduling && !coordinator.NativeImaging)
+                if ((coordinator.LocalTargetScheduling || coordinator.WeatherHoldScenario is "safety-exposure" or "roof-exposure") && !coordinator.NativeImaging)
                     sessionContainer.BeforeNewTarget.Add(new NINA.Sequencer.SequenceItem.Telescope.SlewScopeToRaDec(telescope, guider) { Inherited = true });
                 var slowSetup = new SlowSetupProbe();
                 if (coordinator.ConstraintChange is not null) sessionContainer.BeforeNewTarget.Add(slowSetup);
@@ -394,9 +394,33 @@ public sealed class SimulatorSequence : SequenceItem
                     nightSequence.Add(sessionContainer);
                     nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
                 }
+                var startupHold = coordinator.WeatherHoldScenario is "safety-startup" or "roof-startup";
+                if (startupHold)
+                {
+                    if (coordinator.UsesEnclosure) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close before startup."); }
+                    else safetySimulator.IsSafe = false;
+                }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (startupHold)
+                    {
+                        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        startupDeadline.CancelAfter(TimeSpan.FromSeconds(90));
+                        while (!executing.IsCompleted && !sessionContainer.Display.Phase.Contains("waiting for Safe/Open before workload", StringComparison.Ordinal))
+                            await Task.Delay(50, startupDeadline.Token);
+                        if (executing.IsCompleted) { await executing; throw new InvalidDataException("Unsafe startup did not hold."); }
+                        if (service.LastLedger is not null || camera.GetInfo().IsExposing || telescope.GetInfo().TrackingEnabled || telescope.GetInfo().Slewing)
+                            throw new InvalidDataException("Unsafe startup admitted work or failed to stop equipment.");
+                        var cleared = System.Diagnostics.Stopwatch.StartNew();
+                        if (coordinator.UsesEnclosure) { if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen."); }
+                        else safetySimulator.IsSafe = true;
+                        while (!executing.IsCompleted && service.LastLedger is null) await Task.Delay(50, startupDeadline.Token);
+                        if (executing.IsCompleted || cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds))
+                            throw new InvalidDataException("Startup bypassed stability or failed to admit fresh work.");
+                        await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), "Startup held without a ledger; fresh work admitted only after stable Safe/Open", lifetime.Token);
+                        Step("Unsafe startup held before workload admission and resumed after stable Safe/Open");
+                    }
                     if (coordinator.NativeImagingFailure is { } fault)
                     {
                         Exception? failure = null;
@@ -602,7 +626,7 @@ public sealed class SimulatorSequence : SequenceItem
                             || !telescope.GetInfo().AtPark || !sessionHookEvents.Contains("BeforeWait")))
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Moon avoidance did not retain a parked waiting session.");
-                        if (coordinator.WeatherHoldScenario is not null) await VerifyWeatherHold();
+                        if (coordinator.WeatherHoldScenario is not null && !startupHold) await VerifyWeatherHold();
                         if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
                         else
                         {
@@ -619,6 +643,7 @@ public sealed class SimulatorSequence : SequenceItem
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
+                        if (coordinator.WeatherHoldScenario == "safety-workload") await VerifyWeatherHold();
                         if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
                         else
                         {
@@ -654,6 +679,7 @@ public sealed class SimulatorSequence : SequenceItem
                 async Task VerifyWeatherHold()
                 {
                     var roof = coordinator.UsesEnclosure;
+                    var idle = coordinator.WeatherHoldScenario == "safety-workload";
                     Step(roof ? "Closing simulator roof during offline target wait" : "Making simulator weather unsafe during offline target wait");
                     if (roof)
                     {
@@ -685,10 +711,10 @@ public sealed class SimulatorSequence : SequenceItem
                             await Task.Delay(50, deadline.Token);
                         var cleared = System.Diagnostics.Stopwatch.StartNew();
                         await Clear();
-                        while (!executing.IsCompleted && !sessionContainer.ActionHistory.Any(x => x.Outcome == "Weather cleared; selecting fresh work"))
+                        while (!executing.IsCompleted && !sessionContainer.ActionHistory.Any(x => x.Outcome == (idle ? "Weather cleared; requesting fresh work" : "Weather cleared; selecting fresh work")))
                             await Task.Delay(50, deadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Weather hold ended the observing session.");
-                        if (cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds) || !sessionHookEvents.Contains("AfterWait"))
+                        if (cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds) || !idle && !sessionHookEvents.Contains("AfterWait"))
                             throw new InvalidDataException("Weather hold resumed before stable clearance or skipped the interrupted wait hook.");
                         Step("Stable Safe/Open resumed fresh local selection; flapping reset the delay");
                     }

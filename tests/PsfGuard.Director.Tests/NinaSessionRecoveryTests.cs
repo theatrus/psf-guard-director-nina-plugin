@@ -8,6 +8,28 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class NinaSessionRecoveryTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnsafeStartupUsesDurableWeatherBudgetBeforeAnyLedger(bool roof)
+    {
+        await using var f = await Fixture.Create(weather: true, unsafeStartup: true, roof: roof);
+        Assert.IsType<RecoveryPhase.WeatherHolding>(f.Recovery.Record!.Snapshot.Phase);
+        Assert.Equal(1U, f.Recovery.Record.Snapshot.WeatherInterruptions);
+        f.Clock.Now = f.Start + 1000;
+        f.Conditions = new(PlannerSafety.Safe, RecoveryMotion.Permitted);
+        await f.Recovery.ObserveWeatherAsync(default);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Recovery.ResumeWeatherAsync(default, idle: true));
+        for (var i = 2; i <= 7; i++)
+        {
+            f.Clock.Now = f.Start + (ulong)i * 1000;
+            await f.Recovery.ObserveWeatherAsync(default);
+        }
+        await f.Recovery.ResumeWeatherAsync(default, idle: true);
+        Assert.IsType<RecoveryPhase.Acquiring>(f.Recovery.Record.Snapshot.Phase);
+        Assert.Equal(1U, f.Recovery.Record.Snapshot.WeatherInterruptions);
+        Assert.True(f.Recovery.Record.Snapshot.WeatherHoldMs >= 6000);
+    }
     [Fact]
     public async Task WeatherHoldRequiresSettledLedgerAndClosedRoofAllowsNormalNightExit()
     {
@@ -222,9 +244,10 @@ public sealed class NinaSessionRecoveryTests
             StableSafeSeconds = 5
         },
             () => Conditions, () => { }, message => Report?.Invoke(message), Clock);
-        internal static async Task<Fixture> Create(bool weather = false)
+        internal static async Task<Fixture> Create(bool weather = false, bool unsafeStartup = false, bool roof = false)
         {
             var f = new Fixture { Weather = weather };
+            if (unsafeStartup) f.Conditions = roof ? new(PlannerSafety.Safe, RecoveryMotion.Prohibited) : new(PlannerSafety.Unsafe, RecoveryMotion.Permitted);
             Directory.CreateDirectory(Path.Combine(f.root, "ledger"));
             Directory.CreateDirectory(Path.Combine(f.root, "recovery"));
             f.Runtime = new(ProcessTests.BundleDirectory, Path.Combine(f.root, "ledger"), Path.Combine(f.root, "recovery"));
