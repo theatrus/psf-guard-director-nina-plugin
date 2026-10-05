@@ -268,7 +268,7 @@ public sealed class DirectorAcquisition
                         Report("Offline; waiting for workload authority", "Offline");
                         await WaitIdleAsync(TimeSpan.FromSeconds(30));
                     }
-                    catch (OperationCanceledException) when (weatherHolds && !lifetime.IsCancellationRequested)
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
                     {
                         if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
                     }
@@ -280,7 +280,7 @@ public sealed class DirectorAcquisition
                 while (true)
                 {
                     try { allocation = await intake.ReadAsync(pairing.Binding, pairing.ClientId, configuration, operations.Token); break; }
-                    catch (OperationCanceledException) when (weatherHolds && !lifetime.IsCancellationRequested)
+                    catch (OperationCanceledException) when (weatherHolds && operations.Token.IsCancellationRequested && !lifetime.IsCancellationRequested)
                     { if (!await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync(); }
                 }
             }
@@ -289,11 +289,36 @@ public sealed class DirectorAcquisition
             if (window.Ended) return await FinishIdleNightAsync();
             if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
         }
-        catch
+        catch (Exception error)
         {
-            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            try { await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, cleanup.Token); }
-            finally { if (recovery?.Record is not null) await recovery.StopAsync(cleanup.Token); }
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var errors = new List<Exception> { error };
+            try { await StopIdleEquipmentAsync(cleanup.Token); }
+            catch (Exception stopError) { errors.Add(stopError); }
+            try { if (recovery?.Record is not null) await recovery.StopAsync(cleanup.Token); }
+            catch (Exception recordError) { errors.Add(recordError); }
+            if (errors.Count == 1 && options.OnAbort == DirectorAbortPolicy.ParkMount
+                && enclosure.Read().Motion == RecoveryMotion.Permitted && mountShutdown.CanResumeWeather)
+            {
+                RecoveryIssued? permit = null;
+                try
+                {
+                    permit = recovery is null ? null : await recovery.BeginParkAsync(cleanup.Token);
+                    enclosure.Arm();
+                    await mountShutdown.ParkAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, enclosure.Read,
+                        enclosure.Interrupted, progress, cleanup.Token);
+                    if (permit is not null) await recovery!.FinishParkAsync(permit, RecoveryParkResult.Parked, cleanup.Token);
+                }
+                catch (Exception parkError)
+                {
+                    errors.Add(parkError);
+                    if (permit is not null)
+                        try { await recovery!.FinishParkAsync(permit, RecoveryParkResult.Uncertain, cleanup.Token); }
+                        catch (Exception recordError) { errors.Add(recordError); }
+                }
+            }
+            Report("Workload admission stopped; review required", null);
+            if (errors.Count > 1) throw new AggregateException("Workload admission and shutdown failed.", errors);
             throw;
         }
 
@@ -316,6 +341,18 @@ public sealed class DirectorAcquisition
                 await window.WaitAsync(TimeSpan.FromMilliseconds(250), lifetime.Token);
             }
         }
+        async Task StopIdleEquipmentAsync(CancellationToken ct)
+        {
+            await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, ct);
+            using var stopped = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            stopped.CancelAfter(TimeSpan.FromSeconds(15));
+            if (guider?.GetInfo().Connected == true)
+            {
+                if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
+                    || !await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
+                    throw new InvalidOperationException("Guider stop could not be confirmed.");
+            }
+        }
         async Task<bool> AdmitIdleWeatherAsync()
         {
             CheckIdleContext();
@@ -325,17 +362,7 @@ public sealed class DirectorAcquisition
                 && !interlock.Interrupted.IsCancellationRequested && !enclosure.Interrupted.IsCancellationRequested)
             { interlock.Arm(); enclosure.Arm(); return true; }
             Report("Weather/roof hold; stopping idle equipment", null);
-            await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, lifetime.Token);
-            using (var stopped = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token))
-            {
-                stopped.CancelAfter(TimeSpan.FromSeconds(15));
-                if (guider?.GetInfo().Connected == true)
-                {
-                    if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
-                        || !await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
-                        throw new InvalidOperationException("Guider stop could not be confirmed.");
-                }
-            }
+            await StopIdleEquipmentAsync(lifetime.Token);
             await recovery!.InterruptWeatherAsync(enclosure.ReadCurrent().Motion != RecoveryMotion.Permitted, lifetime.Token);
             if (camera.GetInfo().IsExposing || !mountShutdown.CanResumeWeather)
                 throw new InvalidOperationException("Idle weather hold requires quiescent equipment.");

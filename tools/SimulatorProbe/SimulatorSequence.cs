@@ -541,16 +541,16 @@ public sealed class SimulatorSequence : SequenceItem
                             throw new InvalidDataException("Safe/Open did not resume a fresh exposure after stability.");
                         await executing.WaitAsync(deadline.Token);
                         var settled = Directory.GetFiles(journal, "*.json", SearchOption.AllDirectories).Select(CaptureJournal.Read).ToArray();
-                        if (settled.Length != 3 || settled.Count(x => x.Phase == CapturePhase.Failed) != 1
-                            || settled.Count(x => x.Phase == CapturePhase.Saved && File.Exists(x.SavedPath)) != 2
-                            || settled.Select(x => x.Intent.CaptureId).Distinct().Count() != 3
+                        if (settled.Length != 4 || settled.Count(x => x.Phase == CapturePhase.Failed) != 1
+                            || settled.Count(x => x.Phase == CapturePhase.Saved && File.Exists(x.SavedPath)) != 3
+                            || settled.Select(x => x.Intent.CaptureId).Distinct().Count() != 4
                             || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled || AcquisitionLease.IsActive
-                            || sessionHookEvents.Count(x => x == "AfterEachExposure") != 2)
+                            || sessionHookEvents.Count(x => x == "AfterEachExposure") != 3)
                             throw new InvalidDataException("Weather resume replayed/refunded an exposure or skipped fresh saved-image hooks/shutdown.");
                         await coordinator.EndOutageAsync(root, lifetime.Token);
                         var checkIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
                         var replay = await checkIn.RunAsync(null, lifetime.Token);
-                        if (!replay.CaughtUp || replay.AcknowledgedThrough != 6 || (await checkIn.RunAsync(null, lifetime.Token)).DeliveredEvents != 0)
+                        if (!replay.CaughtUp || replay.AcknowledgedThrough != 8 || (await checkIn.RunAsync(null, lifetime.Token)).DeliveredEvents != 0)
                             throw new InvalidDataException("Interrupted and resumed captures did not batch replay exactly once.");
                         ledger = service.LastLedger;
                         captures.AddRange(settled.Where(x => x.Phase == CapturePhase.Saved));
