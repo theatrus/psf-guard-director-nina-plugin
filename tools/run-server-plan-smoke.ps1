@@ -18,6 +18,7 @@ param(
     [switch]$ProjectOrder,
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
+    [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
     [switch]$ForceNativeFlip,
     [string]$Phd2Executable,
     [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
@@ -27,6 +28,8 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($NativeImaging -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $ConstraintChange -or $PublicUnsafe -or $EnclosureClosure -or $PriorityRefresh)) { throw 'NativeImaging requires safe public local scheduling.' }
 if ($NativeImagingFailure -and (!$NativeImaging -or !$AutomaticWorkloads)) { throw 'NativeImagingFailure requires native automatic workloads.' }
+if ($RecoveryScenario -and (!$NativeImaging -or !$AutomaticWorkloads)) { throw 'RecoveryScenario requires native automatic workloads.' }
+if ($RecoveryScenario -eq 'focus-always') { $NativeImagingFailure = 'autofocus' }
 if ($ForceNativeFlip -and (!$NativeImaging -or !$AutomaticWorkloads -or ($NativeImagingFailure -and $NativeImagingFailure -ne 'meridian'))) { throw 'ForceNativeFlip requires native automatic workloads without other faults.' }
 if ($NativeImagingFailure -eq 'meridian' -and !$ForceNativeFlip) { throw 'Meridian failure requires ForceNativeFlip.' }
 if ($Phd2Executable -and (!$ForceNativeFlip -or $NativeImagingFailure)) { throw 'PHD2 simulator requires the successful native flip scenario.' }
@@ -92,7 +95,7 @@ try {
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
-        ForEach-Object { $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
+        ForEach-Object { $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
         ForEach-Object { if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory

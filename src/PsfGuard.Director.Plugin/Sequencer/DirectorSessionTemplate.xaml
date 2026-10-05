@@ -149,6 +149,21 @@
                                             ToolTip="Applies to cancellation, unsafe conditions, session timeout and acquisition failure. Parking always requires enclosure clearance. Normal completion still parks the mount." />
                                     </Grid>
                                 </Expander>
+                                <Expander Header="Failure recovery" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Text="Retry focus and guide start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Column="1" IsChecked="{Binding RetryFocusAndGuiding}" AutomationProperties.Name="Retry focus and guide start" VerticalAlignment="Center" Margin="0,5"
+                                            ToolTip="Director-owned target setup only. Known-completed failures can retry; timeouts, exposures, slews and unsafe conditions cannot. Exhaustion uses On abort. The session budget and stop persist until the maximum-duration window ends." />
+                                        <TextBlock Grid.Row="1" Text="Cooldown (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RetryCooldownSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Recovery cooldown (seconds)" MaxWidth="280" Margin="0,3" />
+                                        <TextBlock Grid.Row="2" Text="Retries per session" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumRecoveryAttempts, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Retries per session" MaxWidth="280" Margin="0,3" />
+                                        <TextBlock Grid.Row="3" Text="Total recovery time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumRecoveryMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Total recovery time (minutes)" MaxWidth="280" Margin="0,3" />
+                                    </Grid>
+                                </Expander>
                                 <Expander Header="Operation ownership" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

@@ -49,8 +49,9 @@ internal sealed class NativeImagingProbe
                 Operations.Add("Autofocus");
                 var position = await focuser.MoveFocuserRelative(10, ct);
                 await Task.Delay(200, ct);
-                if (failure == "autofocus") FailureInjected = true;
-                return failure == "autofocus" ? null! : new AutoFocusReport
+                var fail = failure is "autofocus" or "focus-always" || failure == "focus-once" && !FailureInjected;
+                if (fail) FailureInjected = true;
+                return fail ? null! : new AutoFocusReport
                 {
                     Filter = filter?.Name ?? "",
                     Timestamp = DateTime.Now,

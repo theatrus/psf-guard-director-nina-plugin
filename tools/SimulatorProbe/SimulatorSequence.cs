@@ -257,7 +257,7 @@ public sealed class SimulatorSequence : SequenceItem
                         solve.SearchRadius = 5;
                     }
                 }
-                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.NativeImagingFailure, coordinator.ForceNativeFlip, phd2 is null ? null : rotator);
+                nativeProbe = new NativeImagingProbe(factory, profiles, camera, telescope, filters, guider, focuser, dome, follower, imaging, history, safety, coordinator.RecoveryScenario ?? coordinator.NativeImagingFailure, coordinator.ForceNativeFlip, phd2 is null ? null : rotator);
             }
             await Revalidate(lifetime.Token);
             Step("Refreshing native site and fixture horizon constraints");
@@ -353,6 +353,12 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 sessionContainer.Options.MaximumAltitude = 89;
                 sessionContainer.Options.StatusSeconds = 5;
+                if (coordinator.RecoveryScenario is not null)
+                {
+                    sessionContainer.Options.RetryFocusAndGuiding = true;
+                    sessionContainer.Options.RetryCooldownSeconds = 1;
+                    sessionContainer.Options.MaximumRecoveryAttempts = 1;
+                }
                 ConfigureImaging(sessionContainer.Options);
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
@@ -391,6 +397,8 @@ public sealed class SimulatorSequence : SequenceItem
                             || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Any())
                             throw new InvalidDataException("Failed native preparation did not stop before capture and park.", failure);
                         nativeFailureVerified = true;
+                        if (coordinator.RecoveryScenario == "focus-always" && nativeProbe.Operations.Count(x => x == "Autofocus") != 2)
+                            throw new InvalidDataException("Recovery did not stop after exactly one failed autofocus retry.");
                         Step($"Native {fault} failure prevented capture, parked and released local ownership without restarting");
                         using var reportFailure = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await coordinator.ReportStatusAsync(programTarget, "native_preparation_failed", reportFailure.Token);
@@ -602,6 +610,7 @@ public sealed class SimulatorSequence : SequenceItem
                 ConfigureImaging(retry.Options);
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
+                catch (InvalidOperationException e) when (coordinator.RecoveryScenario is not null && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
                 Step("Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
                 if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2

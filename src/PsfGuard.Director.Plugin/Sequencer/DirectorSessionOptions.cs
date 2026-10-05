@@ -27,6 +27,12 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     [JsonProperty] public DirectorEnclosurePolicy Enclosure { get => enclosure; set => Set(ref enclosure, value); }
     private DirectorAbortPolicy onAbort = DirectorAbortPolicy.ParkMount;
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
+    private bool retryFocusAndGuiding;
+    private int retryCooldownSeconds = 60, maximumRecoveryMinutes = 10, maximumRecoveryAttempts = 3;
+    [JsonProperty] public bool RetryFocusAndGuiding { get => retryFocusAndGuiding; set => Set(ref retryFocusAndGuiding, value); }
+    [JsonProperty] public int RetryCooldownSeconds { get => retryCooldownSeconds; set => Set(ref retryCooldownSeconds, value); }
+    [JsonProperty] public int MaximumRecoveryMinutes { get => maximumRecoveryMinutes; set => Set(ref maximumRecoveryMinutes, value); }
+    [JsonProperty] public int MaximumRecoveryAttempts { get => maximumRecoveryAttempts; set => Set(ref maximumRecoveryAttempts, value); }
     private DirectorCheckInMode checkInMode;
     [JsonProperty] public DirectorCheckInMode CheckInMode { get => checkInMode; set => Set(ref checkInMode, value); }
     private DirectorOperationOwner startup, slewCenter, focus, guiding, dither, meridianFlip, shutdown;
@@ -85,6 +91,11 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
         Range(SaveTimeoutSeconds, 1, 1800, "Image-save timeout (seconds)");
         Range(CheckInMinutes, 1, 1440, "Check-in interval (minutes)");
         Range(StatusSeconds, 5, 3600, "Live-status interval (seconds)");
+        Range(RetryCooldownSeconds, 1, 3600, "Recovery cooldown (seconds)");
+        Range(MaximumRecoveryMinutes, 1, 120, "Total recovery time (minutes)");
+        Range(MaximumRecoveryAttempts, 1, 10, "Recovery attempts per session");
+        if (RetryCooldownSeconds >= MaximumRecoveryMinutes * 60)
+            issues.Add("Recovery cooldown must be shorter than the total recovery time.");
         if (!Enum.IsDefined(Safety) || !Enum.IsDefined(Horizon)) issues.Add("Unknown safety or horizon policy.");
         if (!Enum.IsDefined(Enclosure)) issues.Add("Unknown enclosure clearance policy.");
         if (!Enum.IsDefined(OnAbort)) issues.Add("Unknown abort policy.");

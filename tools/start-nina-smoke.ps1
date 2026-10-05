@@ -4,10 +4,12 @@ param(
     [Parameter(Mandatory)][string]$NinaDirectory,
     [Parameter(Mandatory)][string]$PluginZip,
     [switch]$AscomSequence,
+    [switch]$DocumentationOnly,
     [string]$CoordinatorFixture,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
+if ($DocumentationOnly -and !$AscomSequence) { throw 'DocumentationOnly requires an isolated simulator profile.' }
 $repo = Split-Path $PSScriptRoot -Parent
 $nina = Join-Path (Resolve-Path -LiteralPath $NinaDirectory) 'NINA.exe'
 if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058', '3.3.0.1059', '3.3.0.1064', '3.3.0.1065')) {
@@ -64,6 +66,10 @@ if ($AscomSequence) {
     $sequence = Join-Path $root 'smoke.sequence.json'
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SimulatorProbe/smoke.sequence.json') -Destination $sequence
     $arguments.ArgumentList = @('-p', $profileId, '-s', "`"$sequence`"", '-r')
+    if ($DocumentationOnly) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SimulatorProbe/documentation.sequence.json') -Destination $sequence
+        $arguments.ArgumentList = @('-p', $profileId, '-s', "`"$sequence`"")
+    }
 }
 $process = Start-Process -FilePath $nina -WorkingDirectory $NinaDirectory -WindowStyle Hidden -PassThru @arguments -Environment @{
     DOTNET_STARTUP_HOOKS = $hook
