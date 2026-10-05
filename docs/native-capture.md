@@ -193,6 +193,9 @@ An unsafe, stale, disconnected or non-open reading cancels the current native
 operation token. Director stops mount motion and guiding. The abort policy also
 parks for weather when independent enclosure clearance permits it. A closing or
 closed roof blocks parking. Director never commands the roof itself.
+Mount stop is sent once; native tracking/slew updates must confirm it within
+30 seconds. Cached ASCOM tracking readback is not an immediate refusal. A failed
+park or unconfirmed stop cannot enter weather readmission.
 
 Resume requires fresh continuous Safe/Open evidence, unchanged equipment and
 profile, a live runtime, and a settled capture/preparation ledger. A brief unsafe

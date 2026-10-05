@@ -192,6 +192,7 @@ public sealed class DirectorAcquisition
         var rig = pairing.Binding.RigId.ToString("D");
         DirectorTarget? target = null;
         string? lastLoggedPhase = null;
+        var launched = false;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
@@ -203,8 +204,10 @@ public sealed class DirectorAcquisition
         }
         interlock.Arm();
         enclosure.Arm();
-        using var safetyCancellation = weatherHolds ? default : interlock.Interrupted.Register(lifetime.Cancel);
-        using var enclosureCancellation = weatherHolds ? default : enclosure.Interrupted.Register(lifetime.Cancel);
+        // Before an allocation is launched there is no settled ledger to resume.
+        void Interrupt() { if (!weatherHolds || !Volatile.Read(ref launched)) lifetime.Cancel(); }
+        using var safetyCancellation = interlock.Interrupted.Register(Interrupt);
+        using var enclosureCancellation = enclosure.Interrupted.Register(Interrupt);
         using var operations = new NinaOperationLifetime(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
@@ -324,7 +327,6 @@ public sealed class DirectorAcquisition
             .Store(allocation, Now());
         LastRunDirectory = runRoot;
         NinaSessionRecovery? recovery = null;
-        var launched = false;
         Task? watchdog = null;
         Task? constraintWatchdog = null;
         Task? telemetryTask = null;
@@ -376,7 +378,7 @@ public sealed class DirectorAcquisition
                 options.AutomaticWorkloads, options.LocalTargetScheduling));
             // Server accepts this only once. Nothing on disk can replay this permit.
             await intake.StartOnceAsync(pairing.Binding, pairing.ClientId, allocation, ledger, lifetime.Token);
-            launched = true;
+            Volatile.Write(ref launched, true);
             watchdog = WatchdogAsync();
             constraintWatchdog = Task.Run(ConstraintWatchdogAsync);
             checkpoint = new(runRoot, endpoint, pairing.Binding, ledger, Credential, connection.AllowInsecureHttp);
