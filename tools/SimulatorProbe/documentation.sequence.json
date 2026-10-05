@@ -1,0 +1,53 @@
+{
+  "$id": "1",
+  "$type": "NINA.Sequencer.Container.SequenceRootContainer, NINA.Sequencer",
+  "Name": "PSF Guard Director - simulator setup",
+  "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+  "IsExpanded": true,
+  "Items": { "$values": [
+    {
+      "$type": "NINA.Sequencer.Container.StartAreaContainer, NINA.Sequencer",
+      "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+      "Parent": { "$ref": "1" }
+    },
+    {
+      "$id": "2",
+      "$type": "NINA.Sequencer.Container.TargetAreaContainer, NINA.Sequencer",
+      "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+      "Parent": { "$ref": "1" },
+      "Items": { "$values": [
+        {
+          "$type": "PsfGuard.Director.Plugin.Sequencer.DirectorSessionContainer, PSF Guard Director",
+          "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+          "Name": "Director Session",
+          "IsExpanded": true,
+          "Parent": { "$ref": "2" },
+          "Attempts": 1,
+          "Options": {
+            "EnableAcquisition": false,
+            "AutomaticWorkloads": true,
+            "LocalTargetScheduling": true,
+            "Horizon": "MinimumAltitude",
+            "Enclosure": "OpenAir",
+            "OnAbort": "ParkMount",
+            "RetryFocusAndGuiding": true
+          },
+          "InstructionSlots": {
+            "BeforeWait": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false },
+            "AfterWait": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false },
+            "BeforeNewTarget": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": true },
+            "AfterEachExposure": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false },
+            "AfterNewTarget": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false },
+            "AfterEachTarget": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false },
+            "AfterTargetComplete": { "$type": "NINA.Sequencer.Container.SequentialContainer, NINA.Sequencer", "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" }, "IsExpanded": false }
+          }
+        }
+      ] }
+    },
+    {
+      "$type": "NINA.Sequencer.Container.EndAreaContainer, NINA.Sequencer",
+      "Strategy": { "$type": "NINA.Sequencer.Container.ExecutionStrategy.SequentialStrategy, NINA.Sequencer" },
+      "Parent": { "$ref": "1" }
+    }
+  ] }
+}

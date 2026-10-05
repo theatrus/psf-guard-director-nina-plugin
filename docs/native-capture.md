@@ -146,6 +146,45 @@ replacement mount/profile. NINA's tracking setter returns the resulting state:
 The park-failure latch is shared by planned waits and terminal cleanup, so a
 failed wait park cannot cause another park attempt during shutdown.
 
+## Bounded Focus and Guide Recovery
+
+In **Director Session > Session > Failure recovery**, enable **Retry focus and
+guide start** to retry known-completed failures in Director-owned target setup.
+This is off by default. Set the cooldown (default 60 seconds), retries shared
+by the observing session (default 3), and total recovery time (default 10 minutes).
+The existing instruction timeout also bounds the complete target-setup invocation;
+it can end recovery earlier. **On abort** chooses park or stop when recovery is
+exhausted. Parking still requires independent enclosure clearance.
+
+Retries use fresh native NINA autofocus/guide-start instructions. Guide failure
+requires a confirmed native guider stop first; moving focusers, timeouts,
+cancellation, disconnected devices and unknown outcomes cannot retry. Exposure,
+slew, center, dither, user hooks and native trigger failures are not retried by
+this setting. Native autofocus may have its own profile-level attempts, so the
+session limit counts complete native instruction invocations, not focus sweeps.
+The mount remains at the target during cooldown; this is not a cloud probe or a
+park/unpark loop. The status and Activity log show the cooldown and spent budget.
+
+The bundled Rust core persists the observing-night identity, immutable policy,
+retry budget and stop state in one recovery directory per rig. Target switches,
+new allocations, NINA restarts and turning the checkbox off cannot reset that
+budget. For this first increment, a new Run cannot replace a recorded session
+until its original **Maximum duration** window ends. Uncertain work still needs
+reconciliation; the new night does not make an old allocation reusable. There
+is no force-resume button. Recovery journal events are retained locally; capture
+and preparation check-in do not yet upload that separate recovery journal.
+
+![Native Director Session setup with bounded recovery](images/advanced-sequencer-session.png)
+
+![Native instruction slots in the Advanced Sequencer](images/advanced-sequencer-instructions.png)
+
+These screenshots show an unarmed simulator profile in NINA 3.3.0.1065.
+The requested next increment adds an explicit weather/roof **hold and resume**
+policy with stable Safe/Open readings, interrupted-work reconciliation and new
+core-issued commands. Cloud classification/probes and normal night-end
+continuation are also pending. Current unsafe/roof interrupts still stop the
+owner; this focus/guide option does not enable reopening it.
+
 ## Enclosure Clearance
 
 The public Session requires an explicit **Enclosure clearance** policy under
@@ -176,14 +215,16 @@ This is sampled native evidence, not a physical roof/mount interlock. Drivers
 must report truthful shutter state and honor abort/stop requests; independent
 observatory hardware protection is still required. Arbitrary third-party
 equipment clients are not excluded. The persistent observing-night recovery
-policy, cloud classifier and automatic probes remain pending.
+weather-hold policy, cloud classifier and automatic probes remain pending.
 
 ## Session Recovery Client
 
 Runtime 0.9.0 / IPC 9 exposes recovery contract 1 through the managed runtime
 controller. The three-argument constructor takes the bundle, allocation ledger
 directory and a separate existing per-rig recovery directory. Two-argument
-callers, including the public NINA Session, keep recovery disabled. The managed
+callers keep recovery disabled. The public Session uses the three-argument
+constructor when focus/guide recovery is enabled or a rig recovery directory
+already exists. The managed
 client verifies both recovery mode and version in the handshake.
 
 Call `OpenRecoveryAsync` or `ReadRecoveryAsync` before applying events. The
@@ -199,11 +240,12 @@ and read persisted evidence instead of guessing whether the event committed.
 foreign, missing or changed state faults the connection. Typed domain errors
 remain visible without pretending the operation succeeded.
 
-Native recovery integration remains pending. It must commission a policy and
-observing night, persist one per-rig recovery directory across allocations, supply fresh
-safety and **independent enclosure/mount-motion clearance**, classify compatible
-quality samples against a frozen reference, cancel/reconcile active native work,
-and dispatch each original suggestion once with fresh native checks. The local
+Native focus/guide recovery now admits a policy and observing night, persists
+one per-rig recovery directory across allocations, supplies fresh safety and
+**independent enclosure/mount-motion clearance**, and dispatches each original
+suggestion once with fresh native checks. Remaining work must classify compatible
+quality samples against a frozen reference and cancel/reconcile interrupted native
+work before resuming a weather hold. The local
 enclosure interlock now supplies separate clearance for ordinary acquisition
 and shutdown. A safe weather monitor alone does not prove a roof is clear.
 Do not enable recovery by adding the directory argument to the public owner

@@ -30,6 +30,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     private readonly string rotatorId = profiles.ActiveProfile.RotatorSettings.Id;
     private readonly List<ISequenceTrigger> installed = [];
     private DirectorSessionContainer? session;
+    internal NinaSessionRecovery? Recovery { get; set; }
+    internal Func<string>? SelectedTargetId { get; set; }
     internal bool RotatorConnected => options.SlewCenter == DirectorOperationOwner.Director && rotatorId != "No_Device";
     internal static string ScopeFor(IProfileService profiles, DirectorSessionOptions options) =>
         System.Text.Json.JsonSerializer.Serialize(new
@@ -69,9 +71,54 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     internal void ConfigureTargetSetup(NinaInstructionSlots slots)
     {
         var items = new List<ISequenceItem>();
-        if (options.Focus == DirectorOperationOwner.Director) items.Add(Item<RunAutofocus>());
-        if (options.Guiding == DirectorOperationOwner.Director) items.Add(Item<StartGuiding>());
+        if (options.Focus == DirectorOperationOwner.Director) items.Add(Recoverable(Item<RunAutofocus>(), RecoveryOperation.Focus, focuserId));
+        if (options.Guiding == DirectorOperationOwner.Director) items.Add(Recoverable(Item<StartGuiding>(), RecoveryOperation.Guide, guiderId));
         slots.AppendTargetDefaults(items);
+    }
+
+    private SequenceItem Recoverable(SequenceItem item, RecoveryOperation operation, string device) => Recovery is null ? item
+        : new RetryItem(item.Name, async (parent, progress, token) =>
+        {
+            await Recovery.ExecuteAsync(operation, device, SelectedTargetId?.Invoke()
+                ?? throw new InvalidOperationException("No recovery target is selected."), async ct =>
+            {
+                CheckEquipment();
+                var fresh = operation == RecoveryOperation.Focus ? (SequenceItem)Item<RunAutofocus>() : Item<StartGuiding>();
+                fresh.AttachNewParent(parent);
+                try
+                {
+                    if (fresh is IValidatable valid && !valid.Validate())
+                        throw new InvalidOperationException(string.Join("; ", valid.Issues));
+                    await fresh.Execute(progress, ct);
+                    ct.ThrowIfCancellationRequested();
+                    CheckEquipment();
+                }
+                finally { fresh.AttachNewParent(null); }
+            }, async ct =>
+            {
+                CheckEquipment();
+                if (operation == RecoveryOperation.Guide)
+                {
+                    // NINA's StopGuiding instruction returns Task and drops the
+                    // mediator's boolean. Recovery needs confirmed quiescence.
+                    if (!await guider.StopGuiding(ct))
+                        throw new InvalidOperationException("Guider stop was not confirmed; recovery is uncertain.");
+                    ct.ThrowIfCancellationRequested();
+                }
+                if (operation == RecoveryOperation.Focus && focuser.GetInfo().IsMoving)
+                    throw new InvalidOperationException("Focuser is still moving; recovery is uncertain.");
+            }, token);
+        });
+
+    private sealed class RetryItem : SequenceItem
+    {
+        private readonly Func<NINA.Sequencer.Container.ISequenceContainer, IProgress<ApplicationStatus>, CancellationToken, Task> execute;
+        internal RetryItem(string name, Func<NINA.Sequencer.Container.ISequenceContainer, IProgress<ApplicationStatus>, CancellationToken, Task> execute)
+        {
+            Name = name; this.execute = execute; Attempts = 1; ErrorBehavior = InstructionErrorBehavior.AbortOnError;
+        }
+        public override object Clone() => new RetryItem(Name, execute);
+        public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) => execute(Parent, progress, token);
     }
 
     internal void Install(DirectorSessionContainer target)

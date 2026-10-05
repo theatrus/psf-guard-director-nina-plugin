@@ -23,6 +23,21 @@ native sequence hooks prepare each target without waiting on server check-ins.
 See [local scheduling](docs/native-capture.md#local-target-scheduling-experimental)
 for setup, safety requirements and limitations.
 
+## In the Advanced Sequencer
+
+Keep the night in NINA: choose Director defaults for native imaging, or use the
+seven target and exposure instruction slots with your own triggers and conditions.
+The shared planner selects local work while check-ins report progress to PSF Guard.
+
+![Director Session in NINA's Advanced Sequencer, showing safety, park-on-abort and bounded failure recovery controls](docs/images/advanced-sequencer-session.png)
+
+![Director's seven instruction slots inside the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
+
+Actual NINA 3.3 nightly #65 screenshots from an isolated, unarmed simulator
+profile. See [setup and recovery](docs/native-capture.md#bounded-focus-and-guide-recovery)
+for the controls and current limitations. Cloud holds and automatic safe-weather
+or roof-reopen resumption are planned, not enabled in this preview.
+
 ## Runtime preview
 
 The initial plugin targets N.I.N.A. 3.3 nightly #58 (`3.3.0.1058-nightly`) and

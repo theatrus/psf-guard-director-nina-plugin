@@ -138,6 +138,9 @@ public sealed class DirectorAcquisition
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         using var session = CancellationTokenSource.CreateLinkedTokenSource(token);
         session.CancelAfter(TimeSpan.FromHours(container.Options.MaximumHours));
+        var night = Guid.NewGuid().ToString("D");
+        var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         if (container.Options.CheckInAtStart)
         {
             try
@@ -153,11 +156,12 @@ public sealed class DirectorAcquisition
         using var owner = new AcquisitionLease(LocalStateRoot);
         do
         {
-            if (!await ExecuteAllocationAsync(container, progress, owner, session.Token)) break;
+            if (!await ExecuteAllocationAsync(container, progress, owner, night, nightStart, nightEnd, session.Token)) break;
         } while (container.Options.AutomaticWorkloads);
     }
 
-    private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner, CancellationToken token)
+    private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
+        string night, ulong nightStart, ulong nightEnd, CancellationToken token)
     {
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
@@ -203,6 +207,24 @@ public sealed class DirectorAcquisition
         if (admittedConstraints.Revision != equipmentBinding.ConstraintRevision)
             throw new InvalidOperationException("Native constraints changed during admission.");
         var equipmentReader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
+        var runRoot = Path.Combine(LocalStateRoot, profile.ToString("N"), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(runRoot);
+        var ledgerDirectory = Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName;
+        var recoveryDirectory = Path.Combine(LocalStateRoot, "recovery", rig);
+        // Once commissioned, a later checkbox change cannot bypass a stored stop.
+        var recoveryRequired = options.RetryFocusAndGuiding || Directory.Exists(recoveryDirectory);
+        if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
+        await using var runtime = recoveryRequired
+            ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
+            : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
+        await runtime.StartAsync(rig, lifetime.Token);
+        if (recoveryRequired)
+        {
+            var prior = (await runtime.ReadRecoveryAsync(lifetime.Token)).Value
+                ?? throw new InvalidOperationException("Recovery history is unavailable.");
+            if (prior.Record is { } recorded && recorded.Snapshot.Identity.NightId != night && Now() < recorded.Snapshot.Identity.EndsAtMs)
+                throw new InvalidOperationException("The previous observing session is recorded; its maximum-duration window has not ended. Reconciliation is required before a new night.");
+        }
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             connection.AllowInsecureHttp, options.LocalTargetScheduling, native is not null);
@@ -250,13 +272,10 @@ public sealed class DirectorAcquisition
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
             assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, options.MinimumAltitude, options.MaximumAltitude, 0)).ToImmutableArray());
         var geometry = new NinaGeometrySnapshot(constraintsReader, equipmentReader);
-        var runRoot = Path.Combine(LocalStateRoot, profile.ToString("N"), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(runRoot);
-        LastRunDirectory = runRoot;
         new CoordinatorAllocationCache(runRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, connection.AllowInsecureHttp)
             .Store(allocation, Now());
-        var ledgerDirectory = Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName;
-        await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
+        LastRunDirectory = runRoot;
+        NinaSessionRecovery? recovery = null;
         var launched = false;
         Task? watchdog = null;
         Task? constraintWatchdog = null;
@@ -281,8 +300,27 @@ public sealed class DirectorAcquisition
         var archive = new CoordinatorRunArchive(runRoot, endpoint, pairing.Binding, pairing.ClientId, connection.AllowInsecureHttp);
         try
         {
-            await runtime.StartAsync(rig, lifetime.Token);
             Check();
+            if (recoveryRequired)
+            {
+                recovery = new(runtime, options, () => new(interlock.Read().Safety, enclosure.Read().Motion),
+                    () =>
+                    {
+                        Check(); CheckPointing(); if (camera.GetInfo().IsExposing || telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
+                            throw new InvalidOperationException("Equipment is not quiescent for recovery.");
+                    },
+                    message =>
+                    {
+                        Report(message, null); container.UpdateDisplay(d => d with
+                        { WaitReason = recovery?.Record?.Snapshot.Phase is RecoveryPhase.Holding ? message : "-" });
+                    }, TimeProvider.System);
+                await recovery.AdmitAsync(rig, configuration.Id, night, nightStart, nightEnd, lifetime.Token);
+                if (native is not null && options.RetryFocusAndGuiding)
+                {
+                    native.Recovery = recovery;
+                    native.SelectedTargetId = () => target?.Id ?? throw new InvalidOperationException("No recovery target.");
+                }
+            }
             var snapshot = Snapshot();
             var ledger = Require(await runtime.OpenGeometryAsync(program, snapshot.Constraints, snapshot.State, lifetime.Token));
             LastLedger = ledger;
@@ -310,6 +348,7 @@ public sealed class DirectorAcquisition
             while (true)
             {
                 Check();
+                if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
                 if (Volatile.Read(ref priorityRefresh) != 0)
                 {
                     Report("Priority changed; parking for a refreshed workload", "Online");
@@ -378,6 +417,7 @@ public sealed class DirectorAcquisition
                 var reselect = false;
                 while (true)
                 {
+                    if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
                     current = Snapshot();
                     var next = Require(await runtime.AdvanceGeometryPreparationAsync(id, current.Configuration, current.Constraints, current.State, lifetime.Token));
                     if (next is PreparationNext.ReadyToReserve) break;
@@ -432,6 +472,7 @@ public sealed class DirectorAcquisition
                 }
                 CheckPointing();
                 if (options.CheckInOnTarget && newTarget) QueueCheckIn();
+                if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
                 current = Snapshot();
                 var captureId = Guid.NewGuid().ToString("D");
                 var reservation = Require(await runtime.ReserveGeometryPreparedAsync(id, captureId, current.Configuration, current.Constraints, current.State, lifetime.Token));
@@ -567,6 +608,11 @@ public sealed class DirectorAcquisition
                 var aborted = executionError is not null || lifetime.IsCancellationRequested;
                 try
                 {
+                    if (recovery is not null && (aborted || !options.AutomaticWorkloads))
+                    {
+                        try { await recovery.StopAsync(cleanup.Token); }
+                        catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
+                    }
                     // A guider failure must not prevent physical mount shutdown.
                     if (native is not null)
                         try
@@ -581,7 +627,25 @@ public sealed class DirectorAcquisition
                         NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
                         stopped = true;
                     }
-                    else { await Park(cleanup.Token); parked = true; }
+                    else
+                    {
+                        RecoveryIssued? parkPermit = null;
+                        if (recovery?.Record?.Snapshot.Phase is RecoveryPhase.Stopping)
+                            try { parkPermit = await recovery.BeginParkAsync(cleanup.Token); }
+                            catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
+                        try
+                        {
+                            await Park(cleanup.Token); parked = true;
+                            if (parkPermit is not null) await recovery!.FinishParkAsync(parkPermit, RecoveryParkResult.Parked, cleanup.Token);
+                        }
+                        catch
+                        {
+                            if (parkPermit is not null)
+                                try { await recovery!.FinishParkAsync(parkPermit, RecoveryParkResult.Uncertain, cleanup.Token); }
+                                catch (Exception journalError) { Logger.Error(journalError); }
+                            throw;
+                        }
+                    }
                     native?.CheckTriggers();
                     native?.Dispose();
                     if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)

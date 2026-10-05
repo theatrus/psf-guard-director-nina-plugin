@@ -1,5 +1,45 @@
 # Real N.I.N.A. smoke test
 
+## Bounded Native Recovery
+
+2026-10-04: packaged Director, pinned runtime 0.10.0 / IPC 10, NINA 3.3.0.1065,
+ASCOM OmniSim and private PSF Guard (main `212b4a6`) passed these native gates:
+
+- `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -NativeImaging
+  -RecoveryScenario focus-once`: one failed native autofocus is retried, then
+  normal multi-target acquisition saves three frames and delivers the original
+  capture/preparation receipts. A new run cannot reset the recorded night.
+  Evidence: `artifacts/nina-smoke-91a92d03e2c5450f86a8fd08d181bc5e/probe/8c100a91df3544ef9762d36c09def44c/result.json`.
+  Repeated after the per-rig journal and stopped-state guard review:
+  `artifacts/nina-smoke-89070a422f5741c58e03cff4c859c26d/probe/911f76a7f792497aaee5dbfa7cc3960d/result.json`.
+- The same options with `-RecoveryScenario focus-always`: initial autofocus and
+  exactly one allowed retry fail; no science exposure is saved, the mount parks,
+  and local acquisition ownership is released.
+  Evidence: `artifacts/nina-smoke-2a288b60149a4ab786cf35e3332cadfb/probe/395618129c4049d4800d4d7ef96b0a69/result.json`.
+
+These use test-only focus results, real NINA actions and simulated equipment.
+They do not prove optical autofocus quality or roof/weather resumption.
+The regression suite also covers cancellation, unknown/timeout outcomes,
+unsettled equipment, safety loss during cooldown and durable stop readback.
+All 840 plugin tests, development packaging, whitespace verification and
+`git diff --check` passed. Hosted CI is not counted as a local test result.
+
+### Documentation screenshots
+
+Launch an idle, unpaired profile without executing any instructions:
+
+```powershell
+./tools/start-nina-smoke.ps1 -NinaDirectory '<reviewed nightly directory>' `
+  -PluginZip ./artifacts/PSFGuardDirector-0.1.0.0-dev.zip `
+  -AscomSequence -DocumentationOnly
+```
+
+Open Sequencer, then Advanced Sequencer. The checked-in documentation fixture
+shows the real plugin's Session and Instructions tabs; acquisition remains off.
+The unedited window captures in `docs/images/advanced-sequencer-*.png` were taken
+in NINA #65 with this fixture. They contain no pairing credentials or real-rig
+data. Separate render checks cover all tab fields at 640 and 1000 pixels.
+
 ## Live and Deferred Check-In
 
 2026-10-02: the packaged plugin, runtime 0.9.0 / IPC 9, native NINA
