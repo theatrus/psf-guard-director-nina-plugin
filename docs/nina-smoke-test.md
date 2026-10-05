@@ -1,5 +1,25 @@
 # Real N.I.N.A. smoke test
 
+## Weather and Roof Holds
+
+2026-10-05: packaged Director, runtime 0.12.0 / IPC 12, NINA 3.3.0.1065,
+ASCOM OmniSim and private PSF Guard built from `ec23f0e`:
+
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance -NightEndScenario
+  target-wait -WeatherHoldScenario roof-wait` passed. Roof closure interrupts an
+  offline target wait. Reopen/close flapping resets the continuous clearance
+  interval; stable reopening resumes fresh selection under the same allocation.
+  Night end runs the following native sequence step. Batch replay delivers the
+  original captures without duplicate events or hardware activity.
+  Evidence: `artifacts/nina-smoke-a8ab49629059479a86ad991a0d7073a7/probe/ab7640af56f34cf6b3a961ef4c2f1d6a/result.json`.
+
+The remaining target stays Moon-blocked: this fixture verifies resumed local
+selection, not a new science exposure after reopening. It does not prove
+automatic reconciliation of interrupted capture/save outcomes, startup or
+between-allocation weather recovery, restart readmission, or cloud probes.
+The harness renders all native settings and checks layout at 640 and 1000 pixels.
+All 857 managed tests and runtime-fetch regressions passed with the pinned runtime.
+
 ## Normal Night End
 
 2026-10-05: packaged Director, runtime 0.11.2 / IPC 11, NINA 3.3.0.1065,

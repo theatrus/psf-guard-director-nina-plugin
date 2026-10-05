@@ -276,6 +276,28 @@ public sealed class DirectorSessionContainerTests
     }
 
     [Fact]
+    public async Task InterruptedIdleWaitRequiresReadmissionAndRunsAfterWaitOnce()
+    {
+        var events = new List<NinaInstructionSlot>();
+        var session = Session(events);
+        var hooks = new NinaSessionHooks(session, TimeProvider.System);
+        using var canceled = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => hooks.WaitAsync(token =>
+        {
+            canceled.Cancel(); return Task.FromCanceled(token);
+        }, Progress, canceled.Token));
+        Assert.True(hooks.CanResumeWeather);
+        Assert.DoesNotContain(NinaInstructionSlot.AfterWait, events);
+        await hooks.ReenterAfterWeatherAsync(Progress, default);
+        await hooks.ReenterAfterWeatherAsync(Progress, default);
+        Assert.Single(events, e => e == NinaInstructionSlot.AfterWait);
+        var target = new SequentialContainer();
+        target.AttachNewParent(session);
+        await hooks.SelectTargetAsync("one", target, Progress, default);
+        Assert.Single(events, e => e == NinaInstructionSlot.BeforeNewTarget);
+    }
+
+    [Fact]
     public void NestedUnreservedExposuresAreRejectedBeforeInstructionsRun()
     {
         var session = new DirectorSessionContainer();
@@ -298,6 +320,8 @@ public sealed class DirectorSessionContainerTests
         var hooks = new NinaSessionHooks(session, TimeProvider.System);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => hooks.WaitAsync(_ => Task.CompletedTask, Progress, default));
         Assert.False(Assert.Single(hooks.Receipts).Completed);
+        Assert.False(hooks.CanResumeWeather);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => hooks.ReenterAfterWeatherAsync(Progress, default));
         await Assert.ThrowsAsync<InvalidOperationException>(() => hooks.FinishAsync(Progress, default));
     }
 

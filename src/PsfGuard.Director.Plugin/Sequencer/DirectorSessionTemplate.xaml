@@ -149,6 +149,20 @@
                                             ToolTip="Applies to cancellation, unsafe conditions, session timeout and acquisition failure. Parking always requires enclosure clearance. Normal completion still parks the mount." />
                                     </Grid>
                                 </Expander>
+                                <Expander Header="Weather and roof" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Text="When unsafe or roof closes" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.WeatherPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Weather}" AutomationProperties.Name="Weather and roof policy" MaxWidth="320" Margin="0,3" />
+                                        <TextBlock Grid.Row="1" Text="Stable Safe/Open (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StableSafeSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Stable Safe/Open (seconds)" MaxWidth="280" Margin="0,3" />
+                                        <TextBlock Grid.Row="2" Text="Total hold time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumWeatherMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather hold time (minutes)" MaxWidth="280" Margin="0,3" />
+                                        <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MaxWidth="280" Margin="0,3" />
+                                    </Grid>
+                                </Expander>
                                 <Expander Header="Failure recovery" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

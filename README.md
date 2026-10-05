@@ -35,8 +35,10 @@ The shared planner selects local work while check-ins report progress to PSF Gua
 
 Actual NINA 3.3 nightly #65 screenshots from an isolated, unarmed simulator
 profile. See [setup and recovery](docs/native-capture.md#bounded-focus-and-guide-recovery)
-for the controls and current limitations. Cloud holds and automatic safe-weather
-or roof-reopen resumption are planned, not enabled in this preview.
+for the controls and current limitations. Opt-in
+[weather and roof holds](docs/native-capture.md#weather-and-roof-holds) resume
+settled work after continuous Safe/Open clearance. Interrupted exposures and
+uncertain hooks still require reconciliation; cloud probes remain planned.
 
 ## Runtime preview
 

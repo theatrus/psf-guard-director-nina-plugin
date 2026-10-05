@@ -31,7 +31,9 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         var policy = new RecoveryPolicy(1, RecoveryQualityMode.Disabled, 3, 1,
             checked((ulong)options.RetryCooldownSeconds * 1000), checked((ulong)options.MaximumRecoveryMinutes * 60000),
             checked((uint)options.MaximumRecoveryAttempts), checked((ulong)options.HookTimeoutSeconds * 1000),
-            60000, end, 100, 10000, options.OnAbort == DirectorAbortPolicy.ParkMount);
+            5000, end, 100, 10000, options.OnAbort == DirectorAbortPolicy.ParkMount,
+            options.Weather == DirectorWeatherPolicy.HoldAndResume
+                ? new(checked((ulong)options.StableSafeSeconds * 1000), checked((ulong)options.MaximumWeatherMinutes * 60000), checked((uint)options.MaximumWeatherInterruptions)) : null);
         record = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token)).Record;
         if (record.Snapshot.Phase is not RecoveryPhase.Acquiring)
             throw new InvalidOperationException("The observing session is stopped or needs recovery reconciliation.");
@@ -45,6 +47,16 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         if (allowNightEnd && record.Snapshot.Phase is RecoveryPhase.Stopping { Cause: RecoveryCause.NightEnded }
             or RecoveryPhase.Stopped { Cause: RecoveryCause.NightEnded, Shutdown: RecoveryShutdown.NoParkRequested or RecoveryShutdown.Parked }) return false;
         throw new InvalidOperationException("The observing session no longer permits acquisition.");
+    }
+
+    internal Task InterruptWeatherAsync(bool enclosure, CancellationToken token) => ApplyAsync(new RecoveryEvent.WeatherInterrupted(enclosure), token);
+    internal Task ObserveWeatherAsync(CancellationToken token) => ApplyAsync(new RecoveryEvent.Tick(), token);
+    internal async Task ResumeWeatherAsync(CancellationToken token)
+    {
+        await DirectorAcquisition.EnsureSettledAsync(runtime, token);
+        var applied = await ApplyAsync(new RecoveryEvent.ResumeWeather(), token);
+        if (!applied.NewlyApplied || applied.Record.Snapshot.Phase is not RecoveryPhase.Acquiring)
+            throw new InvalidOperationException("Weather hold did not authorize a fresh acquisition boundary.");
     }
 
     internal async Task ExecuteAsync(RecoveryOperation operation, string device, string target,
@@ -110,7 +122,7 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
             await ApplyAsync(new RecoveryEvent.StopNight(), token);
     }
 
-    internal async Task EndNightAsync(CancellationToken token, string? expectedNight = null)
+    internal async Task EndNightAsync(CancellationToken token, string? expectedNight = null, bool motionBlocked = false)
     {
         record ??= Require(await runtime.ReadRecoveryAsync(token)).Record;
         if (record is null) return;
@@ -124,7 +136,7 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         if (Now() < record.Snapshot.Identity.EndsAtMs)
             throw new InvalidOperationException("The observing night has not ended.");
         // Tick records the core's NightEnded cause, not an operator stop.
-        await ApplyAsync(new RecoveryEvent.Tick(), token);
+        await ApplyAsync(new RecoveryEvent.Tick(), token, motionBlocked ? conditions() with { Motion = RecoveryMotion.Unknown } : null);
         var cause = record!.Snapshot.Phase switch
         {
             RecoveryPhase.Stopping stopping => stopping.Cause,
@@ -133,7 +145,8 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
         };
         if (cause is not RecoveryCause.NightEnded)
             throw new InvalidOperationException("Recovery stopped for a reason other than normal night completion.");
-        if (record.Snapshot.Phase is RecoveryPhase.Stopped { Shutdown: not (RecoveryShutdown.Parked or RecoveryShutdown.NoParkRequested) })
+        if (record.Snapshot.Phase is RecoveryPhase.Stopped { Shutdown: not (RecoveryShutdown.Parked or RecoveryShutdown.NoParkRequested) }
+            && !(options.Weather == DirectorWeatherPolicy.HoldAndResume && record.Snapshot.Phase is RecoveryPhase.Stopped { Shutdown: RecoveryShutdown.MotionBlocked }))
             throw new InvalidOperationException("Night-end shutdown is unresolved or failed.");
     }
 

@@ -168,6 +168,7 @@ public sealed class DirectorAcquisition
         string night, NinaNightWindow window, CancellationToken token)
     {
         var options = container.Options.Clone();
+        var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         using var native = CreateNativeImaging(options);
@@ -202,8 +203,9 @@ public sealed class DirectorAcquisition
         }
         interlock.Arm();
         enclosure.Arm();
-        using var safetyCancellation = interlock.Interrupted.Register(lifetime.Cancel);
-        using var enclosureCancellation = enclosure.Interrupted.Register(lifetime.Cancel);
+        using var safetyCancellation = weatherHolds ? default : interlock.Interrupted.Register(lifetime.Cancel);
+        using var enclosureCancellation = weatherHolds ? default : enclosure.Interrupted.Register(lifetime.Cancel);
+        using var operations = new NinaOperationLifetime(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
         var admittedConstraints = constraintsReader.Refresh(constraintBinding);
@@ -215,7 +217,7 @@ public sealed class DirectorAcquisition
         var ledgerDirectory = Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName;
         var recoveryDirectory = Path.Combine(LocalStateRoot, "recovery", rig);
         // Once commissioned, a later checkbox change cannot bypass a stored stop.
-        var recoveryRequired = options.RetryFocusAndGuiding || Directory.Exists(recoveryDirectory);
+        var recoveryRequired = weatherHolds || options.RetryFocusAndGuiding || Directory.Exists(recoveryDirectory);
         if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
         await using var runtime = recoveryRequired
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
@@ -349,7 +351,7 @@ public sealed class DirectorAcquisition
             Check();
             if (recoveryRequired)
             {
-                recovery = new(runtime, options, () => new(interlock.Read().Safety, enclosure.Read().Motion),
+                recovery = new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
                     () =>
                     {
                         Check(); CheckPointing(); if (camera.GetInfo().IsExposing || telescope.GetInfo().AtPark || telescope.GetInfo().Slewing)
@@ -393,172 +395,246 @@ public sealed class DirectorAcquisition
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
             {
-                Check();
-                if (window.Ended) break;
-                if (recovery is not null && !await recovery.RefreshAsync(lifetime.Token, allowNightEnd: true)) break;
-                if (Volatile.Read(ref priorityRefresh) != 0)
+                try
                 {
-                    Report("Priority changed; parking for a refreshed workload", "Online");
-                    break;
-                }
-                var current = Snapshot();
-                if (window.Ended) break;
-                var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
-                Report(decision.Reason, null);
-                if (decision.Action == PlannerAction.Complete)
-                {
-                    if (context is not null && decision.Reason != "observing_night_ended") await hooks.TargetCompletedAsync(progress, lifetime.Token);
-                    break;
-                }
-                if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
-                if (decision.Action == PlannerAction.Wait)
-                {
+                    if (WeatherInterrupted()) await HoldWeatherAsync();
+                    if (window.Ended) break;
+                    Check();
+                    if (window.Ended) break;
+                    if (recovery is not null && !await recovery.RefreshAsync(lifetime.Token, allowNightEnd: true)) break;
+                    if (Volatile.Read(ref priorityRefresh) != 0)
+                    {
+                        Report("Priority changed; parking for a refreshed workload", "Online");
+                        break;
+                    }
+                    var current = Snapshot();
+                    if (window.Ended) break;
+                    var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
+                    Report(decision.Reason, null);
+                    if (decision.Action == PlannerAction.Complete)
+                    {
+                        if (context is not null && decision.Reason != "observing_night_ended") await hooks.TargetCompletedAsync(progress, operations.Token);
+                        break;
+                    }
+                    if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
+                    if (decision.Action == PlannerAction.Wait)
+                    {
+                        if (DateTimeOffset.UtcNow >= nextCheckIn)
+                        {
+                            QueueCheckIn();
+                            nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
+                        }
+                        if (options.ParkOnWait)
+                        {
+                            if (native is not null) await native.StopGuidingAsync(progress, operations.Token);
+                            await Park(lifetime.Token);
+                        }
+                        await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, operations.Token);
+                        // Waiting ends the target visit, so re-enter its setup on
+                        // the next core selection even if the mount has not moved.
+                        previousPointing = null;
+                        continue;
+                    }
+                    if (decision.Action != PlannerAction.Acquire || decision.GoalId is null)
+                        throw new InvalidOperationException($"Director stopped: {decision.Reason}.");
+                    // Resolve the core's choice, never sort targets in the adapter.
+                    var selected = program.Bindings.Single(b => b.GoalId == decision.GoalId);
+                    target = program.Targets.Single(t => t.Id == selected.TargetId);
+                    if (!targetContexts.TryGetValue(target.Id, out context))
+                    {
+                        context = new NinaTargetContainer(profiles, profile, target, nighttime.Calculate(), TimeProvider.System);
+                        context.AttachNewParent(container);
+                        targetContexts.Add(target.Id, context);
+                    }
+                    var selectedTarget = target;
+                    var selectedContext = context;
+                    container.ShowSky(context.Target.DeepSkyObject, context.NighttimeData);
+                    var newTarget = previousPointing?.Target.Id != target.Id;
+                    var id = Guid.NewGuid().ToString("D");
+                    var begin = await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
+                        new(configuration, previousPointing, telescope.GetInfo().AtPark,
+                            native?.RotatorConnected == true && target.PositionAngleMas is not null,
+                            filterCounts.GetValueOrDefault(program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId)),
+                        new(30000, native is not null && configuration.EnableSlewCenter ? 60000UL : 0,
+                            options.Focus == DirectorOperationOwner.Director ? 120000UL : 0,
+                            configuration.DitherEvery > 0 ? 30000UL : 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token);
+                    if (begin.Error == LedgerError.PreparationNotSelected)
+                    {
+                        // No operation was issued. Conditions/time can change
+                        // between selection and preparation admission.
+                        Report("Reevaluating local work", null);
+                        await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
+                        continue;
+                    }
+                    var began = Require(begin);
+                    if (!began.Created) throw new InvalidOperationException("Preparation is not new.");
+                    var reselect = false;
+                    while (true)
+                    {
+                        if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
+                        current = Snapshot();
+                        var next = Require(await runtime.AdvanceGeometryPreparationAsync(id, current.Configuration, current.Constraints, current.State, lifetime.Token));
+                        if (next is PreparationNext.ReadyToReserve) break;
+                        if (next is PreparationNext.Decision stopped && CanReselect(stopped.Value, program.Recipes.Any(r => r.Moon?.Enabled == true)))
+                        {
+                            // A clean boundary is not an uncertain hardware result.
+                            // Close the unused preparation and ask Rust for work again.
+                            Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                            reselect = true;
+                            break;
+                        }
+                        if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
+                        var block = TargetBlock();
+                        var operationName = ((PreparationNext.Run)next).Command.Operation.GetType().Name;
+                        container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = operationName });
+                        container.RecordAction(selectedTarget.Name, operationName, "Started");
+                        var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, () =>
+                            { native?.CheckTriggers(); block.ValidateContext(); }),
+                            async (p, ct) =>
+                            {
+                                container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = "Target setup" });
+                                await hooks.SelectTargetAsync(selectedTarget.Id, selectedContext, p, ct);
+                                Check(); CheckPointing();
+                                if (previousPointing?.Target.Id != selectedTarget.Id) filterCounts.Clear();
+                                previousPointing = new(configuration.Id, selectedTarget);
+                            }, native is null ? null : (operation, p, ct) => native.PrepareAsync(operation, block, p, ct));
+                        using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(operations.Token);
+                        operationDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds)));
+                        try { await RunItem(block, issued.Item, operationDeadline.Token); }
+                        finally
+                        {
+                            if (issued.Fence.Completion is { } completed)
+                            {
+                                Require(await runtime.CompletePreparationAsync(completed, CancellationToken.None));
+                                QueueCheckIn(refreshPriority: false);
+                                container.RecordAction(selectedTarget.Name, operationName, completed.Outcome.GetType().Name, completed.ElapsedMs);
+                            }
+                            else container.RecordAction(selectedTarget.Name, operationName, "Not dispatched");
+                        }
+                        if (issued.Fence.Completion?.Outcome is not PreparationOutcome.Succeeded)
+                            throw new InvalidOperationException("Native preparation failed.");
+                        if (next is PreparationNext.Run { Command.Operation: PreparationOperation.Dither })
+                            filterCounts[program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId] = 0;
+                    }
+                    if (reselect) continue;
+                    if (Volatile.Read(ref priorityRefresh) != 0)
+                    {
+                        // Preparation is settled and no capture was reserved.
+                        // Close it before yielding instead of starting another sub.
+                        Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                        continue;
+                    }
+                    CheckPointing();
+                    if (options.CheckInOnTarget && newTarget) QueueCheckIn();
+                    if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
+                    current = Snapshot();
+                    var captureId = Guid.NewGuid().ToString("D");
+                    var reservation = Require(await runtime.ReserveGeometryPreparedAsync(id, captureId, current.Configuration, current.Constraints, current.State, lifetime.Token));
+                    if (reservation.Kind == ReservationKind.Decision && CanReselect(reservation.Decision, program.Recipes.Any(r => r.Moon?.Enabled == true)))
+                    {
+                        Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                        continue;
+                    }
+                    if (reservation.Kind != ReservationKind.Created) throw new InvalidOperationException("Capture reservation is not newly authorized.");
+                    var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding ?? throw new InvalidDataException("Missing capture binding.");
+                    var captureBlock = TargetBlock();
+                    var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
+                    {
+                        captureBlock.ValidateContext(); Check(); CheckPointing();
+                        if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is already exposing.");
+                        if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
+                            throw new InvalidOperationException("Mount is not tracking and ready to expose.");
+                    }));
+                    container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
+                    container.RecordAction(target.Name, "Exposure", "Started");
+                    using var captureDeadline = CancellationTokenSource.CreateLinkedTokenSource(operations.Token);
+                    captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
+                        + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
+                    try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
+                    catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
+                    var evidence = exposure.Evidence;
+                    if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
+                    Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
+                    container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
+                    filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
+                    await hooks.ExposureSavedAsync(captureId, progress, operations.Token);
                     if (DateTimeOffset.UtcNow >= nextCheckIn)
                     {
                         QueueCheckIn();
                         nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
                     }
-                    if (options.ParkOnWait)
-                    {
-                        if (native is not null) await native.StopGuidingAsync(progress, lifetime.Token);
-                        await Park(lifetime.Token);
-                    }
-                    await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, lifetime.Token);
-                    // Waiting ends the target visit, so re-enter its setup on
-                    // the next core selection even if the mount has not moved.
-                    previousPointing = null;
-                    continue;
                 }
-                if (decision.Action != PlannerAction.Acquire || decision.GoalId is null)
-                    throw new InvalidOperationException($"Director stopped: {decision.Reason}.");
-                // Resolve the core's choice, never sort targets in the adapter.
-                var selected = program.Bindings.Single(b => b.GoalId == decision.GoalId);
-                target = program.Targets.Single(t => t.Id == selected.TargetId);
-                if (!targetContexts.TryGetValue(target.Id, out context))
+                catch (Exception) when (WeatherInterrupted() && !lifetime.IsCancellationRequested)
                 {
-                    context = new NinaTargetContainer(profiles, profile, target, nighttime.Calculate(), TimeProvider.System);
-                    context.AttachNewParent(container);
-                    targetContexts.Add(target.Id, context);
-                }
-                var selectedTarget = target;
-                var selectedContext = context;
-                container.ShowSky(context.Target.DeepSkyObject, context.NighttimeData);
-                var newTarget = previousPointing?.Target.Id != target.Id;
-                var id = Guid.NewGuid().ToString("D");
-                var begin = await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
-                    new(configuration, previousPointing, telescope.GetInfo().AtPark,
-                        native?.RotatorConnected == true && target.PositionAngleMas is not null,
-                        filterCounts.GetValueOrDefault(program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId)),
-                    new(30000, native is not null && configuration.EnableSlewCenter ? 60000UL : 0,
-                        options.Focus == DirectorOperationOwner.Director ? 120000UL : 0,
-                        configuration.DitherEvery > 0 ? 30000UL : 0, 10000, 1000, 5000), current.Constraints, current.State, lifetime.Token);
-                if (begin.Error == LedgerError.PreparationNotSelected)
-                {
-                    // No operation was issued. Conditions/time can change
-                    // between selection and preparation admission.
-                    Report("Reevaluating local work", null);
-                    await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
-                    continue;
-                }
-                var began = Require(begin);
-                if (!began.Created) throw new InvalidOperationException("Preparation is not new.");
-                var reselect = false;
-                while (true)
-                {
-                    if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
-                    current = Snapshot();
-                    var next = Require(await runtime.AdvanceGeometryPreparationAsync(id, current.Configuration, current.Constraints, current.State, lifetime.Token));
-                    if (next is PreparationNext.ReadyToReserve) break;
-                    if (next is PreparationNext.Decision stopped && CanReselect(stopped.Value, program.Recipes.Any(r => r.Moon?.Enabled == true)))
-                    {
-                        // A clean boundary is not an uncertain hardware result.
-                        // Close the unused preparation and ask Rust for work again.
-                        Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
-                        reselect = true;
-                        break;
-                    }
-                    if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
-                    var block = TargetBlock();
-                    var operationName = ((PreparationNext.Run)next).Command.Operation.GetType().Name;
-                    container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = operationName });
-                    container.RecordAction(selectedTarget.Name, operationName, "Started");
-                    var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, () =>
-                        { native?.CheckTriggers(); block.ValidateContext(); }),
-                        async (p, ct) =>
-                        {
-                            container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = "Target setup" });
-                            await hooks.SelectTargetAsync(selectedTarget.Id, selectedContext, p, ct);
-                            Check(); CheckPointing();
-                            if (previousPointing?.Target.Id != selectedTarget.Id) filterCounts.Clear();
-                            previousPointing = new(configuration.Id, selectedTarget);
-                        }, native is null ? null : (operation, p, ct) => native.PrepareAsync(operation, block, p, ct));
-                    using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                    operationDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds)));
-                    try { await RunItem(block, issued.Item, operationDeadline.Token); }
-                    finally
-                    {
-                        if (issued.Fence.Completion is { } completed)
-                        {
-                            Require(await runtime.CompletePreparationAsync(completed, CancellationToken.None));
-                            QueueCheckIn(refreshPriority: false);
-                            container.RecordAction(selectedTarget.Name, operationName, completed.Outcome.GetType().Name, completed.ElapsedMs);
-                        }
-                        else container.RecordAction(selectedTarget.Name, operationName, "Not dispatched");
-                    }
-                    if (issued.Fence.Completion?.Outcome is not PreparationOutcome.Succeeded)
-                        throw new InvalidOperationException("Native preparation failed.");
-                    if (next is PreparationNext.Run { Command.Operation: PreparationOperation.Dither })
-                        filterCounts[program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId] = 0;
-                }
-                if (reselect) continue;
-                if (Volatile.Read(ref priorityRefresh) != 0)
-                {
-                    // Preparation is settled and no capture was reserved.
-                    // Close it before yielding instead of starting another sub.
-                    Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
-                    continue;
-                }
-                CheckPointing();
-                if (options.CheckInOnTarget && newTarget) QueueCheckIn();
-                if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
-                current = Snapshot();
-                var captureId = Guid.NewGuid().ToString("D");
-                var reservation = Require(await runtime.ReserveGeometryPreparedAsync(id, captureId, current.Configuration, current.Constraints, current.State, lifetime.Token));
-                if (reservation.Kind == ReservationKind.Decision && CanReselect(reservation.Decision, program.Recipes.Any(r => r.Moon?.Enabled == true)))
-                {
-                    Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
-                    continue;
-                }
-                if (reservation.Kind != ReservationKind.Created) throw new InvalidOperationException("Capture reservation is not newly authorized.");
-                var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding ?? throw new InvalidDataException("Missing capture binding.");
-                var captureBlock = TargetBlock();
-                var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
-                {
-                    captureBlock.ValidateContext(); Check(); CheckPointing();
-                    if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is already exposing.");
-                    if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
-                        throw new InvalidOperationException("Mount is not tracking and ready to expose.");
-                }));
-                container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
-                container.RecordAction(target.Name, "Exposure", "Started");
-                using var captureDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
-                    + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
-                try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
-                catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
-                var evidence = exposure.Evidence;
-                if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
-                Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
-                container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
-                filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
-                await hooks.ExposureSavedAsync(captureId, progress, lifetime.Token);
-                if (DateTimeOffset.UtcNow >= nextCheckIn)
-                {
-                    QueueCheckIn();
-                    nextCheckIn = DateTimeOffset.UtcNow.AddMinutes(options.CheckInMinutes);
+                    await HoldWeatherAsync();
                 }
             }
-            await hooks.FinishAsync(progress, lifetime.Token);
+            bool WeatherInterrupted() => weatherHolds && (interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested);
+
+            async Task HoldWeatherAsync()
+            {
+                if (recovery is null) throw new InvalidOperationException("Weather recovery is not admitted.");
+                var roof = enclosure.Interrupted.IsCancellationRequested;
+                Report(roof ? "Roof hold; stopping motion" : "Weather hold; stopping acquisition", null);
+                // Stop motion before journaling or waiting for the guider.
+                NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
+                using (var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                {
+                    if (guider?.GetInfo().Connected == true)
+                    {
+                        if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName)
+                            throw new InvalidOperationException("Guider binding changed during weather interruption.");
+                        if (!await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
+                            throw new InvalidOperationException("Guider stop could not be confirmed.");
+                    }
+                }
+                await recovery.InterruptWeatherAsync(roof, lifetime.Token);
+                var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
+                if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
+                await EnsureSettledAsync(runtime, lifetime.Token);
+                if (!hooks.CanResumeWeather || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
+                    throw new InvalidOperationException("Weather interruption requires operation or sequence-hook reconciliation; automatic resume is blocked.");
+                if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
+                    await Park(lifetime.Token);
+                var safetyRevision = interlock.RefusalRevision;
+                var enclosureRevision = enclosure.RefusalRevision;
+                while (true)
+                {
+                    lifetime.Token.ThrowIfCancellationRequested();
+                    if (safetyRevision != interlock.RefusalRevision || enclosureRevision != enclosure.RefusalRevision)
+                        await recovery.InterruptWeatherAsync(enclosureRevision != enclosure.RefusalRevision, lifetime.Token);
+                    safetyRevision = interlock.RefusalRevision;
+                    enclosureRevision = enclosure.RefusalRevision;
+                    await recovery.ObserveWeatherAsync(lifetime.Token);
+                    if (recovery.Record!.Snapshot.Phase is not RecoveryPhase.WeatherHolding held)
+                    {
+                        if (window.Ended) return;
+                        throw new InvalidOperationException("Weather hold stopped; recovery budget or night limit reached.");
+                    }
+                    var remaining = held.StableSinceMs is { } since
+                        ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
+                    container.UpdateDisplay(d => d with { Operation = "" });
+                    Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open" : $"Weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                    container.UpdateDisplay(d => d with { WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used" });
+                    if (held.StableSinceMs is not null && remaining <= 0)
+                    {
+                        await recovery.ResumeWeatherAsync(lifetime.Token);
+                        interlock.Rearm(safetyRevision);
+                        enclosure.Rearm(enclosureRevision);
+                        operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
+                        previousPointing = null;
+                        filterCounts.Clear();
+                        await hooks.ReenterAfterWeatherAsync(progress, operations.Token);
+                        container.UpdateDisplay(d => d with { WaitReason = "-" });
+                        Report("Weather cleared; selecting fresh work", null);
+                        return;
+                    }
+                    await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
+                }
+            }
+
+            // Never execute user motion hooks against an unsafe/closed enclosure.
+            if (!WeatherInterrupted()) await hooks.FinishAsync(progress, operations.Token);
             await EnsureSettledAsync(runtime, lifetime.Token);
             if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
             Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
@@ -661,7 +737,8 @@ public sealed class DirectorAcquisition
                     {
                         try
                         {
-                            if (!aborted && window.Ended) await recovery.EndNightAsync(cleanup.Token);
+                            if (!aborted && window.Ended) await recovery.EndNightAsync(cleanup.Token,
+                                motionBlocked: weatherHolds && enclosure.Read().Motion != RecoveryMotion.Permitted);
                             else await recovery.StopAsync(cleanup.Token);
                         }
                         catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
@@ -675,7 +752,8 @@ public sealed class DirectorAcquisition
                             await native.StopGuidingAsync(progress, guiderStop.Token).WaitAsync(guiderStop.Token);
                         }
                         catch (Exception error) { shutdownError = error; executionError ??= error; aborted = true; Logger.Error(error); }
-                    if (aborted && options.OnAbort == DirectorAbortPolicy.StopMount)
+                    if (aborted && options.OnAbort == DirectorAbortPolicy.StopMount
+                        || !aborted && weatherHolds && window.Ended && enclosure.Read().Motion != RecoveryMotion.Permitted)
                     {
                         NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
                         stopped = true;
@@ -701,7 +779,7 @@ public sealed class DirectorAcquisition
                     }
                     native?.CheckTriggers();
                     native?.Dispose();
-                    if (options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
+                    if (parked && options.AutomaticWorkloads && executionError is null && !lifetime.IsCancellationRequested)
                     {
                         await EnsureSettledAsync(runtime, cleanup.Token);
                         archive.MarkCompleted();
@@ -728,13 +806,13 @@ public sealed class DirectorAcquisition
                 catch { terminalFailed = true; throw; }
                 finally
                 {
-                    var phase = stopped ? "Stopped; tracking off; reconciliation required"
+                    var phase = stopped ? !aborted && weatherHolds && window.Ended ? "Night ended; tracking off; enclosure blocks parking" : "Stopped; tracking off; reconciliation required"
                         : !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
                         : Volatile.Read(ref constraintError) is not null ? "Stopped; parked; rig constraints changed; review required"
                         : terminalFailed || aborted ? "Stopped; parked; reconciliation required"
                         : window.Ended ? released || !options.AutomaticWorkloads ? "Night ended; parked" : "Night ended; parked; check-in pending"
                         : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
-                    container.UpdateDisplay(d => d with { Operation = "" });
+                    container.UpdateDisplay(d => d with { Operation = "", WaitReason = "-" });
                     Report(phase, null);
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
@@ -754,11 +832,12 @@ public sealed class DirectorAcquisition
         return released && !window.Ended;
 
         static ulong Now() => checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        void Check()
+        void Check() => CheckContext(ignoreWeather: false);
+        void CheckContext(bool ignoreWeather)
         {
             lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
             native?.CheckEquipment();
-            if (profiles.ActiveProfile.Id != profile || interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted
+            if (profiles.ActiveProfile.Id != profile || !ignoreWeather && (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
                 || runtime.Status.State != RuntimeState.Ready || Now() >= assignment.ExpiresAtMs)
                 throw new InvalidOperationException("Director context, safety, runtime or allocation validity changed.");
         }
@@ -802,7 +881,7 @@ public sealed class DirectorAcquisition
         {
             try
             {
-                while (true) { await Task.Delay(250, background.Token); Check(); }
+                while (true) { await Task.Delay(250, background.Token); CheckContext(ignoreWeather: weatherHolds); }
             }
             catch (OperationCanceledException) when (background.IsCancellationRequested) { }
             catch (Exception e) { Logger.Error(e); lifetime.Cancel(); }

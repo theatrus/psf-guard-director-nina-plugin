@@ -13,6 +13,26 @@ namespace PsfGuard.Director.Tests;
 public sealed class NinaEnclosureTests
 {
     [Fact]
+    public void ReopenNeedsExplicitRearmAndCannotReviveOldTokensOrHideAFlap()
+    {
+        using var f = new Fixture();
+        f.Broadcast(); f.Guard.Arm();
+        var old = f.Guard.Interrupted;
+        f.Info.ShutterStatus = ShutterState.ShutterClosing; f.Broadcast();
+        var interrupted = f.Guard.RefusalRevision;
+        f.Info.ShutterStatus = ShutterState.ShutterOpen; f.Broadcast();
+        Assert.Equal(RecoveryMotion.Permitted, f.Guard.ReadCurrent().Motion);
+        Assert.NotEqual(RecoveryMotion.Permitted, f.Guard.Read().Motion);
+        f.Info.ShutterStatus = ShutterState.ShutterClosing; f.Broadcast();
+        f.Info.ShutterStatus = ShutterState.ShutterOpen; f.Broadcast();
+        Assert.Throws<InvalidOperationException>(() => f.Guard.Rearm(interrupted));
+        f.Guard.Rearm(f.Guard.RefusalRevision);
+        Assert.Equal(RecoveryMotion.Permitted, f.Guard.Read().Motion);
+        Assert.True(old.IsCancellationRequested);
+        Assert.False(f.Guard.Interrupted.IsCancellationRequested);
+    }
+
+    [Fact]
     public void OldSequencesCannotSilentlyCommissionClearance()
     {
         var options = Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>("{}")!;

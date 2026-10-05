@@ -179,11 +179,35 @@ and preparation check-in do not yet upload that separate recovery journal.
 ![Native instruction slots in the Advanced Sequencer](images/advanced-sequencer-instructions.png)
 
 These screenshots show an unarmed simulator profile in NINA 3.3.0.1065.
-The requested next increment adds an explicit weather/roof **hold and resume**
-policy with stable Safe/Open readings, interrupted-work reconciliation and new
-core-issued commands. Cloud classification/probes remain pending. Current
-unsafe/roof interrupts still stop the owner; this focus/guide option does not
-enable reopening it.
+
+## Weather and Roof Holds
+
+In **Director Session > Session > Weather and roof**, select **Hold and resume**
+to keep a launched allocation alive through weather or enclosure interruptions.
+**Stop for the night** remains the default. Set the continuous Safe/Open delay
+(default 300 seconds), cumulative hold limit (360 minutes), and maximum
+interruptions per night (10). Rust persists these limits with the observing night;
+allocation changes and replay do not reset them.
+
+An unsafe, stale, disconnected or non-open reading cancels the current native
+operation token. Director stops mount motion and guiding. The abort policy also
+parks for weather when independent enclosure clearance permits it. A closing or
+closed roof blocks parking. Director never commands the roof itself.
+
+Resume requires fresh continuous Safe/Open evidence, unchanged equipment and
+profile, a live runtime, and a settled capture/preparation ledger. A brief unsafe
+reading or monitoring gap restarts the stability delay. Old operation tokens stay
+canceled. Resume creates a new token generation, asks Rust for fresh work, and
+re-enters target setup. Interrupted idle waits run their After Wait hook once
+after readmission; interrupted user hooks cannot be replayed.
+
+This increment resumes settled boundaries, including offline target waits. It
+does not automatically reconcile a canceled exposure, uncertain preparation or
+user hook; those stop with reconciliation required. Startup and between-allocation
+workload admission still require safe/open conditions and are not resumable
+weather holds. Restart readmission, cloud classification and probes remain
+unfinished. Hold status and spent limits appear in Session/Activity and live
+telemetry when connected; the separate recovery journal remains local.
 
 ## Normal Night End
 
@@ -201,12 +225,15 @@ the target's scientific goals complete. Pending check-in receipts stay available
 for batch replay. Bounded target-exit hooks and shutdown may finish after the
 deadline; no new exposure or preparation starts then.
 
-Operator cancellation and unsafe weather remain stops, not normal completion.
+Operator cancellation and default-policy unsafe weather remain stops, not normal completion.
 A native operation that overruns its bound is cancelled and remains an error
 until its outcome is reconciled. Failed parking, failed shutdown journaling and
 uncertain capture/save outcomes also prevent normal continuation. The clock alone
-cannot prove equipment is quiescent or an image was saved. Weather/roof hold
-resumption and quality-probe recovery are still separate unfinished work.
+cannot prove equipment is quiescent or an image was saved. At night end a settled
+weather hold exits normally. With a blocked enclosure, it stops tracking without
+parking and skips user target-exit hooks, then returns to the following native
+sequence step. Those following steps must themselves respect observatory safety.
+Quality-probe recovery remains unfinished.
 
 See the [native night-end checks](nina-smoke-test.md#normal-night-end) for
 reproduction commands and simulator evidence.
@@ -226,8 +253,9 @@ blocked until the operator chooses a policy.
 
 Closed, closing, opening, unknown/error, disconnected, stale or changed-device
 evidence interrupts the owner and blocks further mount motion. The local
-watchdog runs independently of the server. Reopening cannot clear this owner's
-stop latch. Weather Unsafe still cancels acquisition, but permits shutdown park
+watchdog runs independently of the server. Reopening alone cannot clear the
+operation latch; opt-in weather recovery requires explicit core readmission.
+Weather Unsafe still cancels acquisition, but permits shutdown park
 only when independent enclosure clearance remains valid.
 
 Shutdown skips new park motion without clearance, requests native slew-stop and
@@ -240,16 +268,16 @@ profile. Director never opens or closes the real enclosure itself.
 This is sampled native evidence, not a physical roof/mount interlock. Drivers
 must report truthful shutter state and honor abort/stop requests; independent
 observatory hardware protection is still required. Arbitrary third-party
-equipment clients are not excluded. The persistent observing-night recovery
-weather-hold policy, cloud classifier and automatic probes remain pending.
+equipment clients are not excluded. The cloud classifier and automatic probes
+remain pending.
 
 ## Session Recovery Client
 
-Runtime 0.9.0 / IPC 9 exposes recovery contract 1 through the managed runtime
+Runtime 0.12.0 / IPC 12 exposes recovery contract 2 through the managed runtime
 controller. The three-argument constructor takes the bundle, allocation ledger
 directory and a separate existing per-rig recovery directory. Two-argument
 callers keep recovery disabled. The public Session uses the three-argument
-constructor when focus/guide recovery is enabled or a rig recovery directory
+constructor when focus/guide or weather recovery is enabled or a rig recovery directory
 already exists. The managed
 client verifies both recovery mode and version in the handshake.
 
@@ -270,8 +298,9 @@ Native focus/guide recovery now admits a policy and observing night, persists
 one per-rig recovery directory across allocations, supplies fresh safety and
 **independent enclosure/mount-motion clearance**, and dispatches each original
 suggestion once with fresh native checks. Remaining work must classify compatible
-quality samples against a frozen reference and cancel/reconcile interrupted native
-work before resuming a weather hold. The local
+quality samples against a frozen reference and reconcile uncertain interrupted native
+work before resuming it. Settled weather holds use ResumeWeather only after the
+runtime verifies an open ledger with no unresolved capture or preparation. The local
 enclosure interlock now supplies separate clearance for ordinary acquisition
 and shutdown. A safe weather monitor alone does not prove a roof is clear.
 Do not enable recovery by adding the directory argument to the public owner

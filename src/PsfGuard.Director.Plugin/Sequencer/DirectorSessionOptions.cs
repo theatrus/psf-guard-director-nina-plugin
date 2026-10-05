@@ -9,6 +9,7 @@ public enum DirectorSafetyPolicy { RequireMonitor, Attended }
 public enum DirectorHorizonPolicy { NinaProfile, MinimumAltitude }
 public enum DirectorEnclosurePolicy { Unconfigured, OpenAir, RequireOpenShutter }
 public enum DirectorAbortPolicy { ParkMount, StopMount }
+public enum DirectorWeatherPolicy { StopForNight, HoldAndResume }
 public enum DirectorCheckInMode { Live, Deferred }
 
 // Requested local policy, not an issued program or permission to operate equipment.
@@ -28,6 +29,12 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private DirectorAbortPolicy onAbort = DirectorAbortPolicy.ParkMount;
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
     private bool retryFocusAndGuiding;
+    private DirectorWeatherPolicy weather;
+    private int stableSafeSeconds = 300, maximumWeatherMinutes = 360, maximumWeatherInterruptions = 10;
+    [JsonProperty] public DirectorWeatherPolicy Weather { get => weather; set => Set(ref weather, value); }
+    [JsonProperty] public int StableSafeSeconds { get => stableSafeSeconds; set => Set(ref stableSafeSeconds, value); }
+    [JsonProperty] public int MaximumWeatherMinutes { get => maximumWeatherMinutes; set => Set(ref maximumWeatherMinutes, value); }
+    [JsonProperty] public int MaximumWeatherInterruptions { get => maximumWeatherInterruptions; set => Set(ref maximumWeatherInterruptions, value); }
     private int retryCooldownSeconds = 60, maximumRecoveryMinutes = 10, maximumRecoveryAttempts = 3;
     [JsonProperty] public bool RetryFocusAndGuiding { get => retryFocusAndGuiding; set => Set(ref retryFocusAndGuiding, value); }
     [JsonProperty] public int RetryCooldownSeconds { get => retryCooldownSeconds; set => Set(ref retryCooldownSeconds, value); }
@@ -94,6 +101,11 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
         Range(RetryCooldownSeconds, 1, 3600, "Recovery cooldown (seconds)");
         Range(MaximumRecoveryMinutes, 1, 120, "Total recovery time (minutes)");
         Range(MaximumRecoveryAttempts, 1, 10, "Recovery attempts per session");
+        Range(StableSafeSeconds, 1, 3600, "Stable Safe/Open interval (seconds)");
+        Range(MaximumWeatherMinutes, 1, 1440, "Total weather hold time (minutes)");
+        Range(MaximumWeatherInterruptions, 1, 100, "Weather interruptions per night");
+        if (!Enum.IsDefined(Weather)) issues.Add("Unknown weather policy.");
+        if (StableSafeSeconds >= MaximumWeatherMinutes * 60) issues.Add("Stable Safe/Open interval must be shorter than the weather hold limit.");
         if (RetryCooldownSeconds >= MaximumRecoveryMinutes * 60)
             issues.Add("Recovery cooldown must be shorter than the total recovery time.");
         if (!Enum.IsDefined(Safety) || !Enum.IsDefined(Horizon)) issues.Add("Unknown safety or horizon policy.");
