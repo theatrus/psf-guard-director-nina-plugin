@@ -10,7 +10,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 internal sealed record NinaMotionEvidence(RecoveryMotion Motion, string Reason, ulong ValidUntilMs);
 
 // Weather safety and clearance for mount motion are independent. This owner
-// never opens a shutter and never resumes after losing commissioned clearance.
+// never opens a shutter. Rearming requires a separate stable-clear core decision.
 internal sealed class NinaEnclosureInterlock : IDomeConsumer
 {
     private readonly object gate = new();
@@ -22,10 +22,12 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
     private readonly DirectorEnclosurePolicy policy;
     private readonly TimeProvider clock;
     private readonly TimeSpan maxAge;
-    private readonly CancellationTokenSource interrupted = new();
+    private CancellationTokenSource interrupted = new();
     private readonly ITimer watchdog;
     private long? observed;
     private ulong observedUtc;
+    private long refusalRevision;
+    internal long RefusalRevision { get { lock (gate) return refusalRevision; } }
     private bool open, armed, stopped, disposed, profileChanged, receiving;
     private string reason = "Waiting for fresh enclosure clearance";
 
@@ -61,6 +63,18 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
     }
 
     internal CancellationToken Interrupted => interrupted.Token;
+    internal NinaMotionEvidence ReadCurrent() => Read(current: true);
+    internal void Rearm(long expectedRevision)
+    {
+        lock (gate)
+        {
+            if (Read(current: true).Motion != RecoveryMotion.Permitted || refusalRevision != expectedRevision) throw new InvalidOperationException(reason);
+            _ = ObserveCancellationAsync(interrupted.CancelAsync());
+            interrupted = new();
+            stopped = false;
+            armed = true;
+        }
+    }
     internal void Arm()
     {
         lock (gate) { RequireClear(); armed = true; }
@@ -70,11 +84,12 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
         var evidence = Read();
         if (evidence.Motion != RecoveryMotion.Permitted) throw new InvalidOperationException(evidence.Reason);
     }
-    internal NinaMotionEvidence Read()
+    internal NinaMotionEvidence Read() => Read(current: false);
+    private NinaMotionEvidence Read(bool current)
     {
         lock (gate)
         {
-            if (disposed || stopped) return new(RecoveryMotion.Unknown, reason, 0);
+            if (disposed || stopped && !current) return new(RecoveryMotion.Unknown, reason, 0);
             try
             {
                 if (profileChanged || !ReferenceEquals(profiles.ActiveProfile, profile) || profile.Id != profileId || profile.DomeSettings.Id != deviceId)
@@ -104,7 +119,7 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
         {
             // Registration can synchronously deliver NINA's cached info. Wait
             // for a subsequent device broadcast before treating it as fresh.
-            if (disposed || stopped || !receiving) return;
+            if (disposed || !receiving) return;
             try
             {
                 if (policy == DirectorEnclosurePolicy.OpenAir)
@@ -116,7 +131,7 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
                 var utc = checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
                 if (observed is { } previous && (clock.GetElapsedTime(previous, timestamp) < TimeSpan.Zero || utc < observedUtc))
                 { Refuse("Enclosure observation clock moved backwards"); return; }
-                if (armed && observed is { } last && (clock.GetElapsedTime(last, timestamp) >= maxAge || utc - observedUtc >= (ulong)maxAge.TotalMilliseconds))
+                if (armed && !stopped && observed is { } last && (clock.GetElapsedTime(last, timestamp) >= maxAge || utc - observedUtc >= (ulong)maxAge.TotalMilliseconds))
                 { Refuse("Enclosure updates resumed after a stale interval"); return; }
                 observed = timestamp; observedUtc = utc;
                 open = info.Connected && info.DeviceId == deviceId && info.ShutterStatus == ShutterState.ShutterOpen;
@@ -128,6 +143,7 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
 
     private NinaMotionEvidence Refuse(string message, RecoveryMotion motion = RecoveryMotion.Unknown)
     {
+        refusalRevision++;
         reason = message;
         if (armed && !stopped)
         {

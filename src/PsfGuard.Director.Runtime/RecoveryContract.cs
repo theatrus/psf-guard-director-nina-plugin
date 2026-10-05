@@ -19,7 +19,9 @@ public enum RecoveryError
 public sealed record RecoveryIdentity(string RigId, string ConfigurationId, string NightId, ulong StartsAtMs, ulong EndsAtMs);
 public sealed record RecoveryPolicy(ulong Revision, RecoveryQualityMode QualityMode, uint BadSamples, uint GoodProbes,
     ulong CooldownMs, ulong MaximumHoldMs, uint MaximumProbes, ulong OperationTimeoutMs, ulong EvidenceMaxAgeMs,
-    ulong LatestResumeMs, uint MaximumConsecutiveFailures, uint MaximumTotalFailures, bool ParkOnStop);
+    ulong LatestResumeMs, uint MaximumConsecutiveFailures, uint MaximumTotalFailures, bool ParkOnStop,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryWeatherPolicy? Weather = null);
+public sealed record RecoveryWeatherPolicy(ulong StableSafeMs, ulong MaximumHoldMs, uint MaximumInterruptions);
 public sealed record RecoveryConditions(PlannerSafety Safety, RecoveryMotion Motion);
 public sealed record RecoveryFailure(string AttemptId, RecoveryOperation Operation, string DeviceId, string TargetId, bool Uncertain);
 public sealed record RecoveryQualityContext(string TargetId, string FilterId, ulong ExposureMs, ushort BinX, ushort BinY,
@@ -54,6 +56,7 @@ public abstract record RecoveryCause
 public sealed record RecoveryHold(RecoveryCause Cause, ulong StartedAtMs, ulong RetryAtMs, ulong ExpiresAtMs, uint Probes, uint GoodProbes);
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "state")]
 [JsonDerivedType(typeof(RecoveryPhase.Acquiring), "acquiring")]
+[JsonDerivedType(typeof(RecoveryPhase.WeatherHolding), "weather_holding")]
 [JsonDerivedType(typeof(RecoveryPhase.Holding), "holding")]
 [JsonDerivedType(typeof(RecoveryPhase.Recovering), "recovering")]
 [JsonDerivedType(typeof(RecoveryPhase.Stopping), "stopping")]
@@ -61,6 +64,7 @@ public sealed record RecoveryHold(RecoveryCause Cause, ulong StartedAtMs, ulong 
 public abstract record RecoveryPhase
 {
     public sealed record Acquiring : RecoveryPhase;
+    public sealed record WeatherHolding(RecoveryCause Cause, ulong StartedAtMs, ulong? StableSinceMs) : RecoveryPhase;
     public sealed record Holding(RecoveryHold Hold) : RecoveryPhase;
     public sealed record Recovering(RecoveryHold Hold, string AttemptId, ulong StartedAtMs, ulong DeadlineMs) : RecoveryPhase;
     public sealed record Stopping(RecoveryCause Cause, ulong DeadlineMs, string? ParkAttemptId) : RecoveryPhase;
@@ -80,6 +84,8 @@ public abstract record RecoveryOutcome
 }
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "event")]
 [JsonDerivedType(typeof(RecoveryEvent.Tick), "tick")]
+[JsonDerivedType(typeof(RecoveryEvent.WeatherInterrupted), "weather_interrupted")]
+[JsonDerivedType(typeof(RecoveryEvent.ResumeWeather), "resume_weather")]
 [JsonDerivedType(typeof(RecoveryEvent.Quality), "quality")]
 [JsonDerivedType(typeof(RecoveryEvent.OperationFailure), "failure")]
 [JsonDerivedType(typeof(RecoveryEvent.BeginRecovery), "begin_recovery")]
@@ -90,6 +96,8 @@ public abstract record RecoveryOutcome
 public abstract record RecoveryEvent
 {
     public sealed record Tick : RecoveryEvent;
+    public sealed record WeatherInterrupted(bool Enclosure) : RecoveryEvent;
+    public sealed record ResumeWeather : RecoveryEvent;
     public sealed record Quality(RecoveryQualitySample Sample) : RecoveryEvent;
     public sealed record OperationFailure(RecoveryFailure Failure) : RecoveryEvent;
     public sealed record BeginRecovery(string AttemptId) : RecoveryEvent;
@@ -101,7 +109,8 @@ public abstract record RecoveryEvent
 public sealed record RecoveryFailureCount(RecoveryOperation Operation, string DeviceId, uint Consecutive, uint Total);
 public sealed record RecoverySnapshot(uint SchemaVersion, RecoveryIdentity Identity, RecoveryPolicy Policy, ulong LastEventMs,
     RecoveryPhase Phase, uint ConsecutiveBad, RecoveryQualityContext? QualityContext, ulong? LastQualityMs,
-    ImmutableArray<RecoveryFailureCount> Failures, uint TotalFailures, ulong TotalHoldMs, uint ProbesSpent);
+    ImmutableArray<RecoveryFailureCount> Failures, uint TotalFailures, ulong TotalHoldMs, uint ProbesSpent,
+    uint WeatherInterruptions = 0, ulong WeatherHoldMs = 0);
 public sealed record RecoveryRecord(ulong Revision, RecoverySnapshot Snapshot);
 public sealed record RecoveryRequest(string NightId, string ConfigurationId, string EventId, ulong ExpectedRevision,
     ulong NowMs, RecoveryConditions Conditions, RecoveryEvent Event);
@@ -116,7 +125,7 @@ public sealed record RecoveryResult<T>(T? Value, RecoveryError? Error) where T :
 
 internal static class RecoveryContract
 {
-    internal const int Version = 1;
+    internal const int Version = 2;
     internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -171,7 +180,7 @@ internal static class RecoveryContract
     {
         var record = Read<RecoveryRecord>(value);
         var state = record.Snapshot;
-        if (record.Revision > 100000 || state.SchemaVersion != Version || state.Identity.RigId != rig
+        if (record.Revision > 100000 || state.SchemaVersion != 1 || state.Identity.RigId != rig
             || night is not null && state.Identity.NightId != night
             || configuration is not null && state.Identity.ConfigurationId != configuration
             || state.Identity.StartsAtMs >= state.Identity.EndsAtMs || state.Identity.EndsAtMs > long.MaxValue

@@ -20,10 +20,12 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
     private readonly string deviceId;
     private readonly TimeProvider clock;
     private readonly TimeSpan maxAge;
-    private readonly CancellationTokenSource interrupted = new();
+    private CancellationTokenSource interrupted = new();
     private readonly ITimer watchdog;
     private long? observed;
     private ulong observedUtc;
+    private long refusalRevision;
+    internal long RefusalRevision { get { lock (gate) return refusalRevision; } }
     private bool safe, connected, armed, disposed, profileInvalidated;
     private string reason = "Waiting for a fresh safety-monitor update";
 
@@ -60,6 +62,19 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
 
     internal CancellationToken Interrupted => interrupted.Token;
 
+    internal NinaSafetyEvidence ReadCurrent() { lock (gate) return ReadLocked(current: true); }
+    internal void Rearm(long expectedRevision)
+    {
+        lock (gate)
+        {
+            if (ReadLocked(current: true).Safety != PlannerSafety.Safe || refusalRevision != expectedRevision) throw new InvalidOperationException(reason);
+            // Old native dispatch guards retain their canceled token forever.
+            _ = ObserveCancellationAsync(interrupted.CancelAsync());
+            interrupted = new();
+            armed = true;
+        }
+    }
+
     internal void Arm()
     {
         lock (gate)
@@ -74,7 +89,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
         lock (gate) return ReadLocked();
     }
 
-    private NinaSafetyEvidence ReadLocked()
+    private NinaSafetyEvidence ReadLocked(bool current = false)
     {
         if (disposed) return new(PlannerSafety.Unknown, "Safety interlock disposed", 0);
         try
@@ -82,15 +97,15 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
             if (profileInvalidated || !ReferenceEquals(profiles.ActiveProfile, profile) || profile.Id != profileId
                 || profile.SafetyMonitorSettings.Id != deviceId)
                 return Refuse("NINA profile or safety monitor changed");
-            var current = monitor.GetInfo();
-            if (!current.Connected || current.DeviceId != deviceId) return Refuse("Required safety monitor disconnected or changed");
-            if (!current.IsSafe) return Refuse("Safety monitor reports unsafe", PlannerSafety.Unsafe);
+            var info = monitor.GetInfo();
+            if (!info.Connected || info.DeviceId != deviceId) return Refuse("Required safety monitor disconnected or changed");
+            if (!info.IsSafe) return Refuse("Safety monitor reports unsafe", PlannerSafety.Unsafe);
             var elapsed = observed is { } timestamp ? clock.GetElapsedTime(timestamp) : TimeSpan.MaxValue;
             var now = checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
             if (!connected || !safe || observed is null || elapsed < TimeSpan.Zero || elapsed >= maxAge
                 || now < observedUtc || now - observedUtc >= (ulong)maxAge.TotalMilliseconds)
                 return Refuse("Safety-monitor evidence is missing or stale");
-            if (interrupted.IsCancellationRequested) return new(PlannerSafety.Unsafe, reason, 0);
+            if (!current && interrupted.IsCancellationRequested) return new(PlannerSafety.Unsafe, reason, 0);
             reason = "Safety monitor is safe";
             // Bound wall-clock validity by both clocks; moving the wall clock
             // backwards cannot extend freshness for a previously observed sample.
@@ -114,7 +129,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
                     Refuse("Safety-monitor observation clock moved backwards");
                     return;
                 }
-                if (armed && observed is { } last && (clock.GetElapsedTime(last, timestamp) >= maxAge
+                if (armed && !interrupted.IsCancellationRequested && observed is { } last && (clock.GetElapsedTime(last, timestamp) >= maxAge
                     || utc - observedUtc >= (ulong)maxAge.TotalMilliseconds))
                 {
                     Refuse("Safety-monitor updates resumed after a stale interval");
@@ -138,6 +153,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
 
     private NinaSafetyEvidence Refuse(string message, PlannerSafety state = PlannerSafety.Unknown)
     {
+        refusalRevision++;
         reason = message;
         if (armed && !interrupted.IsCancellationRequested)
         {

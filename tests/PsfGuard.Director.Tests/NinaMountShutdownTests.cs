@@ -13,6 +13,28 @@ namespace PsfGuard.Director.Tests;
 public sealed class NinaMountShutdownTests
 {
     [Fact]
+    public async Task WeatherStopWaitsForNativeConfirmationWithoutRepeatingCommands()
+    {
+        var f = new Fixture();
+        f.Telescope.Setup(t => t.SetTrackingEnabled(false)).Returns(true);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var stopped = NinaMountShutdown.StopAndConfirmAsync(f.Profiles.Object, f.Id, f.Telescope.Object, "mount", deadline.Token);
+        Assert.False(stopped.IsCompleted);
+        f.Info.TrackingEnabled = false;
+        await stopped;
+        f.VerifyStopped();
+    }
+
+    [Fact]
+    public async Task WeatherStopCannotAssumeQuiescenceFromAnUnchangedNativeState()
+    {
+        var f = new Fixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            NinaMountShutdown.StopAndConfirmAsync(f.Profiles.Object, f.Id, f.Telescope.Object, "mount", deadline.Token));
+        f.VerifyStopped();
+    }
+    [Fact]
     public void LegacySequencesKeepParkPolicyAndUnknownPolicyIsRejected()
     {
         var options = Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>("{}")!;
@@ -72,6 +94,7 @@ public sealed class NinaMountShutdownTests
         if (failure == "refused") setup.ReturnsAsync(false);
         else setup.ThrowsAsync(failure == "cancelled" ? new OperationCanceledException() : new IOException("park failed"));
         await Assert.ThrowsAnyAsync<Exception>(() => f.Park());
+        Assert.False(f.CanResumeWeather);
         f.VerifyStopped();
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Park());
         f.Telescope.Verify(t => t.ParkTelescope(It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
@@ -110,6 +133,7 @@ public sealed class NinaMountShutdownTests
                 return true;
             });
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Park(interrupted.Token));
+        Assert.False(f.CanResumeWeather);
         f.VerifyStopped();
         f.Telescope.Verify(t => t.ParkTelescope(It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -149,6 +173,7 @@ public sealed class NinaMountShutdownTests
         internal TelescopeInfo Info { get; } = new() { Connected = true, DeviceId = "mount", TrackingEnabled = true };
         internal RecoveryMotion Motion = RecoveryMotion.Permitted;
         private readonly NinaMountShutdown shutdown = new();
+        internal bool CanResumeWeather => shutdown.CanResumeWeather;
         internal Fixture()
         {
             Profile.SetupGet(p => p.Id).Returns(Id);

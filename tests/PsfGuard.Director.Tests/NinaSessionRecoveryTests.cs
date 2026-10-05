@@ -8,6 +8,29 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class NinaSessionRecoveryTests
 {
+    [Fact]
+    public async Task WeatherHoldRequiresSettledLedgerAndClosedRoofAllowsNormalNightExit()
+    {
+        await using var f = await Fixture.Create(weather: true);
+        f.Conditions = new(PlannerSafety.Safe, RecoveryMotion.Unknown);
+        await f.Recovery.InterruptWeatherAsync(true, default);
+        Assert.IsType<RecoveryPhase.WeatherHolding>(f.Recovery.Record!.Snapshot.Phase);
+        f.Conditions = new(PlannerSafety.Safe, RecoveryMotion.Permitted);
+        await f.Recovery.ObserveWeatherAsync(default);
+        for (var i = 1; i <= 6; i++)
+        {
+            f.Clock.Now = f.Start + (ulong)i * 1000;
+            await f.Recovery.ObserveWeatherAsync(default);
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Recovery.ResumeWeatherAsync(default));
+        Assert.IsType<RecoveryPhase.WeatherHolding>(f.Recovery.Record!.Snapshot.Phase);
+        f.Conditions = new(PlannerSafety.Safe, RecoveryMotion.Unknown);
+        f.Clock.Now = f.End;
+        await f.Recovery.EndNightAsync(default, motionBlocked: true);
+        var stopped = Assert.IsType<RecoveryPhase.Stopped>(f.Recovery.Record!.Snapshot.Phase);
+        Assert.IsType<RecoveryCause.NightEnded>(stopped.Cause);
+        Assert.Equal(RecoveryShutdown.MotionBlocked, stopped.Shutdown);
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -189,11 +212,19 @@ public sealed class NinaSessionRecoveryTests
         internal ulong Start = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         internal ulong End => Start + 3600000;
         internal readonly Clock Clock = new();
-        internal NinaSessionRecovery NewRecovery() => new(Runtime, new() { RetryFocusAndGuiding = true, RetryCooldownSeconds = 1, MaximumRecoveryAttempts = 1 },
-            () => Conditions, () => { }, message => Report?.Invoke(message), Clock);
-        internal static async Task<Fixture> Create()
+        internal bool Weather;
+        internal NinaSessionRecovery NewRecovery() => new(Runtime, new()
         {
-            var f = new Fixture();
+            RetryFocusAndGuiding = true,
+            RetryCooldownSeconds = 1,
+            MaximumRecoveryAttempts = 1,
+            Weather = Weather ? DirectorWeatherPolicy.HoldAndResume : DirectorWeatherPolicy.StopForNight,
+            StableSafeSeconds = 5
+        },
+            () => Conditions, () => { }, message => Report?.Invoke(message), Clock);
+        internal static async Task<Fixture> Create(bool weather = false)
+        {
+            var f = new Fixture { Weather = weather };
             Directory.CreateDirectory(Path.Combine(f.root, "ledger"));
             Directory.CreateDirectory(Path.Combine(f.root, "recovery"));
             f.Runtime = new(ProcessTests.BundleDirectory, Path.Combine(f.root, "ledger"), Path.Combine(f.root, "recovery"));

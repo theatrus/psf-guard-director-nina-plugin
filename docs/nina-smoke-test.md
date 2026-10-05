@@ -1,5 +1,46 @@
 # Real N.I.N.A. smoke test
 
+## Weather and Roof Holds
+
+2026-10-05: packaged Director, runtime 0.12.0 / IPC 12, NINA 3.3.0.1065,
+ASCOM OmniSim and private PSF Guard built from `ec23f0e`:
+
+- `-PublicAcquisition -LocalTargetScheduling -MoonAvoidance -NightEndScenario
+  target-wait -WeatherHoldScenario roof-wait` passed. Roof closure interrupts an
+  offline target wait. Reopen/close flapping resets the continuous clearance
+  interval; stable reopening resumes fresh selection under the same allocation.
+  Night end runs the following native sequence step. Batch replay delivers the
+  original captures without duplicate events or hardware activity.
+  Evidence: `artifacts/nina-smoke-a8ab49629059479a86ad991a0d7073a7/probe/ab7640af56f34cf6b3a961ef4c2f1d6a/result.json`.
+- The same target-wait fixture with `-WeatherHoldScenario roof-night-end`
+  passed with the roof held closed through the deadline. Motion remained stopped,
+  parking was blocked, and the following native step ran normally. Reopening
+  afterward did not revive the finished owner; duplicate launch remained refused.
+  Evidence: `artifacts/nina-smoke-3811b2002bba4c6da9a2c8b94b2d6b0c/probe/b1599d64aa3c4019bb9aa4418905a2ac/result.json`.
+- `-PublicAcquisition -PublicUnsafe -WeatherHoldScenario safety-exposure`
+  passed. The active exposure was aborted, tracking-off confirmed from native
+  state, and the mount parked. Restoring Safe did not restart an uncertain capture.
+  Evidence: `artifacts/nina-smoke-fca20f939adb488191919255c30bdbe6/probe/0552ccd8419d4836b002ba54927b97dc/result.json`.
+- `-PublicAcquisition -EnclosureClosure -WeatherHoldScenario roof-exposure`
+  passed. Roof closure aborted the exposure and stopped tracking without parking
+  under the roof. Reopening did not restart the uncertain capture or park.
+  Evidence: `artifacts/nina-smoke-d10101ab4a194348bc404ed2c40a954d/probe/d008c0eddc5f430e92524667c33fb4a3/result.json`.
+- The target-wait fixture with `-WeatherHoldScenario safety-wait` passed.
+  Unsafe/Safe flapping resets the delay; stable Safe evidence resumes local
+  selection, then normal night end and duplicate-free batch replay complete.
+  Evidence: `artifacts/nina-smoke-3651fbb167d9452e97ffc8d9ab8cda32/probe/85f7a2a5a9f946b482f4c0e9f94c7ce1/result.json`.
+
+The remaining target stays Moon-blocked: this fixture verifies resumed local
+selection, not a new science exposure after reopening. It does not prove
+automatic reconciliation of interrupted capture/save outcomes, startup or
+between-allocation weather recovery, restart readmission, or cloud probes.
+The harness renders all native settings and checks layout at 640 and 1000 pixels.
+All 859 managed tests and runtime-fetch regressions passed with the pinned runtime.
+Development packaging, format verification and `git diff --check` passed.
+The final default-policy regression (`-PublicAcquisition -PublicUnsafe`, with
+weather holds disabled) also passed:
+`artifacts/nina-smoke-0a31bead0372472d973e0cc77c861f5f/probe/b970d2ca211b4f99b2dd7df4ac5fce46/result.json`.
+
 ## Normal Night End
 
 2026-10-05: packaged Director, runtime 0.11.2 / IPC 11, NINA 3.3.0.1065,

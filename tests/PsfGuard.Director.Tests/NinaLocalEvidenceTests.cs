@@ -17,6 +17,25 @@ public sealed class NinaLocalEvidenceTests
     private const long Day = 1790726400;
 
     [Fact]
+    public void SafetyRearmKeepsInterruptedWorkCancelledAndRefusesHiddenFlaps()
+    {
+        using var f = new SafetyFixture();
+        f.Broadcast(); f.Guard.Arm();
+        var old = f.Guard.Interrupted;
+        f.Monitor.Raise(m => m.IsSafeChanged += null, new IsSafeEventArgs(false));
+        f.Broadcast();
+        var revision = f.Guard.RefusalRevision;
+        Assert.Equal(PlannerSafety.Safe, f.Guard.ReadCurrent().Safety);
+        f.Monitor.Raise(m => m.IsSafeChanged += null, new IsSafeEventArgs(false));
+        f.Broadcast();
+        Assert.Throws<InvalidOperationException>(() => f.Guard.Rearm(revision));
+        f.Guard.Rearm(f.Guard.RefusalRevision);
+        Assert.True(old.IsCancellationRequested);
+        Assert.False(f.Guard.Interrupted.IsCancellationRequested);
+        Assert.Equal(PlannerSafety.Safe, f.Guard.Read().Safety);
+    }
+
+    [Fact]
     public void OrientationUsesDatedNativeValuesAndArcsecondsToRadians()
     {
         var evidence = NinaEarthOrientation.Bind(Samples(), (ulong)(Day - 3600) * 1000, (ulong)(Day + 3600) * 1000);

@@ -20,7 +20,8 @@ internal sealed class NinaSessionHooks
     private ISequenceContainer? target;
     private string? targetId;
     private int entered;
-    private bool faulted, finished;
+    private bool faulted, finished, interruptedWait;
+    internal bool CanResumeWeather => !faulted && !finished && Volatile.Read(ref entered) == 0;
 
     internal NinaSessionHooks(DirectorSessionContainer session, TimeProvider clock, Action<NinaInstructionSlots>? configure = null)
     {
@@ -76,10 +77,21 @@ internal sealed class NinaSessionHooks
             ArgumentNullException.ThrowIfNull(wait);
             await LeaveTargetAsync(progress, token).ConfigureAwait(false);
             await RunAsync(NinaInstructionSlot.BeforeWait, parent, progress, token).ConfigureAwait(false);
-            await wait(token).ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
+            try { await wait(token).ConfigureAwait(false); token.ThrowIfCancellationRequested(); }
+            catch (OperationCanceledException) { interruptedWait = true; throw; }
             await RunAsync(NinaInstructionSlot.AfterWait, parent, progress, token).ConfigureAwait(false);
         }, token);
+
+    internal Task ReenterAfterWeatherAsync(IProgress<ApplicationStatus> progress, CancellationToken token) =>
+        BoundaryAsync(async () =>
+        {
+            if (interruptedWait)
+            {
+                interruptedWait = false;
+                await RunAsync(NinaInstructionSlot.AfterWait, parent, progress, token).ConfigureAwait(false);
+            }
+            await LeaveTargetAsync(progress, token).ConfigureAwait(false);
+        }, token, resumeWeather: true);
 
     internal Task FinishAsync(IProgress<ApplicationStatus> progress, CancellationToken token) =>
         BoundaryAsync(async () =>
@@ -97,16 +109,17 @@ internal sealed class NinaSessionHooks
         targetId = null;
     }
 
-    private async Task BoundaryAsync(Func<Task> action, CancellationToken token)
+    private async Task BoundaryAsync(Func<Task> action, CancellationToken token, bool resumeWeather = false)
     {
         if (Interlocked.CompareExchange(ref entered, 1, 0) != 0) throw new InvalidOperationException("Director session boundaries cannot overlap.");
         try
         {
             if (faulted || finished) throw new InvalidOperationException("This Director hook session has ended.");
+            if (interruptedWait && !resumeWeather) throw new InvalidOperationException("Interrupted wait requires explicit weather readmission.");
             token.ThrowIfCancellationRequested();
             await action().ConfigureAwait(false);
         }
-        catch { faulted = true; throw; }
+        catch { if (!interruptedWait || resumeWeather) faulted = true; throw; }
         finally { Volatile.Write(ref entered, 0); }
     }
 
