@@ -363,7 +363,7 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 if (coordinator.NightEndScenario is not null)
                 {
-                    sessionContainer.Options.MaximumHours = 0.04;
+                    sessionContainer.Options.MaximumHours = coordinator.WeatherHoldScenario == "roof-night-end" ? 0.025 : 0.04;
                     sessionContainer.Options.RetryFocusAndGuiding = coordinator.NightEndScenario == "workload-wait";
                 }
                 if (coordinator.RecoveryScenario is not null)
@@ -598,6 +598,10 @@ public sealed class SimulatorSequence : SequenceItem
                         throw new InvalidDataException("Night end did not park, release ownership and execute the following native sequence step.");
                     await File.WriteAllTextAsync(Path.Combine(run, "night-end-verified.txt"), coordinator.NightEndScenario, lifetime.Token);
                     Step("Normal night end parked and ran the following native sequence step without cancellation");
+                    // The later duplicate-launch test needs fresh admission
+                    // evidence so it reaches the allocation replay guard.
+                    if (coordinator.WeatherHoldScenario == "roof-night-end"
+                        && !await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen after night-end verification.");
                 }
                 async Task VerifyWeatherHold()
                 {

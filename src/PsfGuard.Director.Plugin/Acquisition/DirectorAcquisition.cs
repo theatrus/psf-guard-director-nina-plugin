@@ -577,7 +577,7 @@ public sealed class DirectorAcquisition
                 var roof = enclosure.Interrupted.IsCancellationRequested;
                 Report(roof ? "Roof hold; stopping motion" : "Weather hold; stopping acquisition", null);
                 // Stop motion before journaling or waiting for the guider.
-                NinaMountShutdown.Stop(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!);
+                await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, lifetime.Token);
                 using (var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
                 {
                     if (guider?.GetInfo().Connected == true)
@@ -592,7 +592,7 @@ public sealed class DirectorAcquisition
                 var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
                 if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
                 await EnsureSettledAsync(runtime, lifetime.Token);
-                if (!hooks.CanResumeWeather || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
+                if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
                     throw new InvalidOperationException("Weather interruption requires operation or sequence-hook reconciliation; automatic resume is blocked.");
                 if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
                     await Park(lifetime.Token);
