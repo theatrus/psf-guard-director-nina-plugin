@@ -17,10 +17,68 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // supply fresh core authorization before this adapter can be wired to dispatch.
 internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediator camera,
     IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-    string journalRoot, TimeSpan saveTimeout, TimeProvider clock)
+    string journalRoot, TimeSpan saveTimeout, TimeProvider clock) : IDisposable
 {
     internal const string CaptureIdHeader = "PGCAPID";
     private readonly SemaphoreSlim captureGate = new(1, 1);
+    private CaptureJournal? interrupted;
+    private CaptureEvidence? completed;
+    private Task<string>? pendingSave;
+    private Action? detachSave;
+    private long interruptedStarted, interruptedDownloaded;
+
+    // Only the live owner can prove that its invocation ended before enqueue.
+    // A journal recovered after a crash deliberately has no such authority.
+    internal async Task<CaptureEvidence?> ReconcileInterruptedAsync(string captureId, CancellationToken token)
+    {
+        if (!await captureGate.WaitAsync(0, token).ConfigureAwait(false))
+            throw new InvalidOperationException("Capture invocation has not settled.");
+        try
+        {
+            var journal = interrupted;
+            if (journal is null)
+            {
+                if (completed?.Intent.CaptureId.ToString("D") != captureId) return null;
+                CheckLocalContext(completed.Intent);
+                if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is not quiescent.");
+                return completed;
+            }
+            if (journal.Evidence.Intent.CaptureId.ToString("D") != captureId) return null;
+            CheckLocalContext(journal.Evidence.Intent);
+            if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is not quiescent.");
+            if (journal.Evidence.Phase == CapturePhase.SaveUncertain)
+            {
+                if (pendingSave is null) return null;
+                try
+                {
+                    var path = await pendingSave.WaitAsync(saveTimeout, token).ConfigureAwait(false);
+                    CheckLocalContext(journal.Evidence.Intent);
+                    journal.Record(journal.Evidence with
+                    {
+                        Phase = CapturePhase.Saved, SavedPath = path, UpdatedAt = clock.GetUtcNow(),
+                        ProcessingAndSaveMs = clock.GetElapsedTime(interruptedDownloaded).TotalMilliseconds,
+                        TotalMs = clock.GetElapsedTime(interruptedStarted).TotalMilliseconds
+                    });
+                }
+                catch (ImageSaveFailedException)
+                {
+                    journal.Record(journal.Evidence with { Phase = CapturePhase.Failed, UpdatedAt = clock.GetUtcNow() });
+                }
+            }
+            else if (journal.Evidence.Phase == CapturePhase.CaptureUncertain)
+            {
+                // The exposure may have happened, but this completed invocation
+                // cannot enqueue an image. Spend the attempt; never refund it.
+                journal.Record(journal.Evidence with { Phase = CapturePhase.Failed, UpdatedAt = clock.GetUtcNow() });
+            }
+            CheckLocalContext(journal.Evidence.Intent);
+            token.ThrowIfCancellationRequested();
+            return journal.Evidence;
+        }
+        finally { captureGate.Release(); }
+    }
+
+    public void Dispose() => Interlocked.Exchange(ref detachSave, null)?.Invoke();
 
     internal async Task<CaptureEvidence> CaptureAsync(CaptureIntent intent,
         Func<CancellationToken, Task<Action>> revalidateAtDispatch,
@@ -39,6 +97,8 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         var downloaded = started;
         try
         {
+            if (interrupted is not null && interrupted.Evidence.Intent.CaptureId != intent.CaptureId)
+                throw new InvalidOperationException("Interrupted capture must be acknowledged before another exposure.");
             CheckLocalContext(intent);
             var captureProfile = profiles.ActiveProfile;
             if (captureProfile.Id != intent.ProfileId) throw new InvalidOperationException("NINA profile changed before capture.");
@@ -126,6 +186,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 savedAttached = true;
                 saves.ImageSaveFailed += Failed;
                 failedAttached = true;
+                pendingSave = receipt.Task;
                 // Persist before enqueue: a crash here is uncertain, never an
                 // authorization to repeat the exposure with this identity.
                 Record(CapturePhase.SaveQueued);
@@ -157,12 +218,19 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                     ProcessingAndSaveMs = clock.GetElapsedTime(downloaded).TotalMilliseconds,
                     TotalMs = clock.GetElapsedTime(started).TotalMilliseconds
                 });
-                return journal.Evidence;
+                completed = journal.Evidence;
+                return completed;
             }
             finally
             {
-                try { if (savedAttached) saves.ImageSaved -= Saved; }
-                finally { if (failedAttached) saves.ImageSaveFailed -= Failed; }
+                void Detach()
+                {
+                    try { if (savedAttached) saves.ImageSaved -= Saved; }
+                    finally { if (failedAttached) saves.ImageSaveFailed -= Failed; }
+                }
+                if (journal.Evidence.Phase == CapturePhase.SaveQueued && !receipt.Task.IsCompleted)
+                    detachSave = Detach;
+                else Detach();
             }
         }
         catch (Exception error)
@@ -185,6 +253,9 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                         ErrorType = error.GetType().Name,
                         TotalMs = clock.GetElapsedTime(started).TotalMilliseconds
                     });
+                    interrupted = journal;
+                    interruptedStarted = started;
+                    interruptedDownloaded = downloaded;
                 }
                 catch (Exception journalError) { throw new AggregateException("Capture and journal update failed.", error, journalError); }
             }
@@ -202,6 +273,17 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             try { progress.Report(new ApplicationStatus { Source = "PSF Guard Director", Status = message }); }
             catch (Exception error) { System.Diagnostics.Trace.TraceError("Director progress observer failed: {0}", error.GetType().Name); }
         }
+    }
+
+    internal void AcknowledgeInterrupted(string captureId)
+    {
+        if (interrupted is null && completed?.Intent.CaptureId.ToString("D") == captureId) { completed = null; return; }
+        if (interrupted?.Evidence.Intent.CaptureId.ToString("D") != captureId
+            || interrupted.Evidence.Phase is not (CapturePhase.Saved or CapturePhase.Failed or CapturePhase.Interrupted))
+            throw new InvalidOperationException("Interrupted capture has no settled outcome.");
+        Dispose();
+        pendingSave = null;
+        interrupted = null;
     }
 
     private static void ObserveFault(Task task) => _ = task.ContinueWith(

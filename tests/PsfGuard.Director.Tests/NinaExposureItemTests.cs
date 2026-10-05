@@ -190,6 +190,7 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
         item.ResetProgress();
         await Assert.ThrowsAsync<InvalidOperationException>(() => item.Execute(f.Progress, default));
+        f.DisposeAdapter();
         f.AssertDetached();
     }
 

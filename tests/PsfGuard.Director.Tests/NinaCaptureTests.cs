@@ -191,11 +191,13 @@ public sealed partial class NinaCaptureTests
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
-        f.AssertDetached();
         f.Saved();
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
         await Assert.ThrowsAsync<IOException>(() => f.Run());
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
+        Assert.Equal(CapturePhase.Saved, (await f.Reconcile())!.Phase);
+        f.Acknowledge();
+        f.AssertDetached();
     }
 
     [Fact]
@@ -204,7 +206,83 @@ public sealed partial class NinaCaptureTests
         using var f = new Fixture(TimeSpan.FromMilliseconds(50));
         await Assert.ThrowsAsync<TimeoutException>(() => f.Run());
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
+        f.DisposeAdapter();
         f.AssertDetached();
+    }
+
+    [Fact]
+    public async Task LiveSettledCaptureWithoutEnqueueSpendsAttemptButDoesNotClaimNoExposure()
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .ThrowsAsync(new OperationCanceledException());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        Assert.Null(await f.Reconcile(Guid.NewGuid().ToString("D")));
+        f.CameraInfo.IsExposing = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reconcile());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        f.CameraInfo.IsExposing = false;
+        Assert.Equal(CapturePhase.Failed, (await f.Reconcile())!.Phase);
+        Assert.Null(f.Read().SavedPath);
+        Assert.False(f.Enqueued.Task.IsCompleted);
+        f.Acknowledge();
+        await Assert.ThrowsAsync<IOException>(() => f.Run());
+        f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName), Times.Once);
+    }
+
+    [Fact]
+    public async Task SettlementRefusesChangedCameraOrProfile()
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), f.Progress, f.Intent.TargetName))
+            .ThrowsAsync(new OperationCanceledException());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Run());
+        f.CameraInfo.Connected = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reconcile());
+        f.CameraInfo.Connected = true;
+        f.Profile.SetupGet(x => x.Id).Returns(Guid.NewGuid());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Reconcile());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+    }
+
+    [Fact]
+    public async Task LateSaveFailureSettlesWithoutAnotherExposure()
+    {
+        using var f = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var task = f.Run(token: cancellation.Token);
+        await f.Enqueued.Task;
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        f.Saves.Raise(x => x.ImageSaveFailed += null!, f.Saves.Object,
+            new ImageSaveFailedEventArgs(f.Image.Object, f.Root, "test", ImageSaveFailureStage.SaveToDisk, new IOException("disk full")));
+        Assert.Equal(CapturePhase.Failed, (await f.Reconcile())!.Phase);
+        f.Acknowledge();
+        f.AssertDetached();
+    }
+
+    [Fact]
+    public async Task MissingLateSaveRemainsUncertainAndCannotBeAcknowledged()
+    {
+        using var f = new Fixture(TimeSpan.FromMilliseconds(50));
+        await Assert.ThrowsAsync<TimeoutException>(() => f.Run());
+        await Assert.ThrowsAsync<TimeoutException>(() => f.Reconcile());
+        Assert.Throws<InvalidOperationException>(() => f.Acknowledge());
+        Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
+    }
+
+    [Fact]
+    public async Task SavedReceiptSurvivesCancellationAfterAdapterReturned()
+    {
+        using var f = new Fixture();
+        var task = f.Run();
+        await f.Enqueued.Task;
+        f.Saved();
+        var saved = await task;
+        Assert.Equal(saved, await f.Reconcile());
+        f.Acknowledge();
+        Assert.Null(await f.Reconcile());
     }
 
     [Fact]
@@ -263,6 +341,7 @@ public sealed partial class NinaCaptureTests
         await Assert.ThrowsAsync<TimeoutException>(() => f.Run());
         Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
         stalled.SetException(new IOException("late queue failure"));
+        f.DisposeAdapter();
         f.AssertDetached();
     }
 
@@ -584,6 +663,9 @@ public sealed partial class NinaCaptureTests
 
         public Task<CaptureEvidence> Run(Func<CancellationToken, Task>? authorize = null, CancellationToken token = default) =>
             adapter.CaptureAsync(Intent, NativeDispatchTest.After(authorize), Progress, token);
+        public Task<CaptureEvidence?> Reconcile(string? id = null) => adapter.ReconcileInterruptedAsync(id ?? Intent.CaptureId.ToString("D"), CancellationToken.None);
+        public void Acknowledge() => adapter.AcknowledgeInterrupted(Intent.CaptureId.ToString("D"));
+        public void DisposeAdapter() => adapter.Dispose();
         public CaptureEvidence Read() => CaptureJournal.Read(Path.Combine(Root, Intent.ProfileId.ToString("N"), $"{Intent.CaptureId:N}.json"));
         public void Saved(ImageMetaData? metadata = null) => Saves.Raise(x => x.ImageSaved += null!, Saves.Object,
             new ImageSavedEventArgs { MetaData = metadata ?? Metadata, PathToImage = new Uri(ImagePath) });
@@ -592,6 +674,6 @@ public sealed partial class NinaCaptureTests
             Saves.VerifyRemove(x => x.ImageSaved -= It.IsAny<EventHandler<ImageSavedEventArgs>>(), Times.Once);
             Saves.VerifyRemove(x => x.ImageSaveFailed -= It.IsAny<Func<object, ImageSaveFailedEventArgs, Task>>(), Times.Once);
         }
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        public void Dispose() { adapter.Dispose(); Directory.Delete(Root, recursive: true); }
     }
 }

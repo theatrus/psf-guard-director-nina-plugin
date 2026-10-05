@@ -204,9 +204,17 @@ canceled. Resume creates a new token generation, asks Rust for fresh work, and
 re-enters target setup. Interrupted idle waits run their After Wait hook once
 after readmission; interrupted user hooks cannot be replayed.
 
-This increment resumes settled boundaries, including offline target waits. It
-does not automatically reconcile a canceled exposure, uncertain preparation or
-user hook; those stop with reconciliation required. Startup and between-allocation
+The live capture owner also settles interrupted exposures before readmission.
+An invocation that ended before queuing a save can consume its attempt as failed
+once the same camera is connected and quiescent. This does not claim the sensor
+never exposed and never refunds or replays that attempt. A queued save instead
+requires an exact NINA image ID and Director capture ID receipt, within the save
+timeout; a late saved frame remains pending assessment. Its After Each Exposure
+hook runs only after stable Safe/Open readmission.
+
+Missing files, a restarted process, uncertain preparation, and interrupted user
+hooks or native triggers remain reconciliation-required, not automatic retries.
+Startup and between-allocation
 workload admission still require safe/open conditions and are not resumable
 weather holds. Restart readmission, cloud classification and probes remain
 unfinished. Hold status and spent limits appear in Session/Activity and live

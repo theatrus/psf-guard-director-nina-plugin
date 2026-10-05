@@ -82,6 +82,8 @@ internal sealed class CaptureJournal
             (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.CaptureUncertain or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.Downloaded, CapturePhase.SaveQueued or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.SaveQueued, CapturePhase.Saved or CapturePhase.Failed or CapturePhase.SaveUncertain) => true,
+            (CapturePhase.SaveUncertain, CapturePhase.Saved or CapturePhase.Failed) => true,
+            (CapturePhase.CaptureUncertain, CapturePhase.Failed) => true,
             _ => false
         };
         if (!validTransition) throw new InvalidOperationException("Invalid capture evidence transition.");

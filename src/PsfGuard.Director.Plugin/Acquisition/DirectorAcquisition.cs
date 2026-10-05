@@ -388,11 +388,12 @@ public sealed class DirectorAcquisition
             var hooks = new NinaSessionHooks(container, TimeProvider.System, native is null ? null : native.ConfigureTargetSetup);
             native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
-            var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
+            using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
                 TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
+            var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
@@ -553,7 +554,14 @@ public sealed class DirectorAcquisition
                     captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
                         + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
                     try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
-                    catch { container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile"); throw; }
+                    catch
+                    {
+                        // If the adapter did not report the failure, a native
+                        // trigger may have been interrupted before/after it.
+                        interruptedSequenceTrigger = exposure.ExecutionError is null;
+                        container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile");
+                        throw;
+                    }
                     var evidence = exposure.Evidence;
                     if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
                     Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
@@ -591,10 +599,31 @@ public sealed class DirectorAcquisition
                     }
                 }
                 await recovery.InterruptWeatherAsync(roof, lifetime.Token);
+                string? lateSavedCapture = null;
+                var unresolved = Require(await runtime.FindUnresolvedAttemptAsync(lifetime.Token)).Attempt;
+                if (unresolved is not null)
+                {
+                    Report("Weather hold; settling interrupted exposure", null);
+                    var settled = await adapter.ReconcileInterruptedAsync(unresolved.CaptureId, lifetime.Token);
+                    if (settled is null || settled.Intent.Program is null || settled.Intent.Program.LedgerId != LastLedger?.LedgerId
+                        || settled.Intent.GoalId != unresolved.GoalId || unresolved.Evidence is not LedgerEvidence.Reserved)
+                        throw new InvalidOperationException("Interrupted exposure has no live, matching settlement evidence.");
+                    LedgerEvidence outcome = settled.Phase switch
+                    {
+                        CapturePhase.Saved => new LedgerEvidence.Saved(unresolved.CaptureId, checked((ulong)Math.Ceiling(settled.TotalMs!.Value))),
+                        CapturePhase.Failed or CapturePhase.Interrupted => new LedgerEvidence.Failed("interrupted_capture_not_saved"),
+                        _ => throw new InvalidOperationException("Interrupted exposure remains uncertain.")
+                    };
+                    Require(await runtime.RecordAsync(unresolved.CaptureId, outcome, lifetime.Token));
+                    adapter.AcknowledgeInterrupted(unresolved.CaptureId);
+                    if (settled.Phase == CapturePhase.Saved) lateSavedCapture = unresolved.CaptureId;
+                    container.RecordAction(target?.Name ?? "", "Exposure", settled.Phase == CapturePhase.Saved
+                        ? "Late save confirmed; pending assessment" : "Interrupted; attempt consumed without saved image");
+                }
                 var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
                 if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
                 await EnsureSettledAsync(runtime, lifetime.Token);
-                if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
+                if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || interruptedSequenceTrigger || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
                     throw new InvalidOperationException("Weather interruption requires operation or sequence-hook reconciliation; automatic resume is blocked.");
                 if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
                     await Park(lifetime.Token);
@@ -626,6 +655,7 @@ public sealed class DirectorAcquisition
                         operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
                         previousPointing = null;
                         filterCounts.Clear();
+                        if (lateSavedCapture is not null) await hooks.ExposureSavedAsync(lateSavedCapture, progress, operations.Token);
                         await hooks.ReenterAfterWeatherAsync(progress, operations.Token);
                         container.UpdateDisplay(d => d with { WaitReason = "-" });
                         Report("Weather cleared; selecting fresh work", null);

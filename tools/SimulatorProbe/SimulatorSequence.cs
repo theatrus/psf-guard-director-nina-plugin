@@ -488,6 +488,54 @@ public sealed class SimulatorSequence : SequenceItem
                         await coordinator.ReverseProjectOrderAsync(lifetime.Token);
                         Step("Changed global project order while a native exposure was running");
                     }
+                    if (coordinator.WeatherHoldScenario is "safety-exposure" or "roof-exposure")
+                    {
+                        using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        while (!camera.GetInfo().IsExposing && !executing.IsCompleted) await Task.Delay(50, dispatchDeadline.Token);
+                        if (executing.IsCompleted) throw new InvalidDataException("Weather test never entered native exposure.");
+                        var roof = coordinator.WeatherHoldScenario == "roof-exposure";
+                        if (roof) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close."); }
+                        else safetySimulator.IsSafe = false;
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+                        while (!executing.IsCompleted && !sessionContainer.Display.Phase.Contains("hold; waiting", StringComparison.Ordinal))
+                            await Task.Delay(50, deadline.Token);
+                        if (executing.IsCompleted) { await executing; throw new InvalidDataException("Exposure interruption ended the session."); }
+                        if (camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled
+                            || !AcquisitionLease.IsActive || roof && telescope.GetInfo().AtPark)
+                            throw new InvalidDataException("Exposure weather hold did not stop equipment safely.");
+                        var journal = Path.Combine(service.LastRunDirectory!, "journal");
+                        var interruptedCapture = Directory.GetFiles(journal, "*.json", SearchOption.AllDirectories).Select(CaptureJournal.Read).Single();
+                        if (interruptedCapture.Phase != CapturePhase.Failed || interruptedCapture.SavedPath is not null)
+                            throw new InvalidDataException("Canceled native exposure was not settled as a spent failed attempt.");
+                        await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
+                        var cleared = System.Diagnostics.Stopwatch.StartNew();
+                        if (roof) { if (!await dome.OpenShutter(lifetime.Token)) throw new IOException("Simulator roof did not reopen."); }
+                        else safetySimulator.IsSafe = true;
+                        while (!executing.IsCompleted && !camera.GetInfo().IsExposing) await Task.Delay(50, deadline.Token);
+                        if (executing.IsCompleted || cleared.Elapsed < TimeSpan.FromSeconds(sessionContainer.Options.StableSafeSeconds))
+                            throw new InvalidDataException("Safe/Open did not resume a fresh exposure after stability.");
+                        await executing.WaitAsync(deadline.Token);
+                        var settled = Directory.GetFiles(journal, "*.json", SearchOption.AllDirectories).Select(CaptureJournal.Read).ToArray();
+                        if (settled.Length != 3 || settled.Count(x => x.Phase == CapturePhase.Failed) != 1
+                            || settled.Count(x => x.Phase == CapturePhase.Saved && File.Exists(x.SavedPath)) != 2
+                            || settled.Select(x => x.Intent.CaptureId).Distinct().Count() != 3
+                            || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled || AcquisitionLease.IsActive
+                            || sessionHookEvents.Count(x => x == "AfterEachExposure") != 2)
+                            throw new InvalidDataException("Weather resume replayed/refunded an exposure or skipped fresh saved-image hooks/shutdown.");
+                        await coordinator.EndOutageAsync(root, lifetime.Token);
+                        var checkIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
+                        var replay = await checkIn.RunAsync(null, lifetime.Token);
+                        if (!replay.CaughtUp || replay.AcknowledgedThrough != 6 || (await checkIn.RunAsync(null, lifetime.Token)).DeliveredEvents != 0)
+                            throw new InvalidDataException("Interrupted and resumed captures did not batch replay exactly once.");
+                        ledger = service.LastLedger;
+                        captures.AddRange(settled.Where(x => x.Phase == CapturePhase.Saved));
+                        unsafeCancellationVerified = !roof;
+                        enclosureCancellationVerified = roof;
+                        await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), "Interrupted exposure consumed; fresh captures resumed after stable Safe/Open; batch replay verified", lifetime.Token);
+                        Step("Weather/roof interrupted exposure settled without refund; fresh native captures resumed offline and replayed once");
+                        return;
+                    }
                     if (coordinator.EnclosureClosure)
                     {
                         using var dispatchDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
