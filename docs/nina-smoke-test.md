@@ -37,6 +37,9 @@ between-allocation weather recovery, restart readmission, or cloud probes.
 The harness renders all native settings and checks layout at 640 and 1000 pixels.
 All 859 managed tests and runtime-fetch regressions passed with the pinned runtime.
 Development packaging, format verification and `git diff --check` passed.
+The final default-policy regression (`-PublicAcquisition -PublicUnsafe`, with
+weather holds disabled) also passed:
+`artifacts/nina-smoke-0a31bead0372472d973e0cc77c861f5f/probe/b970d2ca211b4f99b2dd7df4ac5fce46/result.json`.
 
 ## Normal Night End
 
