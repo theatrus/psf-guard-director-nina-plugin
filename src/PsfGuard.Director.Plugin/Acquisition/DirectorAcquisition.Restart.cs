@@ -1,6 +1,7 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using NINA.Equipment.Equipment.MyGuider.PHD2;
 using NINA.Profile;
 using PsfGuard.Director.Plugin.Sequencer;
 using PsfGuard.Director.Runtime;
@@ -11,7 +12,7 @@ public sealed partial class DirectorAcquisition
 {
     internal static NightCheckpointScope RestartScope(CoordinatorBinding binding, Guid client, Uri endpoint,
         string configuration, DirectorSessionOptions options) => new(binding, client, endpoint.AbsoluteUri, configuration,
-            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(options)))));
+            HashEncoding.Lower(SHA256.HashData(Encoding.UTF8.GetBytes(Newtonsoft.Json.JsonConvert.SerializeObject(options)))));
 
     private async Task<RecoveryIdentity> ReviewRestartAsync(DirectorSessionContainer container, CancellationToken token)
     {
@@ -88,6 +89,11 @@ public sealed partial class DirectorAcquisition
             throw new InvalidOperationException("Connect the bound guider and confirm it can stop before restart admission.");
         var guideId = guide.DeviceId;
         var stopped = await guider.StopGuiding(token).WaitAsync(token);
+        // PHD2's native action also returns false when already stopped. Query
+        // the connected device again; cached event state cannot prove a stop.
+        if (!stopped && device is PHD2Guider remote)
+            stopped = await NinaGuiderStop.ConfirmPHD2StoppedAsync(
+                () => remote.SendMessage(new Phd2GetAppState(), 3000), token);
         // NINA's local pulse/dither guider returns false when already idle. Its
         // in-process state is distinct from a remote guider's cached status.
         if (!stopped && device is not NINA.Equipment.Equipment.MyGuider.DirectGuider { State: "Idle", ShiftEnabled: false })

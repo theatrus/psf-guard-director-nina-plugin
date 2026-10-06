@@ -52,7 +52,7 @@ public sealed partial class NinaCaptureTests
         var item = new NinaExposureItem(f.BoundCapture, Created(binding), binding, f.Local, NativeDispatchTest.Allow);
         var guider = new Mock<IGuiderMediator>();
         guider.Setup(x => x.GetInfo()).Returns(new NINA.Equipment.Equipment.MyGuider.GuiderInfo { Connected = true });
-        var trigger = new RestoreGuiding(guider.Object, Mock.Of<ISafetyMonitorMediator>());
+        var trigger = NinaCompatibility.Create<RestoreGuiding>(Mock.Of<ISafetyMonitorMediator>(), guider.Object);
         Assert.True(trigger.ShouldTrigger(null!, item));
         item.ImageType = CaptureSequence.ImageTypes.DARK;
         Assert.False(trigger.ShouldTrigger(null!, item));

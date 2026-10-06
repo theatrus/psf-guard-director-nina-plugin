@@ -15,7 +15,7 @@ internal static class DirectorCredentialStore
     }
 
     internal static string Target(Uri endpoint, Guid profile) => "PSFGuard.Director/" + profile.ToString("D") + "/" +
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(endpoint.AbsoluteUri)));
+        HashEncoding.Lower(SHA256.HashData(Encoding.UTF8.GetBytes(endpoint.AbsoluteUri)));
 
     internal static CoordinatorPairing? Read(Uri endpoint, Guid profile)
     {

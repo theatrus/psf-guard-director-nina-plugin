@@ -242,6 +242,10 @@ public sealed partial class DirectorAcquisition
         await using var runtime = recoveryRequired
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
+        runtime.StateChanged += (_, _) =>
+        {
+            if (runtime.Status is { State: RuntimeState.Faulted, Error: { } error }) Logger.Error(error);
+        };
         // Keep recovery storage available during bounded shutdown after session
         // cancellation. Cancellation still aborts startup and every operation.
         using var runtimeLifetime = new CancellationTokenSource();
@@ -951,9 +955,11 @@ public sealed partial class DirectorAcquisition
                     CoordinatorCheckpointResult operations;
                     do
                     {
-                        result = await checkpoint.DeliverAsync(async (after, limit, ct) => Require(await runtime.ReadEventsAsync(after, limit, ct)),
+                        result = await checkpoint.DeliverAsync((after, limit, ct) => CheckpointLocalRead.ReadAsync(
+                            async () => Require(await runtime.ReadEventsAsync(after, limit, CancellationToken.None)), ct),
                             allocation.Envelope.PreviewRevision, token: ct);
-                        operations = await operationCheckpoint.DeliverPreparationAsync(async (after, limit, ct) => Require(await runtime.ReadPreparationEventsAsync(after, limit, ct)),
+                        operations = await operationCheckpoint.DeliverPreparationAsync((after, limit, ct) => CheckpointLocalRead.ReadAsync(
+                            async () => Require(await runtime.ReadPreparationEventsAsync(after, limit, CancellationToken.None)), ct),
                             allocation.Envelope.PreviewRevision, token: ct);
                         container.UpdateDisplay(d => d with { Connectivity = "Online", QueueDepth = result.CaughtUp && operations.CaughtUp ? "0" : "Pending", LastCheckIn = DateTimeOffset.UtcNow.ToString("u") });
                     } while (drain && (!result.CaughtUp || !operations.CaughtUp));

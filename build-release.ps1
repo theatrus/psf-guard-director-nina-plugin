@@ -8,7 +8,7 @@ try {
     $manifest = Get-Content -LiteralPath "$PSScriptRoot/packaging/manifest.template.json" -Raw | ConvertFrom-Json -AsHashtable
     $parts = @('Major', 'Minor', 'Patch', 'Build' | ForEach-Object { $manifest.Version[$_] })
     $version = [version]::new($parts[0], $parts[1], $parts[2], $parts[3])
-    $assembly = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Plugin/bin/Release/net10.0-windows7.0/PSF Guard Director.dll'
+    $assembly = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Plugin/bin/Release/net8.0-windows7.0/PSF Guard Director.dll'
     if ([Reflection.AssemblyName]::GetAssemblyName($assembly).Version -ne $version) {
         throw 'Manifest version does not match the built plugin.'
     }

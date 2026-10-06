@@ -1,5 +1,13 @@
 # Unreleased
 
+- Use the same Director package in NINA 3.2 and 3.3. Native imaging, sequence
+  hooks and safety policies remain unchanged. Older hosts report writer failures
+  directly and leave missing quality metrics unavailable rather than guessing.
+- Finish an in-flight local check-in read before closing the planning runtime,
+  so completing work offline can still seal the workload for later replay.
+- Confirm an already stopped PHD2 guider through a fresh native query, avoiding
+  a false shutdown failure after completing an automatic workload.
+
 - Optional settled-night restart preserves the original night deadline and retry
   budgets, checks fresh native safety and idle equipment, and requests new work.
   It defaults off and never clears a terminal stop or resumes uncertain captures

@@ -4,10 +4,12 @@ param(
     [Parameter(Mandatory)][string]$PsfGuardExe,
     [Parameter(Mandatory)][string]$NinaDirectory,
     [Parameter(Mandatory)][string]$PluginZip,
+    [ValidateSet('offline-native', 'unsafe-park', 'unsafe-stop', 'enclosure', 'horizon-change', 'site-change', 'meridian-change', 'moon-wait', 'priority-refresh', 'deferred-checkin', 'center-failure', 'focus-failure', 'flip-failure')]
+    [string[]]$Cases,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
-$cases = [ordered]@{
+$scenarios = [ordered]@{
     'offline-native' = @{ PublicAcquisition=$true; LocalTargetScheduling=$true; AutomaticWorkloads=$true; NativeImaging=$true; OfflineWorkloadRelease=$true }
     'unsafe-park' = @{ PublicAcquisition=$true; PublicUnsafe=$true }
     'unsafe-stop' = @{ PublicAcquisition=$true; PublicUnsafe=$true; AbortWithoutPark=$true }
@@ -24,7 +26,8 @@ $cases = [ordered]@{
 }
 $report = Join-Path $ArtifactDirectory "matrix-$([Guid]::NewGuid().ToString('N')).json"
 $results = @()
-foreach ($case in $cases.GetEnumerator()) {
+foreach ($case in $scenarios.GetEnumerator()) {
+    if ($Cases -and $case.Key -notin $Cases) { continue }
     Write-Host "Simulator case: $($case.Key)"
     $options = $case.Value
     try {

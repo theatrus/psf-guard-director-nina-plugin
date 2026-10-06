@@ -41,7 +41,7 @@ public sealed class NinaNativeImagingTests
     {
         var f = new Fixture();
         f.Options.Focus = f.Options.MeridianFlip = DirectorOperationOwner.Sequence;
-        var trigger = new NINA.Sequencer.Trigger.Guider.RestoreGuiding(f.Guider.Object, Mock.Of<ISafetyMonitorMediator>());
+        var trigger = NinaCompatibility.Create<NINA.Sequencer.Trigger.Guider.RestoreGuiding>(Mock.Of<ISafetyMonitorMediator>(), f.Guider.Object);
         f.Factory.Setup(x => x.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>()).Returns(trigger);
         var session = new DirectorSessionContainer();
         using var native = f.Create();

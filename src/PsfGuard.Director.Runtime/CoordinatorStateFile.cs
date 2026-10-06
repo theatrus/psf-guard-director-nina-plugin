@@ -10,7 +10,7 @@ internal sealed class CoordinatorStateFile
     internal CoordinatorStateFile(string root, object scope, string kind)
     {
         if (!System.IO.Path.IsPathFullyQualified(root)) throw new ArgumentException("State root must be absolute.", nameof(root));
-        var key = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(scope, CoordinatorProgramContract.Options)));
+        var key = HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(scope, CoordinatorProgramContract.Options)));
         Directory.CreateDirectory(root);
         Path = System.IO.Path.Combine(root, $"{kind}-{key}.json");
     }

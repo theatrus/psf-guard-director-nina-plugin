@@ -104,9 +104,9 @@ internal sealed class NativeImagingProbe
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>());
         factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>()).Returns(() => Flip?.Trigger ?? original.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>());
         factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>()).Returns(() => original.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>());
-        factory.Setup(f => f.GetTrigger<AutofocusAfterFilterChange>()).Returns(() => Configure(new AutofocusAfterFilterChange(profiles, history, camera, wheel, focuser, focusFactory.Object, safety)));
-        factory.Setup(f => f.GetTrigger<AutofocusAfterTimeTrigger>()).Returns(() => Configure(new AutofocusAfterTimeTrigger(profiles, history, camera, wheel, focuser, focusFactory.Object, safety)));
-        factory.Setup(f => f.GetTrigger<AutofocusAfterTemperatureChangeTrigger>()).Returns(() => Configure(new AutofocusAfterTemperatureChangeTrigger(profiles, history, camera, wheel, focuser, focusFactory.Object, safety)));
+        factory.Setup(f => f.GetTrigger<AutofocusAfterFilterChange>()).Returns(() => Configure(NinaCompatibility.Create<AutofocusAfterFilterChange>(safety, profiles, history, camera, wheel, focuser, focusFactory.Object)));
+        factory.Setup(f => f.GetTrigger<AutofocusAfterTimeTrigger>()).Returns(() => Configure(NinaCompatibility.Create<AutofocusAfterTimeTrigger>(safety, profiles, history, camera, wheel, focuser, focusFactory.Object)));
+        factory.Setup(f => f.GetTrigger<AutofocusAfterTemperatureChangeTrigger>()).Returns(() => Configure(NinaCompatibility.Create<AutofocusAfterTemperatureChangeTrigger>(safety, profiles, history, camera, wheel, focuser, focusFactory.Object)));
         Factory = factory.Object;
 
         T Configure<T>(T trigger) where T : NINA.Sequencer.Trigger.SequenceTrigger

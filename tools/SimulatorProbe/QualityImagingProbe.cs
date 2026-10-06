@@ -43,8 +43,7 @@ public class QualityImagingProbe : DispatchProxy
         firstFilter ??= filter;
         var n = counts[filter] = counts.GetValueOrDefault(filter) + 1;
         var poor = filter == firstFilter && n is 6 or 7;
-        image.StarDetectionAnalysis = Mock.Of<IStarDetectionAnalysis>(s => s.HFR == 2 && s.Eccentricity == 0.4
-            && s.HFRUnit == StarMeasurementUnit.Pixels && s.DetectedStars == (poor ? 25 : 100));
+        image.StarDetectionAnalysis = Mock.Of<IStarDetectionAnalysis>(s => s.HFR == 2 && s.DetectedStars == (poor ? 25 : 100));
         image.SetImageStatistics(Mock.Of<IImageStatistics>(s => s.BitDepth == 16 && s.Median == (poor ? 2000 : 1000)));
         Measurements++;
         return result;

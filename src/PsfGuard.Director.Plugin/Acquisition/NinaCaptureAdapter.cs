@@ -66,7 +66,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                         TotalMs = clock.GetElapsedTime(interruptedStarted, saved.Timestamp).TotalMilliseconds
                     });
                 }
-                catch (ImageSaveFailedException)
+                catch (ImageSaveFailureException)
                 {
                     journal.Record(journal.Evidence with { Phase = CapturePhase.Failed, UpdatedAt = clock.GetUtcNow() });
                 }
@@ -204,26 +204,27 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                     catch (Exception error) { receipt.TrySetException(error); }
                 }
             }
-            Task Failed(object sender, ImageSaveFailedEventArgs args)
+            Task Failed(object args)
             {
-                if (Matches(args.MetaData)) receipt.TrySetException(new ImageSaveFailedException(args));
+                if (Matches(NinaCompatibility.Read(args, "MetaData") as ImageMetaData))
+                    receipt.TrySetException(new ImageSaveFailureException(NinaCompatibility.Read(args, "Exception") as Exception
+                        ?? new IOException("NINA reported an image-save failure.")));
                 return Task.CompletedTask;
             }
             var savedAttached = false;
-            var failedAttached = false;
+            IDisposable? failureSubscription = null;
             var detached = 0;
             void Detach()
             {
                 if (Interlocked.Exchange(ref detached, 1) != 0) return;
                 try { if (savedAttached) saves.ImageSaved -= Saved; }
-                finally { if (failedAttached) saves.ImageSaveFailed -= Failed; }
+                finally { failureSubscription?.Dispose(); }
             }
             try
             {
                 saves.ImageSaved += Saved;
                 savedAttached = true;
-                saves.ImageSaveFailed += Failed;
-                failedAttached = true;
+                failureSubscription = NinaSaveFailure.Observe(saves, Failed);
                 Interlocked.Exchange(ref detachSave, Detach)?.Invoke();
                 ObjectDisposedException.ThrowIf(disposed, this);
                 pendingSave = receipt.Task;
@@ -236,7 +237,8 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 SaveReceipt saved;
                 try
                 {
-                    var enqueue = saves.Enqueue(new ProfileScopedImageData(image, fileSettings), Task.FromResult(prepared), progress, deadline.Token);
+                    var writer = new ProfileScopedImageData(image, fileSettings, failureSubscription is null ? error => receipt.TrySetException(error) : null);
+                    var enqueue = saves.Enqueue(writer, Task.FromResult(prepared), progress, deadline.Token);
                     ObserveFault(enqueue);
                     await enqueue.WaitAsync(deadline.Token).ConfigureAwait(false);
                     saved = await receipt.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
@@ -281,7 +283,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 {
                     // A camera/transport error cannot prove that hardware did not expose.
                     CapturePhase.Capturing when captureEntered => CapturePhase.CaptureUncertain,
-                    CapturePhase.SaveQueued => error is ImageSaveFailedException ? CapturePhase.Failed : CapturePhase.SaveUncertain,
+                    CapturePhase.SaveQueued => error is ImageSaveFailureException ? CapturePhase.Failed : CapturePhase.SaveUncertain,
                     _ => error is OperationCanceledException ? CapturePhase.Interrupted : CapturePhase.Failed
                 };
                 try

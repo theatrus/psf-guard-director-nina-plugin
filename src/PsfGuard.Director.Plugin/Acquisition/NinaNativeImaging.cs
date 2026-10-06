@@ -141,7 +141,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     {
         var trigger = factory.GetTrigger<T>() ?? throw new InvalidOperationException($"NINA action {typeof(T).Name} is unavailable.");
         if (string.IsNullOrWhiteSpace(trigger.Name))
-            trigger.Name = trigger is MeridianFlipTrigger ? "Meridian flip" : typeof(T).Name;
+            trigger.Name = typeof(T) == typeof(MeridianFlipTrigger) ? "Meridian flip" : typeof(T).Name;
         session!.AddRuntimeTrigger(trigger);
         installed.Add(trigger);
         trigger.Initialize();
@@ -244,7 +244,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
                 || options.Focus == DirectorOperationOwner.Director && (typeof(RunAutofocus).IsAssignableFrom(type) || name.Contains(".Autofocus", StringComparison.Ordinal))
                 || options.Guiding == DirectorOperationOwner.Director && (typeof(StartGuiding).IsAssignableFrom(type) || typeof(StopGuiding).IsAssignableFrom(type) || type.Name == "RestoreGuiding")
                 || options.Dither == DirectorOperationOwner.Director && (typeof(Dither).IsAssignableFrom(type) || type.Name == "DitherAfterExposures")
-                || options.MeridianFlip == DirectorOperationOwner.Director && typeof(MeridianFlipTrigger).IsAssignableFrom(type);
+                || options.MeridianFlip == DirectorOperationOwner.Director && (typeof(MeridianFlipTrigger).IsAssignableFrom(type)
+                    || typeof(NinaMeridianFlipTrigger).IsAssignableFrom(type));
             if (conflict) throw new InvalidOperationException($"{type.Name} conflicts with Director defaults. Select Sequence ownership for that operation.");
         }
         void Visit(ISequenceItem item)

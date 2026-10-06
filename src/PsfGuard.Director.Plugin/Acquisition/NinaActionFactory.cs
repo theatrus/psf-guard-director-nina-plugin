@@ -21,7 +21,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 public interface INinaActionFactory
 {
     T GetItem<T>() where T : ISequenceItem;
-    T GetTrigger<T>() where T : ISequenceTrigger;
+    ISequenceTrigger GetTrigger<T>() where T : ISequenceTrigger;
 }
 
 // NINA exports device/algorithm services to plugins, not ISequencerFactory.
@@ -46,14 +46,14 @@ public sealed class NinaActionFactory : INinaActionFactory
             [typeof(StartGuiding)] = () => new StartGuiding(guider),
             [typeof(StopGuiding)] = () => new StopGuiding(guider),
             [typeof(Dither)] = () => new Dither(guider, profiles),
-            [typeof(AutofocusAfterFilterChange)] = () => new AutofocusAfterFilterChange(profiles, history, camera, wheel, focuser, autofocus, safety),
-            [typeof(AutofocusAfterTimeTrigger)] = () => new AutofocusAfterTimeTrigger(profiles, history, camera, wheel, focuser, autofocus, safety),
-            [typeof(AutofocusAfterTemperatureChangeTrigger)] = () => new AutofocusAfterTemperatureChangeTrigger(profiles, history, camera, wheel, focuser, autofocus, safety),
+            [typeof(AutofocusAfterFilterChange)] = () => NinaCompatibility.Create<AutofocusAfterFilterChange>(safety, profiles, history, camera, wheel, focuser, autofocus),
+            [typeof(AutofocusAfterTimeTrigger)] = () => NinaCompatibility.Create<AutofocusAfterTimeTrigger>(safety, profiles, history, camera, wheel, focuser, autofocus),
+            [typeof(AutofocusAfterTemperatureChangeTrigger)] = () => NinaCompatibility.Create<AutofocusAfterTemperatureChangeTrigger>(safety, profiles, history, camera, wheel, focuser, autofocus),
             [typeof(MeridianFlipTrigger)] = () => new NinaMeridianFlipTrigger(profiles, camera, telescope, focuser, status, meridian, safety),
-            [typeof(RestoreGuiding)] = () => new RestoreGuiding(guider, safety)
+            [typeof(RestoreGuiding)] = () => NinaCompatibility.Create<RestoreGuiding>(safety, guider)
         };
     }
 
     public T GetItem<T>() where T : ISequenceItem => (T)create[typeof(T)]();
-    public T GetTrigger<T>() where T : ISequenceTrigger => (T)create[typeof(T)]();
+    public ISequenceTrigger GetTrigger<T>() where T : ISequenceTrigger => (ISequenceTrigger)create[typeof(T)]();
 }

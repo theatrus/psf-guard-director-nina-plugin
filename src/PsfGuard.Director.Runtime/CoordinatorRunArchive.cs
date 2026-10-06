@@ -83,6 +83,6 @@ public sealed class CoordinatorRunArchive
             throw new InvalidDataException("Saved Director run does not match its ledger.");
     }
     private void Write(CoordinatorSavedRun run) => file.Write(new Entry(1, origin, binding, clientId, run, Checksum(run)));
-    private string Checksum(CoordinatorSavedRun run) => Convert.ToHexStringLower(SHA256.HashData(
+    private string Checksum(CoordinatorSavedRun run) => HashEncoding.Lower(SHA256.HashData(
         JsonSerializer.SerializeToUtf8Bytes(new { origin, binding, clientId, run }, CoordinatorProgramContract.Options)));
 }

@@ -28,7 +28,7 @@ using PsfGuard.Director.Runtime;
 
 [assembly: Guid("a8f3b6dd-a195-40f8-9de3-208304473d53")]
 [assembly: InternalsVisibleTo("PsfGuard.Director.Tests")]
-[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.3.0.1058")]
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.2.0.9001")]
 
 namespace PsfGuard.Director.SimulatorProbe;
 
@@ -784,7 +784,7 @@ public sealed class SimulatorSequence : SequenceItem
                 {
                     var capture = CaptureJournal.Read(file);
                     if (capture.Phase != CapturePhase.Saved || !File.Exists(capture.SavedPath)) throw new InvalidDataException("Public capture lacks a saved file.");
-                    var restored = await imageFactory.CreateFromFile(capture.SavedPath, 16, false, lifetime.Token);
+                    var restored = await imageFactory.CreateFromFile(capture.SavedPath, 16, false, RawConverterEnum.FREEIMAGE, lifetime.Token);
                     if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h => h.Key == NinaCaptureAdapter.CaptureIdHeader
                         && h.Value.Trim() == capture.Intent.CaptureId.ToString("D"))) throw new InvalidDataException("Public FITS capture identity missing.");
                     captures.Add(capture);
@@ -999,7 +999,7 @@ public sealed class SimulatorSequence : SequenceItem
                     throw new InvalidOperationException("Native exposure or inherited hooks did not finish successfully.", exposureItem.ExecutionError);
                 if (evidence.Phase != CapturePhase.Saved || !File.Exists(evidence.SavedPath))
                     throw new IOException("Capture has no confirmed file.");
-                var restored = await imageFactory.CreateFromFile(evidence.SavedPath, 16, false, lifetime.Token);
+                var restored = await imageFactory.CreateFromFile(evidence.SavedPath, 16, false, RawConverterEnum.FREEIMAGE, lifetime.Token);
                 if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h =>
                         h.Key == NinaCaptureAdapter.CaptureIdHeader && h.Value.Trim() == captureId)
                     || restored.Data.FlatArray.Length == 0
@@ -1162,7 +1162,7 @@ public sealed class SimulatorSequence : SequenceItem
                     Steps = flipEvidence.Workflow?.Steps.Select(s => new { s.Id, s.Finished }).ToArray()
                 } : null,
                 nina = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileVersion,
-                ninaApi = "3.3.0.1058-nightly",
+                ninaApi = "3.2.0.9001",
                 runtime = RuntimeContract.RuntimeVersion,
                 ipc = RuntimeContract.ProtocolVersion,
                 scope = coordinator is { PublicAcquisition: true } ? "public-director-session-server-allocation-native-capture" : coordinator is { ActivateSimulatorPlan: true }
@@ -1241,8 +1241,9 @@ public sealed class SimulatorSequence : SequenceItem
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            if (slot is not ("BeforeWait" or "AfterWait")
-                && NINA.Sequencer.Utility.ItemUtility.FindDeepSkyObjectContainer(Parent) is not NinaTargetContainer)
+            var context = Parent;
+            while (context is not null && context is not NINA.Sequencer.Container.IDeepSkyObjectContainer) context = context.Parent;
+            if (slot is not ("BeforeWait" or "AfterWait") && context is not NinaTargetContainer)
                 throw new InvalidOperationException("Director target hook lost its native target context.");
             events.Add(slot);
             return Task.CompletedTask;

@@ -12,8 +12,8 @@ $ErrorActionPreference = 'Stop'
 if ($DocumentationOnly -and !$AscomSequence) { throw 'DocumentationOnly requires an isolated simulator profile.' }
 $repo = Split-Path $PSScriptRoot -Parent
 $nina = Join-Path (Resolve-Path -LiteralPath $NinaDirectory) 'NINA.exe'
-if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.3.0.1058', '3.3.0.1059', '3.3.0.1064', '3.3.0.1065')) {
-    throw 'This smoke test requires a reviewed NINA 3.3 nightly #58, #59, #64 or #65 host.'
+if ((Get-Item -LiteralPath $nina).VersionInfo.FileVersion -notin @('3.2.0.9001', '3.3.0.1058', '3.3.0.1059', '3.3.0.1064', '3.3.0.1065')) {
+    throw 'This smoke test requires NINA 3.2.0.9001 or a reviewed NINA 3.3 nightly #58, #59, #64 or #65 host.'
 }
 $zip = (Resolve-Path -LiteralPath $PluginZip).Path
 $hookOutput = Join-Path $ArtifactDirectory 'nina-hook-build'
@@ -38,7 +38,7 @@ if ($AscomSequence) {
     $probeProject = Join-Path $PSScriptRoot 'SimulatorProbe/SimulatorProbe.csproj'
     dotnet build $probeProject --configuration Release -p:RestoreLockedMode=true
     if ($LASTEXITCODE -ne 0) { throw 'Simulator probe build failed.' }
-    $probeOutput = Join-Path $PSScriptRoot 'SimulatorProbe/bin/Release/net10.0-windows7.0'
+    $probeOutput = Join-Path $PSScriptRoot 'SimulatorProbe/bin/Release/net8.0-windows7.0'
     foreach ($name in @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll')) {
         if ((Get-FileHash (Join-Path $plugins $name)).Hash -ne (Get-FileHash (Join-Path $probeOutput $name)).Hash) {
             throw 'Build a fresh plugin ZIP from this checkout before running its simulator probe.'
@@ -49,7 +49,7 @@ if ($AscomSequence) {
     if ($LASTEXITCODE -ne 0) { throw 'Synthetic solver build failed.' }
     $solver = Join-Path $root 'synthetic-solver'
     New-Item -ItemType Directory -Path $solver | Out-Null
-    Copy-Item -Path (Join-Path $PSScriptRoot 'SyntheticSolver/bin/Release/net10.0-windows7.0/SyntheticSolver.*') -Destination $solver
+    Copy-Item -Path (Join-Path $PSScriptRoot 'SyntheticSolver/bin/Release/net8.0-windows7.0/SyntheticSolver.*') -Destination $solver
     foreach ($name in @('Moq.dll', 'Castle.Core.dll')) {
         Copy-Item -LiteralPath (Join-Path $probeOutput $name) -Destination $plugins
     }

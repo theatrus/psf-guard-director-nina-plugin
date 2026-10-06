@@ -49,8 +49,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
             if (item is SwitchFilter filter)
             {
                 var slot = local.Filters.Single(f => f.Id == recipe.FilterId).Position!.Value;
-                if (filter.ComboBoxText is not null || filter.XfilterDefinition != slot.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    || filter.Xfilter != slot)
+                if (!NinaCompatibility.FilterMatches(filter, slot))
                     throw new InvalidOperationException("Native filter settings changed after issue.");
             }
             return finalDispatch;
@@ -98,9 +97,13 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         return new(item, fence);
     }
 
-    private SequenceItem CreateFilter(NinaOperationFence fence, NinaFilterBinding filter) => filter.Position is { } slot
-        ? new IssuedFilter(profiles, wheel, fence) { Xfilter = slot, Name = "Director filter" }
-        : new IssuedFixedFilter(fence) { Name = "Director fixed filter" };
+    private SequenceItem CreateFilter(NinaOperationFence fence, NinaFilterBinding filter)
+    {
+        if (filter.Position is not { } slot) return new IssuedFixedFilter(fence) { Name = "Director fixed filter" };
+        var item = new IssuedFilter(profiles, wheel, fence) { Name = "Director filter" };
+        NinaCompatibility.ConfigureFilter(item, profiles.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Single(f => f.Position == slot));
+        return item;
+    }
 
     private sealed class IssuedFilter(IProfileService profiles, IFilterWheelMediator wheel, NinaOperationFence fence) : SwitchFilter(profiles, wheel)
     {

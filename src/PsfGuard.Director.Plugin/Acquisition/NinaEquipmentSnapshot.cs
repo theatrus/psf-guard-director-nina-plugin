@@ -167,7 +167,7 @@ internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMed
     }
 
     private static string DeviceId(Guid profileId, string deviceId) => "device-" + Hash(new { profileId, deviceId });
-    private static string Hash<T>(T value) => Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value)));
+    private static string Hash<T>(T value) => HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value)));
     private static void CheckId(string value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128 || value.Any(c => c < '!' || c > '~'))

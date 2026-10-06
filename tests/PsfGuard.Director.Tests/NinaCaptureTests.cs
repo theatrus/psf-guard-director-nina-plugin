@@ -24,6 +24,68 @@ namespace PsfGuard.Director.Tests;
 
 public sealed partial class NinaCaptureTests
 {
+    [Fact]
+    public async Task LegacyWriterFailureSettlesWithoutNativeFailureEvent()
+    {
+        using var f = new Fixture(failureEvent: false);
+        f.Image.Setup(x => x.SaveToDisk(It.IsAny<FileSaveInfo>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+            .ThrowsAsync(new IOException("disk full"));
+        var task = f.Run();
+        await f.Enqueued.Task;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            Assert.False(task.IsCompleted);
+            await Assert.ThrowsAsync<IOException>(() => f.EnqueuedImage!.SaveToDisk(new FileSaveInfo()));
+        }
+        var failure = await Assert.ThrowsAsync<ImageSaveFailureException>(() => task);
+        Assert.IsType<IOException>(failure.InnerException);
+        Assert.Equal(CapturePhase.Failed, f.Read().Phase);
+        Assert.Null(f.Read().SavedPath);
+        f.AssertDetached();
+    }
+
+    [Fact]
+    public async Task LegacyWriterRetryCanRecoverWithoutPrematureFailedReceipt()
+    {
+        using var f = new Fixture(failureEvent: false);
+        f.Image.SetupSequence(x => x.SaveToDisk(It.IsAny<FileSaveInfo>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+            .ThrowsAsync(new IOException("transient write failure"))
+            .ThrowsAsync(new IOException("transient write failure"))
+            .ReturnsAsync(f.ImagePath);
+        var task = f.Run();
+        await f.Enqueued.Task;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await Assert.ThrowsAsync<IOException>(() => f.EnqueuedImage!.SaveToDisk(new FileSaveInfo()));
+            Assert.False(task.IsCompleted);
+        }
+        Assert.Equal(f.ImagePath, await f.EnqueuedImage!.SaveToDisk(new FileSaveInfo()));
+        Assert.False(task.IsCompleted);
+        f.Saved();
+        Assert.Equal(CapturePhase.Saved, (await task).Phase);
+        f.AssertDetached();
+    }
+
+    [Fact]
+    public async Task LegacySaveStillRequiresCorrelatedReceipt()
+    {
+        using var f = new Fixture(TimeSpan.FromMilliseconds(100), failureEvent: false);
+        await Assert.ThrowsAsync<TimeoutException>(() => f.Run());
+        Assert.Equal(CapturePhase.SaveUncertain, f.Read().Phase);
+        Assert.Null(f.Read().SavedPath);
+    }
+
+    [Fact]
+    public async Task MissingQualityUnitsDoNotInventHfrOrEccentricity()
+    {
+        using var f = new Fixture();
+        var evidence = await f.RunQuality(probe: true, extendedMetrics: false);
+        Assert.Equal(100u, evidence.Quality!.Metrics.Stars);
+        Assert.Equal(1000, evidence.Quality.Metrics.BackgroundAdu);
+        Assert.Null(evidence.Quality.Metrics.HfrPixels);
+        Assert.Null(evidence.Quality.Metrics.Eccentricity);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -37,6 +99,15 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(100u, evidence.Quality.Metrics.Stars);
         Assert.Equal(1000, evidence.Quality.Metrics.BackgroundAdu);
         Assert.Equal(2, evidence.Quality.Metrics.HfrPixels);
+        var settings = Digest(new { f.Profile.Object.ImageSettings.StarSensitivity, f.Profile.Object.ImageSettings.NoiseReduction });
+        Assert.Equal(Digest(new
+        {
+            settings,
+            Detector = f.Image.Object.StarDetectionAnalysis.GetType().AssemblyQualifiedName,
+            BitDepth = 16,
+            HFRUnit = PixelUnit.Pixels,
+            Units = "native-adu-pixels-v1"
+        }), evidence.Quality.Context.AnalysisFingerprint);
         Assert.Equal(probe ? CapturePhase.ProbeMeasured : CapturePhase.Saved, evidence.Phase);
         Assert.Equal(probe, evidence.Intent.QualityProbe);
         Assert.Equal(evidence, f.Read());
@@ -185,9 +256,8 @@ public sealed partial class NinaCaptureTests
         using var f = new Fixture();
         var task = f.Run();
         await f.Enqueued.Task;
-        f.Saves.Raise(x => x.ImageSaveFailed += null!, f.Saves.Object,
-            new ImageSaveFailedEventArgs(f.Image.Object, f.Root, "test", ImageSaveFailureStage.SaveToDisk, new IOException("disk full")));
-        var error = await Assert.ThrowsAsync<ImageSaveFailedException>(() => task);
+        f.FailedSave();
+        var error = await Assert.ThrowsAsync<ImageSaveFailureException>(() => task);
         Assert.IsType<IOException>(error.InnerException);
         Assert.Equal(CapturePhase.Failed, f.Read().Phase);
         Assert.Null(f.Read().SavedPath);
@@ -302,8 +372,7 @@ public sealed partial class NinaCaptureTests
         await f.Enqueued.Task;
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
-        f.Saves.Raise(x => x.ImageSaveFailed += null!, f.Saves.Object,
-            new ImageSaveFailedEventArgs(f.Image.Object, f.Root, "test", ImageSaveFailureStage.SaveToDisk, new IOException("disk full")));
+        f.FailedSave();
         Assert.Equal(CapturePhase.Failed, (await f.Reconcile())!.Phase);
         f.Acknowledge();
         f.AssertDetached();
@@ -455,12 +524,11 @@ public sealed partial class NinaCaptureTests
         f.Saves.Setup(x => x.Enqueue(It.IsAny<IImageData>(), It.IsAny<Task<IRenderedImage>>(), f.Progress, It.IsAny<CancellationToken>()))
             .Returns(() =>
             {
-                f.Saves.Raise(x => x.ImageSaveFailed += null!, f.Saves.Object,
-                    new ImageSaveFailedEventArgs(f.Image.Object, f.Root, "test", ImageSaveFailureStage.SaveToDisk, new IOException("disk full")));
+                f.FailedSave();
                 cancellation.Cancel();
                 return Task.FromCanceled(cancellation.Token);
             });
-        await Assert.ThrowsAsync<ImageSaveFailedException>(() => f.Run(token: cancellation.Token));
+        await Assert.ThrowsAsync<ImageSaveFailureException>(() => f.Run(token: cancellation.Token));
         Assert.Equal(CapturePhase.Failed, f.Read().Phase);
     }
 
@@ -565,7 +633,7 @@ public sealed partial class NinaCaptureTests
     public async Task PartialEventSubscriptionFailureDetachesFirstHandler()
     {
         using var f = new Fixture();
-        f.Saves.SetupAdd(x => x.ImageSaveFailed += It.IsAny<Func<object, ImageSaveFailedEventArgs, Task>>())
+        f.FailedSaves.SetupAdd(x => x.ImageSaveFailed += It.IsAny<Func<object, SaveFailureArgs, Task>>())
             .Throws(new InvalidOperationException("save controller unavailable"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Run());
         f.Saves.VerifyRemove(x => x.ImageSaved -= It.IsAny<EventHandler<ImageSavedEventArgs>>(), Times.Once);
@@ -688,6 +756,7 @@ public sealed partial class NinaCaptureTests
         public Mock<IProfile> Profile { get; } = new();
         public Mock<IImagingMediator> Imaging { get; } = new(MockBehavior.Strict);
         public Mock<IImageSaveMediator> Saves { get; } = new(MockBehavior.Strict);
+        public Mock<ISaveFailureSource> FailedSaves { get; }
         public Mock<IImageData> Image { get; } = new();
         public CameraInfo CameraInfo { get; } = new() { Connected = true, DeviceId = "camera", CameraState = CameraStates.Idle };
         public FilterWheelInfo WheelInfo { get; } = new() { Connected = true, DeviceId = "wheel", SelectedFilter = new() { Position = 2, Name = "L" } };
@@ -699,8 +768,9 @@ public sealed partial class NinaCaptureTests
         public IImageData? EnqueuedImage { get; private set; }
         private readonly NinaCaptureAdapter adapter;
 
-        public Fixture(TimeSpan? timeout = null)
+        public Fixture(TimeSpan? timeout = null, bool failureEvent = true)
         {
+            FailedSaves = failureEvent ? Saves.As<ISaveFailureSource>() : null!;
             Directory.CreateDirectory(Root);
             Profile.SetupGet(x => x.Id).Returns(Intent.ProfileId);
             var fileSettings = new Mock<IImageFileSettings>();
@@ -770,14 +840,22 @@ public sealed partial class NinaCaptureTests
 
         public Task<CaptureEvidence> Run(Func<CancellationToken, Task>? authorize = null, CancellationToken token = default) =>
             adapter.CaptureAsync(Intent, NativeDispatchTest.After(authorize), Progress, token);
-        public Task<CaptureEvidence> RunQuality(bool probe)
+        public Task<CaptureEvidence> RunQuality(bool probe, bool extendedMetrics = true)
         {
             Profile.SetupGet(x => x.ImageSettings).Returns(Mock.Of<IImageSettings>());
             Image.SetupGet(x => x.Properties).Returns(new ImageProperties(1000, 1000, 16, false, 10, 20));
             var stats = Mock.Of<IImageStatistics>(x => x.BitDepth == 16 && x.Median == 1000);
             Image.SetupGet(x => x.Statistics).Returns(new AsyncLazy<IImageStatistics>(() => Task.FromResult(stats)));
-            Image.SetupGet(x => x.StarDetectionAnalysis).Returns(Mock.Of<IStarDetectionAnalysis>(x => x.HFR == 2 && x.DetectedStars == 100
-                && x.Eccentricity == 0.4 && x.HFRUnit == StarMeasurementUnit.Pixels));
+            var analysis = new Mock<IStarDetectionAnalysis>();
+            analysis.SetupGet(x => x.HFR).Returns(2);
+            analysis.SetupGet(x => x.DetectedStars).Returns(100);
+            if (extendedMetrics)
+            {
+                var metrics = analysis.As<IPixelMetrics>();
+                metrics.SetupGet(x => x.HFRUnit).Returns(PixelUnit.Pixels);
+                metrics.SetupGet(x => x.Eccentricity).Returns(0.4);
+            }
+            Image.SetupGet(x => x.StarDetectionAnalysis).Returns(analysis.Object);
             adapter.CollectQuality = true;
             return adapter.CaptureAsync(Intent with
             {
@@ -792,11 +870,27 @@ public sealed partial class NinaCaptureTests
         public CaptureEvidence Read() => CaptureJournal.Read(Path.Combine(Root, Intent.ProfileId.ToString("N"), $"{Intent.CaptureId:N}.json"));
         public void Saved(ImageMetaData? metadata = null) => Saves.Raise(x => x.ImageSaved += null!, Saves.Object,
             new ImageSavedEventArgs { MetaData = metadata ?? Metadata, PathToImage = new Uri(ImagePath) });
+        public void FailedSave() => FailedSaves.Raise(x => x.ImageSaveFailed += null!, Saves.Object,
+            new SaveFailureArgs(Metadata, new IOException("disk full")));
         public void AssertDetached()
         {
             Saves.VerifyRemove(x => x.ImageSaved -= It.IsAny<EventHandler<ImageSavedEventArgs>>(), Times.Once);
-            Saves.VerifyRemove(x => x.ImageSaveFailed -= It.IsAny<Func<object, ImageSaveFailedEventArgs, Task>>(), Times.Once);
+            FailedSaves?.VerifyRemove(x => x.ImageSaveFailed -= It.IsAny<Func<object, SaveFailureArgs, Task>>(), Times.Once);
         }
         public void Dispose() { adapter.Dispose(); Directory.Delete(Root, recursive: true); }
     }
+
+    public interface ISaveFailureSource
+    {
+        event Func<object, SaveFailureArgs, Task> ImageSaveFailed;
+    }
+    public sealed record SaveFailureArgs(ImageMetaData MetaData, Exception Exception);
+    public interface IPixelMetrics
+    {
+        PixelUnit HFRUnit { get; }
+        double Eccentricity { get; }
+    }
+    public enum PixelUnit { Pixels, Arcseconds }
+    private static string Digest(object value) => HashEncoding.Lower(System.Security.Cryptography.SHA256.HashData(
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value)));
 }

@@ -63,6 +63,10 @@ when Director owns the operation.
 The adapter checks both the VM result and exposed workflow-step completion,
 since the pinned NINA implementation can otherwise discard a false result.
 A failed or canceled Director-owned flip cannot authorize another capture.
+An already stopped PHD2 guider needs a fresh native `get_app_state` response
+before idle shutdown or restart admission accepts NINA's false stop result.
+Cached event state, communication errors and other PHD2 states are not proof
+that guiding stopped. The connected device and profile must remain unchanged.
 Activity and the NINA log record its start, outcome and elapsed time. After
 inherited triggers finish, dispatch rechecks pointing, safety, current geometry
 and allocation validity. The instruction timeout also bounds native flip waits;
@@ -498,14 +502,28 @@ button. It does not select goals, retry exposures, or replace the Rust planner.
 
 ## N.I.N.A. contract
 
-The adapter targets `3.3.0.1058-nightly`, source commit
-`516039556050dde4c0820a486fbc75217e3804f3` from the published NuGet metadata.
+The adapter targets .NET 8 and `3.2.0.9001`, source commit
+`2393eae581145ed5b8114bf07c48ca2580540fd5` from the published NuGet metadata.
+One package supports NINA 3.2 and 3.3. Version-specific autofocus, guide recovery,
+meridian-flip constructors and filter settings stay in a small compatibility
+layer. NINA still performs those operations; Director checks their outcomes.
+The flip wrapper implements NINA's meridian timing interface and delegates its
+native timing, lifecycle and full workflow rather than recreating them.
 It uses public interfaces only:
 
 - `IImagingMediator.CaptureImage` for exposure and download.
 - `IExposureData.ToImageData`, `IImagingMediator.PrepareImage`, and image history
   for N.I.N.A.'s normal preparation and display.
-- `IImageSaveMediator.Enqueue`, `ImageSaved`, and `ImageSaveFailed` for saving.
+- `IImageSaveMediator.Enqueue` and `ImageSaved` for saving. On 3.3, Director also
+  observes `ImageSaveFailed`. On 3.2, it observes exceptions from the wrapped
+  image writer after NINA's three attempts are exhausted. Transient write failures
+  can still recover through NINA's retries. Missing receipts remain uncertain on
+  both versions.
+
+Optional quality fields that the host does not expose remain unavailable.
+In particular, Director does not infer HFR units or eccentricity from an older
+star-analysis object. Star counts and supported background measurements still
+provide evidence. Cloud screening and automatic recovery remain off by default.
 
 Enqueue only admits work to the save queue. It does not confirm a file on disk.
 The adapter subscribes before enqueue and waits for a matching final receipt.

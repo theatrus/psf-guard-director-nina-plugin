@@ -85,7 +85,7 @@ internal static class CoordinatorProgramContract
             if (JsonSerializer.SerializeToUtf8Bytes(program, Options).Length > PlannerContract.MaxRequestBytes)
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.ResponseTooLarge);
             CheckLinks(envelope);
-            var fingerprint = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(envelope, Options)));
+            var fingerprint = HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(envelope, Options)));
             if (previous is not null)
             {
                 if (previous.Binding != binding || previous.Origin != origin)

@@ -29,7 +29,7 @@ internal sealed class NativeFlipProbe
     internal string? PierBefore { get; private set; }
     internal string? PierAfter { get; private set; }
     internal List<string> Events { get; } = [];
-    internal MeridianFlipTrigger Trigger { get; }
+    internal NINA.Sequencer.Trigger.ISequenceTrigger Trigger { get; }
     internal MeridianFlipVM? Workflow { get; private set; }
     internal int RecenterSolutions { get; private set; }
     private readonly bool checkGuider;

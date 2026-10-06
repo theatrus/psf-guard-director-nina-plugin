@@ -38,7 +38,7 @@ change Sync.
 
 ## Get started
 
-Requires **Windows x64**, **NINA 3.3 nightly #58 or newer**, and a PSF Guard server
+Requires **Windows x64**, **NINA 3.2 or 3.3**, and a PSF Guard server
 with Director support. The planning runtime is bundled with the plugin.
 
 1. Add `https://nina-plugins.psf-guard.com/` as a source in NINA's plugin manager
