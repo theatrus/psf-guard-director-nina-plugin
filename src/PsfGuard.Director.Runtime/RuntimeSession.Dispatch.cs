@@ -5,6 +5,21 @@ namespace PsfGuard.Director.Runtime;
 
 internal sealed partial class RuntimeSession
 {
+    internal Task<LedgerResult<PlannerDispatchCheck>> CheckQualityProbeAsync(string goal, string attempt,
+        ExposureRecipe recipe, DirectorConstraints constraints, PlannerState state, CancellationToken token)
+    {
+        LedgerContract.CheckId(goal);
+        LedgerContract.CheckId(attempt);
+        return SendLedgerAsync(new JsonObject
+        {
+            ["action"] = "check_quality_probe",
+            ["goal_id"] = goal,
+            ["attempt_id"] = attempt,
+            ["recipe"] = ProgramContract.Encode(recipe),
+            ["constraints"] = GeometryContract.Encode(constraints, rigId),
+            ["state"] = EncodeState(state)
+        }, false, response => ReadDispatch(response, goal, state), token, programBound: true, geometryBound: true);
+    }
     internal Task<LedgerResult<PlannerDispatchCheck>> CheckGeometryPendingDispatchAsync(PreparationCommand command,
         DirectorConfiguration configuration, DirectorConstraints constraints, PlannerState state, CancellationToken token)
     {

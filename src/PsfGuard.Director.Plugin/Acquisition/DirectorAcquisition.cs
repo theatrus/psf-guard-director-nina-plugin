@@ -226,7 +226,7 @@ public sealed class DirectorAcquisition
         var ledgerDirectory = Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName;
         var recoveryDirectory = Path.Combine(LocalStateRoot, "recovery", rig);
         // Once commissioned, a later checkbox change cannot bypass a stored stop.
-        var recoveryRequired = weatherHolds || options.RetryFocusAndGuiding || Directory.Exists(recoveryDirectory);
+        var recoveryRequired = weatherHolds || options.RetryFocusAndGuiding || options.Quality != DirectorQualityPolicy.Off || Directory.Exists(recoveryDirectory);
         if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
         await using var runtime = recoveryRequired
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
@@ -532,7 +532,9 @@ public sealed class DirectorAcquisition
             native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
-                TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System);
+                TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System)
+            { CollectQuality = options.Quality != DirectorQualityPolicy.Off };
+            var qualityStore = options.Quality == DirectorQualityPolicy.Off ? null : new QualityReferenceStore(Path.Combine(recoveryDirectory, "quality"), night, runtime);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
@@ -711,6 +713,7 @@ public sealed class DirectorAcquisition
                     container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
                     filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
                     await hooks.ExposureSavedAsync(captureId, progress, operations.Token);
+                    if (qualityStore is not null) await ScreenQualityAsync(evidence, binding, capture.CreateIntent(reservation, binding, equipmentBinding));
                     if (DateTimeOffset.UtcNow >= nextCheckIn)
                     {
                         QueueCheckIn();
@@ -723,6 +726,82 @@ public sealed class DirectorAcquisition
                 }
             }
             bool WeatherInterrupted() => weatherHolds && (interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested);
+
+            async Task ScreenQualityAsync(CaptureEvidence evidence, CaptureBinding binding, CaptureIntent original)
+            {
+                if (evidence.Quality is not { } frame)
+                {
+                    container.UpdateDisplay(d => d with { Quality = "Unknown; measurements unavailable" });
+                    return;
+                }
+                var observation = await qualityStore!.ObserveAsync(frame, Now(), operations.Token);
+                ShowQuality(observation);
+                if (!observation.IsNew || observation.Reference is not { } reference || observation.Assessment is not { } assessment) return;
+                if (Now() < frame.ObservedAtMs || Now() - frame.ObservedAtMs > recovery!.Record!.Snapshot.Policy.EvidenceMaxAgeMs) return;
+                var qualityContext = new RecoveryQualityContext(binding.Target.Id, binding.Recipe.FilterId, binding.Recipe.ExposureMs,
+                    (ushort)binding.Recipe.Binning.X, (ushort)binding.Recipe.Binning.Y, reference.Id, "nina-pixels", frame.Context.AnalysisFingerprint);
+                RecoveryQualitySample Sample(QualityFrame measured, QualityAssessment result) => new(rig, configuration.Id,
+                    measured.CaptureId, measured.ObservedAtMs, qualityContext, result.Verdict);
+                await recovery!.ObserveQualityAsync(Sample(frame, assessment), operations.Token);
+                if (recovery.Record!.Snapshot.Phase is RecoveryPhase.Acquiring) return;
+                await EnsureSettledAsync(runtime, operations.Token);
+                while (recovery.Record.Snapshot.Phase is RecoveryPhase.Holding hold)
+                {
+                    Check(); CheckPointing();
+                    Report("Quality hold; waiting for a bounded probe", null);
+                    while (Now() < hold.Hold.RetryAtMs)
+                    {
+                        await window.WaitAsync(TimeSpan.FromMilliseconds(250), operations.Token);
+                        Check();
+                        await recovery.ObserveWeatherAsync(operations.Token);
+                        if (recovery.Record.Snapshot.Phase is not RecoveryPhase.Holding) break;
+                    }
+                    if (recovery.Record.Snapshot.Phase is not RecoveryPhase.Holding) break;
+                    var attempt = Guid.NewGuid().ToString("D");
+                    var granted = await recovery.BeginProbeAsync(attempt, operations.Token);
+                    if (granted.Issued is not { } issued) break;
+                    var block = TargetBlock();
+                    var probe = new NinaExposureItem(original with { CaptureId = Guid.Parse(attempt), QualityProbe = true }, adapter,
+                        dispatch.Probe(original.GoalId, binding.Recipe, granted, () =>
+                        {
+                            Check(); CheckPointing(); native?.CheckTriggers(); block.ValidateContext();
+                            capture.CheckPrepared(binding, equipmentBinding);
+                            if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
+                                throw new InvalidOperationException("Mount is not ready for the quality probe.");
+                        }));
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(operations.Token);
+                    if (issued.DeadlineMs <= Now()) throw new TimeoutException("Quality probe expired.");
+                    deadline.CancelAfter(TimeSpan.FromMilliseconds(issued.DeadlineMs - Now()));
+                    container.RecordAction(binding.Target.Name, "Quality probe", "Started");
+                    try { await RunItem(block, probe, deadline.Token); }
+                    catch
+                    {
+                        // Do not let weather clearance replay an uncertain probe
+                        // or user trigger. Terminal cleanup retains its journal.
+                        interruptedSequenceTrigger = true;
+                        await recovery.StopAsync(CancellationToken.None);
+                        throw;
+                    }
+                    if (probe.Evidence is not { Phase: CapturePhase.ProbeMeasured, Quality: { } measured })
+                        throw new InvalidOperationException("Quality probe has no measured evidence.");
+                    var result = await qualityStore.ObserveAsync(measured, Now(), operations.Token);
+                    ShowQuality(result);
+                    if (!result.IsNew || result.Assessment is not { } classified || result.Reference?.Id != reference.Id)
+                        throw new InvalidOperationException("Quality probe reference changed or evidence was repeated.");
+                    await recovery.CompleteProbeAsync(attempt, Sample(measured, classified), operations.Token);
+                    container.RecordAction(binding.Target.Name, "Quality probe", classified.Reason.ToString());
+                    if (recovery.Record.Snapshot.Phase is RecoveryPhase.Acquiring) return;
+                }
+                throw new InvalidOperationException("Image quality recovery stopped; parking according to the abort policy.");
+            }
+
+            void ShowQuality(QualityObservation observation)
+            {
+                var status = observation.Reference is null
+                    ? observation.SamplesSeen >= 16 ? "Unknown; no stable initial group" : $"Collecting reference ({observation.SamplesSeen}/16); quality unknown"
+                    : $"Reference quality unknown; {observation.Assessment?.Reason.ToString() ?? "initial group frozen"}";
+                container.UpdateDisplay(d => d with { Quality = status });
+            }
 
             async Task HoldWeatherAsync()
             {

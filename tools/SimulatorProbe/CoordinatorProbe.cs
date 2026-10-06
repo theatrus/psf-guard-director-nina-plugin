@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null, bool ForceNativeFlip = false, string? RecoveryScenario = null, string? NightEndScenario = null, string? WeatherHoldScenario = null);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null, bool ForceNativeFlip = false, string? RecoveryScenario = null, string? NightEndScenario = null, string? WeatherHoldScenario = null, string? QualityScenario = null);
     private readonly HttpClient operatorClient;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
@@ -37,6 +37,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool NativeImaging { get; private init; }
     internal string? NativeImagingFailure { get; private init; }
     internal string? RecoveryScenario { get; private init; }
+    internal string? QualityScenario { get; private init; }
     internal string? NightEndScenario { get; private init; }
     internal string? WeatherHoldScenario { get; private init; }
     internal bool UsesEnclosure => EnclosureClosure || WeatherHoldScenario?.StartsWith("roof-", StringComparison.Ordinal) == true;
@@ -122,7 +123,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario };
+            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
         }
         catch
         {
@@ -275,7 +276,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 id = Guid.NewGuid(),
                 bandpass_id = $"smoke_{i}",
                 purpose = "simulator",
-                goal = new { kind = "frames", value = 1 },
+                goal = new { kind = "frames", value = QualityScenario is null ? 1 : 12 },
                 priority = MoonAvoidance && i == 2 ? 100 : targetIndex == 0 ? 3 - i : 10
             }).ToArray();
             var contributions = objectives.Select((objective, i) => new
@@ -337,7 +338,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
             || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
-            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
+            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != (QualityScenario is null ? 1U : 12U) || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;

@@ -8,17 +8,19 @@ internal sealed record CaptureIntent(Guid CaptureId, Guid ProfileId, string RigI
     string AssignmentId, ulong AssignmentRevision, string GoalId, string CameraDeviceId,
     double ExposureSeconds, string TargetName, double RaDegrees, double DecDegrees,
     double? PositionAngle, short BinX = 1, short BinY = 1, int Gain = -1, int Offset = -1,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CaptureProgramContext? Program = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CaptureProgramContext? Program = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool QualityProbe = false);
 
 internal sealed record CaptureProgramContext(string LedgerId, string TargetId, string RecipeId, string FilterId, short ReadoutMode);
 
-internal enum CapturePhase { Reserved, Capturing, Downloaded, SaveQueued, Saved, Failed, Interrupted, SaveUncertain, CaptureUncertain }
+internal enum CapturePhase { Reserved, Capturing, Downloaded, SaveQueued, Saved, Failed, Interrupted, SaveUncertain, CaptureUncertain, ProbeMeasured }
 internal sealed record CaptureDestination(string Directory, string Pattern, string Format);
 
 internal sealed record CaptureEvidence(int SchemaVersion, CaptureIntent Intent, CaptureDestination Destination, CapturePhase Phase,
     DateTimeOffset StartedAt, DateTimeOffset UpdatedAt, int? NinaImageId = null, string? SavedPath = null,
     double? CaptureAndDownloadMs = null, double? ProcessingAndSaveMs = null,
-    double? TotalMs = null, string? ErrorType = null, string? Filter = null);
+    double? TotalMs = null, string? ErrorType = null, string? Filter = null,
+    PsfGuard.Director.Runtime.QualityFrame? Quality = null);
 
 // One immutable attempt identity per file. Existing attempts are never overwritten
 // by a retry, even if their last observed outcome was unsuccessful or ambiguous.
@@ -42,7 +44,7 @@ internal sealed class CaptureJournal
         var directory = Path.Combine(root, intent.ProfileId.ToString("N"));
         Directory.CreateDirectory(directory);
         path = Path.Combine(directory, $"{intent.CaptureId:N}.json");
-        Evidence = new(intent.Program is null ? 1 : 2, intent, destination, CapturePhase.Reserved, now, now);
+        Evidence = new(intent.QualityProbe ? 3 : intent.Program is null ? 1 : 2, intent, destination, CapturePhase.Reserved, now, now);
         Write(Evidence, overwrite: false);
     }
 
@@ -61,6 +63,7 @@ internal sealed class CaptureJournal
             || !double.IsFinite(intent.DecDegrees) || intent.DecDegrees is < -90 or > 90
             || intent.PositionAngle is { } angle && (!double.IsFinite(angle) || angle is < 0 or >= 360)
             || intent.Program is null && intent.PositionAngle is null
+            || intent.QualityProbe && intent.Program is null
             || intent.BinX is < 1 or > 16 || intent.BinY is < 1 or > 16
             || intent.Gain < -1 || intent.Offset < -1)
             throw new ArgumentException("Invalid capture intent.", nameof(intent));
@@ -81,6 +84,7 @@ internal sealed class CaptureJournal
             // but before hardware entry. A crash at that marker stays uncertain.
             (CapturePhase.Capturing, CapturePhase.Downloaded or CapturePhase.CaptureUncertain or CapturePhase.Failed or CapturePhase.Interrupted) => true,
             (CapturePhase.Downloaded, CapturePhase.SaveQueued or CapturePhase.Failed or CapturePhase.Interrupted) => true,
+            (CapturePhase.Downloaded, CapturePhase.ProbeMeasured) => Evidence.Intent.QualityProbe,
             (CapturePhase.SaveQueued, CapturePhase.Saved or CapturePhase.Failed or CapturePhase.SaveUncertain) => true,
             (CapturePhase.SaveUncertain, CapturePhase.Saved or CapturePhase.Failed) => true,
             (CapturePhase.CaptureUncertain, CapturePhase.Failed) => true,
@@ -122,11 +126,22 @@ internal sealed class CaptureJournal
 
     private static void Validate(CaptureEvidence evidence)
     {
-        if (evidence.SchemaVersion is not (1 or 2) || evidence.Intent is null || evidence.Destination is null || !Enum.IsDefined(evidence.Phase)
-            || (evidence.SchemaVersion == 2) != (evidence.Intent.Program is not null))
+        if (evidence.SchemaVersion is not (1 or 2 or 3) || evidence.Intent is null || evidence.Destination is null || !Enum.IsDefined(evidence.Phase)
+            || (evidence.SchemaVersion >= 2) != (evidence.Intent.Program is not null)
+            || (evidence.SchemaVersion == 3) != evidence.Intent.QualityProbe)
             throw new InvalidDataException("Unsupported capture journal.");
         Validate(evidence.Intent);
         Validate(evidence.Destination);
+        if (evidence.Quality is { } quality && (quality.CaptureId != evidence.Intent.CaptureId.ToString("D")
+            || quality.Context.RigId != evidence.Intent.RigId || quality.Context.ConfigurationId != evidence.Intent.ConfigurationId
+            || quality.Context.TargetId != evidence.Intent.Program?.TargetId))
+            throw new InvalidDataException("Quality evidence belongs to a different capture context.");
+        if (evidence.Intent.QualityProbe && (evidence.SavedPath is not null
+            || evidence.Phase is CapturePhase.SaveQueued or CapturePhase.Saved or CapturePhase.SaveUncertain))
+            throw new InvalidDataException("A quality probe cannot enter the science-save path.");
+        if (evidence.Phase == CapturePhase.ProbeMeasured && (!evidence.Intent.QualityProbe || evidence.Quality is null
+            || evidence.Quality.CaptureId != evidence.Intent.CaptureId.ToString("D") || evidence.SavedPath is not null))
+            throw new InvalidDataException("Invalid quality probe provenance.");
         if (new[] { evidence.CaptureAndDownloadMs, evidence.ProcessingAndSaveMs, evidence.TotalMs }
             .Any(value => value is { } number && (!double.IsFinite(number) || number < 0)))
             throw new InvalidDataException("Invalid capture timing.");

@@ -11,10 +11,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // receipt delivery; native sequencing owns inherited triggers and conditions.
 internal sealed class NinaExposureItem : SequenceItem, IExposureItem
 {
-    private readonly NinaProgramCapture capture;
-    private readonly LedgerReservation reservation;
-    private readonly CaptureBinding binding;
-    private readonly NinaEquipmentBinding local;
+    private readonly Func<Func<CancellationToken, Task<Action>>, IProgress<ApplicationStatus>, CancellationToken, Task<CaptureEvidence>> capture;
     private readonly Func<CancellationToken, Task<Action>> revalidate;
     private readonly CaptureIntent intent;
     private int entered;
@@ -23,20 +20,30 @@ internal sealed class NinaExposureItem : SequenceItem, IExposureItem
 
     internal NinaExposureItem(NinaProgramCapture capture, LedgerReservation reservation, CaptureBinding binding,
         NinaEquipmentBinding local, Func<CancellationToken, Task<Action>> revalidate)
+        : this(capture.CreateIntent(reservation, binding, local),
+            (guard, progress, token) => capture.CaptureAsync(reservation, binding, local, guard, progress, token), revalidate)
+    { }
+
+    internal NinaExposureItem(CaptureIntent intent, NinaCaptureAdapter adapter, Func<CancellationToken, Task<Action>> revalidate)
+        : this(intent, (guard, progress, token) => adapter.CaptureAsync(intent, guard, progress, token), revalidate)
+    {
+        if (!intent.QualityProbe) throw new InvalidOperationException("Unreserved science exposures are forbidden.");
+    }
+
+    private NinaExposureItem(CaptureIntent intent,
+        Func<Func<CancellationToken, Task<Action>>, IProgress<ApplicationStatus>, CancellationToken, Task<CaptureEvidence>> capture,
+        Func<CancellationToken, Task<Action>> revalidate)
     {
         ArgumentNullException.ThrowIfNull(revalidate);
         this.capture = capture;
-        this.reservation = reservation;
-        this.binding = binding;
-        this.local = local;
         this.revalidate = revalidate;
-        intent = capture.CreateIntent(reservation, binding, local);
+        this.intent = intent;
         ExposureTime = intent.ExposureSeconds;
         Gain = intent.Gain;
         Offset = intent.Offset;
         Binning = new(intent.BinX, intent.BinY);
         ImageType = CaptureSequence.ImageTypes.LIGHT;
-        Name = "Director exposure";
+        Name = intent.QualityProbe ? "Director quality probe" : "Director exposure";
     }
 
     public double ExposureTime { get; set; }
@@ -62,7 +69,7 @@ internal sealed class NinaExposureItem : SequenceItem, IExposureItem
         try
         {
             CheckSettings();
-            var saved = await capture.CaptureAsync(reservation, binding, local, async cancellation =>
+            var saved = await capture(async cancellation =>
             {
                 var finalDispatch = await revalidate(cancellation).ConfigureAwait(false);
                 cancellation.ThrowIfCancellationRequested();

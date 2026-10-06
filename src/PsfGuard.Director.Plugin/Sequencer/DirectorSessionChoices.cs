@@ -4,6 +4,9 @@ public sealed record DirectorChoice<T>(T Value, string Label);
 
 public static class DirectorSessionChoices
 {
+    public static IReadOnlyList<DirectorChoice<DirectorQualityPolicy>> QualityPolicies { get; } =
+        [new(DirectorQualityPolicy.Off, "Off"), new(DirectorQualityPolicy.Monitor, "Monitor only"),
+         new(DirectorQualityPolicy.ParkAndStop, "Stop for night"), new(DirectorQualityPolicy.HoldAndProbe, "Hold and probe (experimental)")];
     public static IReadOnlyList<DirectorChoice<DirectorWeatherPolicy>> WeatherPolicies { get; } =
         [new(DirectorWeatherPolicy.StopForNight, "Stop for night"), new(DirectorWeatherPolicy.HoldAndResume, "Hold and resume")];
     public static IReadOnlyList<DirectorChoice<DirectorCheckInMode>> CheckInModes { get; } =

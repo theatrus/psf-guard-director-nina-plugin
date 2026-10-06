@@ -1,5 +1,39 @@
 # Real N.I.N.A. smoke test
 
+## Native Quality Screening and Probes
+
+2026-10-05: plugin `325c149`, verified runtime 0.14.0 / IPC 14,
+NINA 3.3.0.1065, ASCOM OmniSim and a private PSF Guard built from `ec23f0e`.
+Runtime artifact workflow `37403862116` passed all native platforms.
+
+- `-PublicAcquisition -QualityScenario stop`: five reference frames and two
+  corroborated poor frames led to a terminal stop and park. No probe or extra
+  science after-exposure hook ran. Evidence:
+  `artifacts/nina-smoke-fdbf61b7855b415e96a4903b9d2893c6/probe/186281f2191c41d38ee660629ec20c50/result.json`.
+- `-PublicAcquisition -QualityScenario recover`: 36 science saves, exactly two
+  separately journaled and unsaved probes, resumed science acquisition, then
+  park. The unverified-reference warning remained visible. Evidence:
+  `artifacts/nina-smoke-fd1cec04f36b45fbab4b62a3e0d05c8b/probe/8584295f35d14576850788fb6fe6b090/result.json`.
+- Native `focus-always` failed autofocus twice with exactly one configured retry,
+  then parked with no science saves. Evidence:
+  `artifacts/nina-smoke-1afa42e65f764d40a0f3903a80f33d65/probe/d20bb92285684065823c1013afe6040d/result.json`.
+- Native `center` failure stopped and parked without a science save. Evidence:
+  `artifacts/nina-smoke-035449d81ee74a0c929c81dddcf7b339/probe/90c42636bf0845e8a2b6bbe8c1db39d8/result.json`.
+
+The fixture injects controlled quality measurements after real ASCOM captures
+and NINA preparation. It tests policy, dispatch, persistence and accounting, not
+real-sky cloud accuracy. Native editors and status rendered at 640 and 1000 px,
+including all 14 policy selectors, 19 numeric fields and 10 toggles. The
+screenshots retain the permanent unknown-quality warning.
+
+All 904 managed tests passed against the bundled runtime, including frozen
+references across restart, the sixteen-frame initialization limit, strict probe
+context, deadline/replay refusal and exclusion from science-save queues.
+Release package build, formatter verification, runtime-fetch regressions and
+`git diff --check` passed. Cloud recovery and focus/guide retries default off;
+the existing abort policy defaults to park when enclosure clearance permits.
+Process-restart acquisition remains a separate acceptance gate.
+
 ## Quality Contract Runtime Regression
 
 2026-10-05: plugin `cb70d7d` with verified runtime 0.13.0 / IPC 13,

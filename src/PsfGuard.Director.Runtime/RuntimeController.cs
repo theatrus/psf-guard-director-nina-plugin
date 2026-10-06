@@ -96,6 +96,9 @@ public sealed class RuntimeController : IAsyncDisposable
         RunRequestAsync((session, linked) => session.OpenRecoveryAsync(identity, policy, nowMs, linked), token);
     public Task<RecoveryResult<RecoveryCurrent>> ReadRecoveryAsync(CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ReadRecoveryAsync(linked), token);
+    public Task<LedgerResult<PlannerDispatchCheck>> CheckQualityProbeAsync(string goal, string attempt,
+        ExposureRecipe recipe, DirectorConstraints constraints, PlannerState state, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.CheckQualityProbeAsync(goal, attempt, recipe, constraints, state, linked), token);
     public Task<RecoveryResult<QualityAssessment>> ClassifyQualityAsync(QualityPolicy policy, QualityReference reference,
         QualityFrame frame, ulong nowMs, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ClassifyQualityAsync(policy, reference, frame, nowMs, linked), token);

@@ -143,6 +143,9 @@ public sealed class NinaSessionRecoveryTests
     {
         var options = new DirectorSessionOptions();
         Assert.False(options.RetryFocusAndGuiding);
+        Assert.Equal(DirectorQualityPolicy.Off, options.Quality);
+        Assert.Equal(DirectorAbortPolicy.ParkMount, options.OnAbort);
+        Assert.Equal(3, options.MaximumOperationFailures);
         Assert.Empty(options.ValidateSettings());
         options.RetryCooldownSeconds = 600;
         Assert.NotEmpty(options.ValidateSettings());
@@ -212,6 +215,10 @@ public sealed class NinaSessionRecoveryTests
             RetryCooldownSeconds = 12,
             MaximumRecoveryMinutes = 4,
             MaximumRecoveryAttempts = 2,
+            Quality = DirectorQualityPolicy.HoldAndProbe,
+            PoorQualityFrames = 4,
+            GoodQualityProbes = 2,
+            MaximumOperationFailures = 2,
             OnAbort = DirectorAbortPolicy.StopMount
         };
         var loaded = Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>(Newtonsoft.Json.JsonConvert.SerializeObject(options))!;
@@ -220,6 +227,10 @@ public sealed class NinaSessionRecoveryTests
         Assert.Equal(12, cloned.RetryCooldownSeconds);
         Assert.Equal(4, cloned.MaximumRecoveryMinutes);
         Assert.Equal(2, cloned.MaximumRecoveryAttempts);
+        Assert.Equal(DirectorQualityPolicy.HoldAndProbe, cloned.Quality);
+        Assert.Equal(4, cloned.PoorQualityFrames);
+        Assert.Equal(2, cloned.GoodQualityProbes);
+        Assert.Equal(2, cloned.MaximumOperationFailures);
         Assert.Equal(DirectorAbortPolicy.StopMount, cloned.OnAbort);
         Assert.Empty(cloned.ValidateSettings());
     }
