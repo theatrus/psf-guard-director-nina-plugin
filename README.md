@@ -141,16 +141,23 @@ We plan to support [theatrus/astrocollab-api](https://github.com/theatrus/astroc
 an API for contributing observations to shared projects across rigs and sites.
 **This integration is not implemented yet.**
 
-The [proposed PSF Guard adapter](https://github.com/theatrus/astrocollab-api/blob/main/integrations/psf-guard.md)
-would pair each rig, report its capabilities, and request suitable targets,
-panels and filters at check-in. Director would use its existing local planner
-and NINA actions to execute that work. A collaboration assignment would never
-override local safety, equipment limits or acquisition permission.
+The [interoperability design](https://github.com/theatrus/psf-guard/blob/main/docs/design/collaboration.md)
+maps AstroCollab's Starfront-compatible hello, tonight and report protocol to
+two modes: plugin-only acquisition through the bundled Rust sidecar, or import
+into PSF Guard's existing projects and rig databases. Both would use the same
+planning core, NINA actions and trigger hooks. Plugin-only mode would need a
+reviewed local workload policy; the current plugin still requires PSF Guard
+pairing and an allocation to begin acquisition.
 
-PSF Guard would prepare and queue calibrated subs or requested masters for
-submission, retaining capture and calibration provenance. Uploads would stay
-off the exposure path, and remote assessment would appear alongside local
-grades rather than overwrite them.
+Local priorities, safety, equipment limits and bounded acquisition permission
+would remain in control. Durable reports would retain panel, capture, quality
+and calibration provenance, with one reporting owner per rig/share. Remote
+verdicts would appear alongside local grades, not overwrite them. Raw captures
+would not be labeled calibrated without processing evidence.
+
+The current API draft does not define image upload routes. File submission and
+corrections to previously credited data need further protocol work; this
+roadmap does not promise those features today.
 
 ## Documentation and development
 
