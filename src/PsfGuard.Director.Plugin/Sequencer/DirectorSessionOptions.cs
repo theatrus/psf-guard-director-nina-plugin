@@ -53,6 +53,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private bool enableAcquisition;
     [JsonProperty] public bool EnableAcquisition { get => enableAcquisition; set => Set(ref enableAcquisition, value); }
     private bool automaticWorkloads;
+    private bool allowSettledRestart;
+    [JsonProperty] public bool AllowSettledRestart { get => allowSettledRestart; set => Set(ref allowSettledRestart, value); }
     [JsonProperty] public bool AutomaticWorkloads { get => automaticWorkloads; set => Set(ref automaticWorkloads, value); }
     private bool localTargetScheduling;
     [JsonProperty] public bool LocalTargetScheduling { get => localTargetScheduling; set => Set(ref localTargetScheduling, value); }
@@ -94,6 +96,7 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     {
         var issues = new List<string>();
         if (SchemaVersion != 1) issues.Add("Unsupported Director session settings version.");
+        if (AllowSettledRestart && !AutomaticWorkloads) issues.Add("Settled-night restart requires automatic workloads and fresh server admission.");
         Range(MaximumHours, 0.01, 24, "Session duration (hours)");
         Range(MinimumAltitude, 0, 90, "Minimum altitude");
         Range(MaximumAltitude, 0, 90, "Maximum altitude");

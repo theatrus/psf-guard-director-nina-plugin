@@ -383,6 +383,12 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Options.RetryCooldownSeconds = 1;
                 }
                 ConfigureImaging(sessionContainer.Options);
+                if (coordinator.RestartAdmission)
+                {
+                    sessionContainer.Options.AllowSettledRestart = true;
+                    await coordinator.PrepareRestartAsync(service.LocalStateRoot, equipment, sessionContainer.Options, lifetime.Token);
+                    sessionContainer.ResumeRecordedNight = true;
+                }
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
@@ -695,6 +701,12 @@ public sealed class SimulatorSequence : SequenceItem
                             catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
                         }
                         if (!coordinator.PriorityRefresh) await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
+                        if (coordinator.RestartAdmission)
+                        {
+                            await coordinator.VerifyRestartAsync(service.LocalStateRoot, lifetime.Token);
+                            if (sessionContainer.ResumeRecordedNight) throw new InvalidDataException("Restart intent was not consumed.");
+                            await File.WriteAllTextAsync(Path.Combine(run, "restart-verified.txt"), "Recorded unused night readmitted explicitly; fresh workload ran and released; original night identity/deadline retained", lifetime.Token);
+                        }
                     }
                     else await executing;
                 }

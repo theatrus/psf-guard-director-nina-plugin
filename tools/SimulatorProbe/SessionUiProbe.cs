@@ -58,7 +58,7 @@ internal static class SessionUiProbe
                 if (tab == 0)
                 {
                     if (controls.OfType<ComboBox>().Count() != 14 || controls.OfType<TextBox>().Count() != 19
-                        || controls.OfType<CheckBox>().Count() != 10)
+                        || controls.OfType<CheckBox>().Count() != 12)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())
                         if (combo.SelectedItem is null) throw new InvalidOperationException("Director policy selection is empty.");

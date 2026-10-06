@@ -79,6 +79,32 @@ public sealed class NinaSessionRecoveryTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExplicitOriginalNightReadmissionKeepsSpentBudgetAndCannotClearStop(bool terminal)
+    {
+        await using var f = await Fixture.Create();
+        var attempts = 0;
+        await f.Recovery.ExecuteAsync(RecoveryOperation.Focus, "focuser", "target",
+            _ => ++attempts == 1 ? Task.FromException(new SequenceEntityFailedException("failed")) : Task.CompletedTask,
+            _ => Task.CompletedTask, default);
+        if (terminal) await f.Recovery.StopAsync(default);
+        var before = f.Recovery.Record!.Snapshot;
+        await f.Runtime.StopAsync();
+        await f.Runtime.StartAsync("rig-test");
+        var next = f.NewRecovery();
+        if (terminal) await Assert.ThrowsAsync<InvalidOperationException>(() => next.AdmitAsync("rig-test", "config", "night", f.Start, f.End, default));
+        else await next.AdmitAsync("rig-test", "config", "night", f.Start, f.End, default);
+        Assert.False(next.NewlyAdmitted);
+        var after = (await f.Runtime.ReadRecoveryAsync()).Value!.Record!.Snapshot;
+        Assert.Equal(before.Identity, after.Identity);
+        Assert.Equal(before.Policy, after.Policy);
+        Assert.Equal(1U, after.ProbesSpent);
+        Assert.Equal(before.TotalFailures, after.TotalFailures);
+        Assert.Equal(terminal, after.Phase is RecoveryPhase.Stopping);
+    }
+
+    [Theory]
     [InlineData("unknown")]
     [InlineData("timeout")]
     [InlineData("cancel")]

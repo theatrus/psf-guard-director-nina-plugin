@@ -35,6 +35,20 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private NinaInstructionSlots slots = new();
     private readonly AsyncCommand reportEquipmentCommand;
     private bool reportingEquipment;
+    private bool resumeRecordedNight;
+    // Operator intent is one-use and deliberately absent from saved sequences.
+    public bool ResumeRecordedNight
+    {
+        get { lock (executionLock) return resumeRecordedNight; }
+        set { lock (executionLock) { if (execution is { IsCompleted: false }) return; resumeRecordedNight = value; } RaisePropertyChanged(); }
+    }
+    internal bool ConsumeRestartRequest()
+    {
+        bool requested;
+        lock (executionLock) { requested = resumeRecordedNight; resumeRecordedNight = false; }
+        RaisePropertyChanged(nameof(ResumeRecordedNight));
+        return requested;
+    }
     private readonly HashSet<ISequenceTrigger> runtimeTriggers = new(ReferenceEqualityComparer.Instance);
 
     // Native execution sees the complete base collection. Sequence JSON keeps
@@ -186,6 +200,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     {
         token.ThrowIfCancellationRequested();
         if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
+        if (Options.AllowSettledRestart) NinaRestartAdmission.ValidateLifecycle(this);
         lock (executionLock)
         {
             if (reportingEquipment) throw new InvalidOperationException("Wait for the equipment report before starting acquisition.");
