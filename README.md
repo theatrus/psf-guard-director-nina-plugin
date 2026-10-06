@@ -1,224 +1,167 @@
 # PSF Guard Director for N.I.N.A.
 
-An experimental, goal-driven acquisition plugin for N.I.N.A. 3.3. Director will
-execute PSF Guard observing assignments through supported N.I.N.A. sequencing
-and equipment APIs while keeping safety and operator control local. Target
-Scheduler is inspiration and an optional data source, not a runtime dependency.
+**Plan in PSF Guard. Image in N.I.N.A.** Director runs your observing projects
+through NINA's Advanced Sequencer. It chooses what to image next, prepares the
+equipment, captures frames, and reports progress back to
+[PSF Guard](https://psf-guard.com).
 
-Director is separate from PSF Guard Sync. It uses the same Rust planning core
-as PSF Guard through a bundled, versioned sidecar; it does not reimplement the
-planner in C#.
+Director schedules locally using the same Rust planning core as PSF Guard. It
+follows project priorities, target visibility, your horizon, Moon avoidance and
+remaining exposure goals. It can keep imaging through a server outage within
+the work already authorized, then check in when the connection returns.
 
-Director will expose explicit session/target state to Chatstronomy while
-preserving Chatstronomy's existing TS integration. Neither plugin is a required
-dependency of Director, and chat commands remain subject to local permissions
-and safe execution boundaries.
+![Director Session in NINA's Advanced Sequencer](docs/images/advanced-sequencer-session.png)
 
-The architecture and acceptance gates live in
-[PSF Guard's Director design](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md).
-This repository is experimental, not a stable scheduler release. The public
-Director Session supports opt-in local multi-target scheduling and the original
-prepared-target mode. Rust selects priority/visibility-feasible goals locally;
-native sequence hooks prepare each target without waiting on server check-ins.
-See [local scheduling](docs/native-capture.md#local-target-scheduling-experimental)
-for setup, safety requirements and limitations.
+*Director Session in an unarmed NINA simulator profile. Recovery settings shown
+here are configured for that test; retries are off by default.*
 
-## In the Advanced Sequencer
+## What it does
 
-Keep the night in NINA: choose Director defaults for native imaging, or use the
-seven target and exposure instruction slots with your own triggers and conditions.
-The shared planner selects local work while check-ins report progress to PSF Guard.
+- **Schedules multiple targets locally.** Selects eligible work by priority and
+  observing constraints instead of replaying a fixed list of exposures.
+- **Uses NINA's imaging actions.** Slew and center, rotate, autofocus, guide,
+  dither, flip at the meridian, capture and park using your connected equipment.
+- **Fits into your sequence.** Use Director's automatic actions or your own
+  NINA instructions, triggers and conditions in the target and exposure slots.
+- **Shows what is happening.** Session status, a target altitude/horizon chart,
+  and an action log show the selected work, waits, outcomes and elapsed time.
+- **Checks in live or in batches.** Send rig status while connected and deliver
+  recorded capture and preparation results during the night or afterward.
+- **Keeps safety local.** Safety-monitor and roof status interrupt acquisition.
+  Failed slews and uncertain operations stop the session; the default abort
+  action parks the mount when enclosure clearance permits.
 
-![Director Session in NINA's Advanced Sequencer, showing safety, park-on-abort and bounded failure recovery controls](docs/images/advanced-sequencer-session.png)
+Target Scheduler is not required. Director is a separate plugin from
+[PSF Guard Sync](https://github.com/theatrus/psf-guard-nina-plugin): Sync transfers
+catalog data and images; Director runs acquisition. Installing Director does not
+change Sync.
 
-![Director's seven instruction slots inside the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
+## Get started
 
-Actual NINA 3.3 nightly #65 screenshots from an isolated, unarmed simulator
-profile. See [setup and recovery](docs/native-capture.md#bounded-focus-and-guide-recovery)
-for the controls and current limitations. Opt-in
-[weather and roof holds](docs/native-capture.md#weather-and-roof-holds) resume
-settled work after continuous Safe/Open clearance, including startup and workload
-waits. Live interrupted exposures are reconciled without replay or budget refunds;
-uncertain hooks and crash recovery still require review. Cloud probes remain planned.
+Requires **Windows x64**, **NINA 3.3 nightly #58 or newer**, and a PSF Guard server
+with Director support. The planning runtime is bundled with the plugin.
 
-## Runtime preview
+1. Add `https://nina-plugins.psf-guard.com/` as a source in NINA's plugin manager
+   and install **PSF Guard Director**. See [releases](https://github.com/theatrus/psf-guard-director-nina-plugin/releases)
+   for package versions. This README describes `main`; packaged features follow
+   the release notes.
+2. In Director's plugin settings, enter your PSF Guard server address and pair
+   using a Director pairing code. Credentials stay in Windows Credential Manager;
+   no API key is displayed.
+3. Connect your equipment, add **Director Session** to the Advanced Sequencer,
+   and configure safety, enclosure clearance, horizon and operation ownership.
+   Keep acquisition disabled while setting up.
+4. Use **Report equipment**, then review the rig configuration and commission
+   its project work in PSF Guard. Each rig is bound to its project database.
+5. Enable **Local target scheduling**, **Automatic workloads**, and finally
+   **Enable acquisition**. Run the sequence to request work and start imaging.
 
-The initial plugin targets N.I.N.A. 3.3 nightly #58 (`3.3.0.1058-nightly`) and
-.NET 10 on Windows x64. It starts only on explicit request. Profile changes
-and N.I.N.A. shutdown stop the child process; it never starts equipment work.
-Runtime state changes and faults are logged through N.I.N.A.
+Put connect/cool steps before Director and warm/disconnect steps after it in the
+outer NINA sequence. Pairing and equipment reporting alone never start acquisition.
+See the [setup and operation guide](docs/native-capture.md) for policy details.
 
-The settings page shows the current profile, planner version, runtime state,
-and acquisition state. Start/Stop control the local planner process only.
-The Coordinator section pairs with a Director code, stores the resulting
-credential in Windows Credential Manager, and can reset local pairing. It never
-displays an API key. A configured coordinator must be paired before starting its
-rig's runtime. Pairing is not permission to acquire.
-The read-only coordinator client validates and caches program previews against
-an explicit database/rig/profile binding. A separate capture checkpoint client
-delivers durable ledger evidence in bounded batches and resumes after restart.
-The prepared-target session uses these clients for capture check-in; see
-[coordinator intake](docs/native-capture.md#read-only-coordinator-intake).
-Separate allocation intake now accepts an operator-issued first allocation for
-the exact paired client, persists it for explicit offline use, and refuses changed
-or expired grants. It cannot admit or renew a grant itself; see
-[issued allocations](docs/native-capture.md#issued-allocation-intake).
-There is no Chatstronomy adapter yet.
+## A night with Director
 
-The Advanced Sequencer offers **Director Session**, an experimental container
-with seven TS-style instruction slots, native trigger/condition editors, grouped
-local-policy fields, and a status view. It saves and clones configuration, not
-credentials or acquisition authority. Acquisition is off by default. Enabling
-it requires an online one-shot allocation launch, fresh native safety evidence,
-dated NINA Earth-orientation data and the explicit prepared-target policies.
-Select **Enclosure clearance** in the Session's safety settings: **Open air**
-requires no configured or connected dome; an enclosed setup requires a fresh
-fully-open NINA shutter report. Existing sequences default to **Not configured**
-and cannot acquire until reviewed. Loss of clearance aborts acquisition, requests
-slew-stop/tracking-off, and blocks parking. Reopening does not resume the session.
-See [session configuration](docs/native-capture.md#session-configuration-preview)
-for what is implemented and what remains gated.
-
-## Development
-
-Use .NET SDK 10 and the existing authenticated `gh` CLI:
-
-```powershell
-./fetch-runtime.ps1
-./tools/fetch-nina-test-dependencies.ps1
-dotnet restore --locked-mode
-dotnet build --configuration Release --no-restore
-dotnet test --configuration Release --no-build
-dotnet format --verify-no-changes --no-restore
-./build-package.ps1
+```mermaid
+flowchart TD
+    Start[Connect and cool in NINA] --> Work[Request authorized work from PSF Guard]
+    Work --> Pick[Select an eligible target locally]
+    Pick --> Prepare[Center, focus and guide with NINA]
+    Prepare --> Capture[Run triggers, capture and save]
+    Capture --> Progress[Record progress and check in when due]
+    Progress --> Pick
+    Pick -->|Nothing eligible yet| Wait[Wait within the observing window]
+    Wait --> Pick
+    Pick -->|Night ends| End[Park, then run the following sequence steps]
 ```
 
-`runtime.lock.json` pins a reviewed PSF Guard commit, successful CI run,
-artifact identity, executable and license-notice SHA-256 hashes, and all wire versions. Fetching never
-builds Rust locally or silently takes a newer artifact. The same pin is embedded
-in the runtime-host assembly and checked before execution. The executable stays
-read-locked for the process lifetime. CI artifact pins are temporary development
-inputs; expiry requires a reviewed update. Stable distribution will use durable,
-signed release artifacts, not expiring CI links.
+Safety and enclosure checks run throughout the sequence, not just between
+exposures. A server outage does not disable local checks or grant more work.
+When the current authorization expires, Director needs fresh server approval.
 
-The package includes only the two Director assemblies, pinned sidecar, runtime
-lock, license, and the sidecar's required third-party notices. Missing or changed
-notices invalidate the fetch cache. It does not bundle N.I.N.A. assemblies, TS, or Sync. The build
-does not install anything into a live N.I.N.A. profile or publish to a registry.
+### Your instructions, where you need them
 
-Tests exercise the real pinned child and adversarial pipe peers. They cover
-startup/shutdown, crash, checksum verification, bounded framing, malformed and
-stale replies, timeouts, cancellation before/after dispatch, and profile-scoped
-runtime replacement. These are not the full-stack acceptance test: that still
-requires N.I.N.A. with simulated equipment, Director's native execution adapter,
-and an isolated PSF Guard instance built from the corresponding changes.
+The seven slots are **Before Wait**, **After Wait**, **Before New Target**,
+**After Each Exposure**, **After New Target**, **After Each Target**, and
+**After Target Complete**. Use the native editors to add NINA instructions and
+compatible plugin actions. Choose Director or Sequence ownership per operation
+so autofocus, guiding and meridian flips have one owner.
 
-The WPF render test loads the compiled settings template and N.I.N.A.'s button
-style, checks command enablement/contrast/bounds at 240, 280, 360 and 640 pixels, and
-writes stopped/ready/fault screenshots into `artifacts/`. This validates the
-settings view in isolation, not plugin discovery or a real N.I.N.A. session.
+![Director's instruction slots in the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
 
-For a real nightly session with fresh test profiles and plugin storage, use the
-[N.I.N.A. smoke-test procedure](docs/nina-smoke-test.md). The test-only startup
-hook is not part of the plugin bundle.
+### Recovery is your choice
 
-The [native capture adapter](docs/native-capture.md) implements journaled capture,
-processing, and correlated save completion behind an internal interface. It is
-used by the experimental Director Session and cannot be started from
-the plugin settings. The runtime library exposes typed planning evaluation;
-the test-only ASCOM sequence exercises Rust-selected capture and pending-image
-feedback. The optional server-plan smoke activates and pulls an actual PSF Guard
-program, captures during a server outage and verifies restart, batch check-in
-and duplicate replay. Both probes use NINA's native safety simulator and dated,
-read-only Earth-orientation cache. `-PublicAcquisition` tests the actual public
-container, one-shot authorization, offline captures and replay refusal;
-`-PublicAcquisition -PublicUnsafe` tests an unsafe interruption during exposure.
+Cloud screening, focus/guide retries, weather/roof recovery and settled-night
+restart are **off by default**. The default is to stop for the night and park
+when the enclosure permits it.
 
-Director Session also has **Report equipment**, available with acquisition
-disabled once the session uses supported prepared-target policies. Connect the
-configured devices first. The command reports the exact native profile and
-session constraint fingerprint, using the existing vault pairing. PSF Guard
-stages this evidence for explicit operator review; reporting does not change
-active setup or authorize acquisition. The review endpoints are implemented,
-but the rig setup review UI and allocation admission UI are still pending.
+Optional recovery has time and attempt limits. Cloud screening can monitor,
+stop for the night, or hold and take unsaved probe exposures. Its initial
+reference keeps a **Reference quality unknown** warning: stable frames do not
+prove a clear sky. Repeated autofocus or guiding failures can accompany clouds,
+but Director stops on exhausted retries without needing a cloud diagnosis.
 
-The runtime host also exposes the sidecar's durable capture and preparation
-ledgers through IPC 9 (runtime 0.9.0). It can request read-only, ledger-backed
-planning, discover interrupted work, report native-operation receipts, and
-reserve a prepared capture after a fresh shared-core boundary check.
-Graceful shutdown reads the final reply and closes the pipe before waiting for
-child exit, so Windows cannot discard an unread reply during teardown.
-Storage is opt-in for callers with an existing private state directory. It
-supports reservations, observed outcomes, lookup, and bounded event replay;
-restarts retain unresolved attempts, preparation operations, and saved-image pending credit. The native
-public session uses this ledger; the runtime settings preview does not. See the
-[ledger integration boundary](docs/native-capture.md#durable-ledger-host).
+![Director status after a cloud-screening test stopped and parked the simulator](docs/images/director-status.png)
 
-The runtime client also supports opt-in recovery contract 1: admit a night,
-read its persistent state, submit revision-checked events and page its journal.
-Probe/park suggestions are accepted only for the exact newly committed request;
-replays and restart readback cannot issue work. The public NINA Session has
-opt-in bounded equipment, weather and cloud recovery, with local enclosure
-clearance guarding acquisition and shutdown. Explicit
-[settled-night restart](docs/native-capture.md#explicit-settled-night-restart)
-also defaults off and requires fresh server authority. Terminal stops and
-uncertain work cannot be resumed.
+*Native NINA status-view render from the simulator test, with controlled quality
+measurements. The unknown-reference warning remains visible after parking.*
 
-The typed program API binds immutable targets, exposure recipes, and equipment
-capabilities to durable execution. It rejects changed capture evidence and
-preparation settings while keeping selection policy in Rust. These APIs are
-shared foundations for local target scheduling, not a complete automatic scheduler.
+Explicit restart is limited to recorded, settled night boundaries. It preserves
+the original deadline and spent budgets, checks idle equipment and fresh safety
+evidence, and requests new work. It cannot clear terminal stops or resume
+uncertain captures or hooks. This mode currently excludes session-level and
+inherited triggers/conditions; ordinary sessions retain those editors.
+See [recovery and restart](docs/native-capture.md#native-quality-controls).
 
-The typed geometry API opens a separate geometry-bound ledger with the complete
-site, Earth-orientation validity, horizon, altitude limits, and meridian policy.
-Each evaluation, preparation boundary, and final reservation requires fresh
-constraints. The shared Rust core computes whole-operation visibility and
-preserves its original binding across restarts; the C# client never computes
-replacement windows. Old program-only calls cannot bypass geometry mode.
-The internal native geometry exporter now joins NINA's complete
-horizon/site snapshot with the matching equipment fingerprint for this client.
-The local orientation reader and continuous safety interlock are tested in the
-native probe and public session. Local multi-target dispatch and clean successor
-accounting are implemented; automatic equipment policies and uncertain-work
-resume remain unfinished.
+## How it fits together
 
-The two dispatch-check APIs recheck an issued preparation command or reserved
-capture after native before-hooks. They preserve the original command, attempt
-budget and capture evidence; a successful check cannot authorize replay after
-recovery. Replies include the core's exact evaluation time and inclusive latest
-start. Native dispatch accounts for monotonic validation/IPC time (rounded up)
-and rechecks wall-clock validity after native evidence, so a late successful
-reply cannot start equipment. The runtime pin uses the reviewed and merged head
-of PSF Guard PR #518, built by the three-platform Director CI. A changed runtime head requires a
-reviewed pin update. The isolated native simulator sequence uses session-bound post-hook
-checks. The public prepared-target increment has native host/server acceptance;
-the complete acquisition lifecycle remains separate work.
+```mermaid
+flowchart TD
+    Guard[PSF Guard: projects, plans and image assessment]
+    Plugin[Director: NINA session and local capture records]
+    Core[Bundled Rust planning core]
+    Nina[NINA actions, triggers and equipment]
+    Guard -->|Authorized work and plan updates| Plugin
+    Plugin -->|Live status and batch check-ins| Guard
+    Plugin -->|Local conditions and measured progress| Core
+    Core -->|Next target and operation| Plugin
+    Plugin -->|Run native sequence actions| Nina
+    Nina -->|Images, timing and equipment state| Plugin
+```
 
-## Preview releases
+PSF Guard and Director use the same planning code. NINA owns equipment actions;
+Director does not need Target Scheduler internals or an always-online scheduler.
+Local records survive disconnection, and repeated check-ins do not duplicate
+capture credit or replay equipment actions. Check-ins transfer evidence, not
+image files.
 
-Version 0.1.0.2 includes the bundled runtime 0.10.0 / IPC 10, pairing and the
-opt-in Director Session acquisition container. It adds local multi-target
-scheduling, automatic workloads, live/deferred check-ins and native NINA
-equipment defaults with configurable sequence hooks. See the
-[preview release notes](docs/releases/0.1.0.2.md).
+## Future work: AstroCollab
 
-Run `./build-release.ps1` after the full test suite passes. It builds the same
-seven-file bundle, checks its assembly version against the registry template,
-and writes a versioned ZIP and manifest with the ZIP's exact SHA-256 under
-`artifacts/`. It does not publish or install anything.
+We plan to support [theatrus/astrocollab-api](https://github.com/theatrus/astrocollab-api),
+an API for contributing observations to shared projects across rigs and sites.
+**This integration is not implemented yet.**
 
-Publish those generated artifacts with the authenticated `gh` CLI as a GitHub
-prerelease using the reported tag. Never replace assets on a published release.
-Copy the generated manifest, not its template, into the theatr.us registry at
-`manifests/p/PSF Guard Director/3.3.0.1058/manifest.json`. Verify the published
-archive checksum and the live registry response before calling the release done.
-The registry uses a single feed and rejects non-Release channels, so the manifest
-omits `Channel`. The description and GitHub prerelease label explicitly identify
-Director as experimental; feed placement does not make it stable. It requires
-N.I.N.A. 3.3 nightly #58 or newer.
-This acquisition preview is simulator-validated, not approved for unattended
-imaging. Real-sky full-night acceptance and uncertain-work resume remain open. Sync is
-unchanged.
+The [proposed PSF Guard adapter](https://github.com/theatrus/astrocollab-api/blob/main/integrations/psf-guard.md)
+would pair each rig, report its capabilities, and request suitable targets,
+panels and filters at check-in. Director would use its existing local planner
+and NINA actions to execute that work. A collaboration assignment would never
+override local safety, equipment limits or acquisition permission.
+
+PSF Guard would prepare and queue calibrated subs or requested masters for
+submission, retaining capture and calibration provenance. Uploads would stay
+off the exposure path, and remote assessment would appear alongside local
+grades rather than overwrite them.
+
+## Documentation and development
+
+- [Setup, native actions, safety and check-ins](docs/native-capture.md)
+- [Simulator validation and known test limits](docs/nina-smoke-test.md)
+- [Build, test and package the plugin](docs/development.md)
+- [Director architecture and roadmap](https://github.com/theatrus/psf-guard/blob/main/docs/design/director.md)
+
+Cloud control flow has simulator coverage; real-sky cloud accuracy and arbitrary
+crash recovery remain validation work. Test your equipment and safety policies
+under supervision before unattended use.
 
 ## License
 
