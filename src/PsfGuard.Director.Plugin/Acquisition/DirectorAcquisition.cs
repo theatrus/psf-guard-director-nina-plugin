@@ -242,7 +242,11 @@ public sealed partial class DirectorAcquisition
         await using var runtime = recoveryRequired
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
-        await runtime.StartAsync(rig, lifetime.Token);
+        // Keep recovery storage available during bounded shutdown after session
+        // cancellation. Cancellation still aborts startup and every operation.
+        using var runtimeLifetime = new CancellationTokenSource();
+        using (lifetime.Token.Register(runtimeLifetime.Cancel))
+            await runtime.StartAsync(rig, runtimeLifetime.Token);
         Action recoveryCheck = CheckIdleContext;
         NinaSessionRecovery? recovery = recoveryRequired
             ? new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
@@ -384,9 +388,7 @@ public sealed partial class DirectorAcquisition
             stopped.CancelAfter(TimeSpan.FromSeconds(15));
             if (guider?.GetInfo().Connected == true)
             {
-                if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
-                    || !await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
-                    throw new InvalidOperationException("Guider stop could not be confirmed.");
+                await ConfirmGuiderStoppedAsync(stopped.Token);
             }
         }
         async Task<bool> AdmitIdleWeatherAsync()

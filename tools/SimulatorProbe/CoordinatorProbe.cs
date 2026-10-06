@@ -124,8 +124,11 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         var ledger = Directory.CreateDirectory(Path.Combine(root, "restart-inspect")).FullName;
         await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledger, Path.Combine(root, "recovery", RigId));
         await runtime.StartAsync(RigId, token);
-        if ((await runtime.ReadRecoveryAsync(token)).Value?.Record?.Snapshot.Identity != restartIdentity)
+        var record = (await runtime.ReadRecoveryAsync(token)).Value?.Record;
+        if (record is null || record.Snapshot.Identity != restartIdentity)
             throw new InvalidDataException("Restart changed the original observing-night identity or duration.");
+        if (record.Snapshot.Phase is not RecoveryPhase.Stopped { Shutdown: RecoveryShutdown.Parked })
+            throw new InvalidDataException("Cancellation did not retain a terminal parked night.");
         await runtime.StopAsync();
     }
     private CoordinatorProbe(Uri endpoint, HttpClient operatorClient, CoordinatorPairing pairing) =>

@@ -64,23 +64,11 @@ public sealed partial class DirectorAcquisition
         var mount = telescope.GetInfo();
         if (!mount.Connected || mount.DeviceId != equipment.TelescopeDeviceId || !mount.AtPark || mount.Slewing || mount.TrackingEnabled)
             throw new InvalidOperationException("Restart requires the bound mount parked with tracking stopped.");
-        // This protective stop must complete positively, including for a guider
-        // which survived the old host. Disconnection is not proof of quiescence.
-        if (guider?.GetInfo() is not { Connected: true } guide || guide.DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
-            || guider.GetDevice() is not NINA.Equipment.Interfaces.IGuider device || !device.Connected || device.Id != guide.DeviceId)
-            throw new InvalidOperationException("Connect the bound guider and confirm it can stop before restart admission.");
-        var guideId = guide.DeviceId;
-        var stopped = await guider.StopGuiding(deadline.Token).WaitAsync(deadline.Token);
-        // NINA's local pulse/dither guider returns false when already idle. Its
-        // in-process state is distinct from a remote guider's cached status.
-        if (!stopped && device is not NINA.Equipment.Equipment.MyGuider.DirectGuider { State: "Idle", ShiftEnabled: false })
-            throw new InvalidOperationException("The bound guider did not confirm stopping.");
+        await ConfirmGuiderStoppedAsync(deadline.Token);
         NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipment.CameraDeviceId);
         mount = telescope.GetInfo();
         if (profiles.ActiveProfile.Id != profile || !mount.Connected || mount.DeviceId != equipment.TelescopeDeviceId
-            || !mount.AtPark || mount.Slewing || mount.TrackingEnabled || interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested
-            || !guider.GetInfo().Connected || !device.Connected || !ReferenceEquals(guider.GetDevice(), device)
-            || guider.GetInfo().DeviceId != guideId || device.Id != guideId || profiles.ActiveProfile.GuiderSettings.GuiderName != guideId)
+            || !mount.AtPark || mount.Slewing || mount.TrackingEnabled || interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested)
             throw new InvalidOperationException("Native context changed during restart admission.");
         var reviewed = (await runtime.ReviewRestartAsync(new(rig, configuration.Id, record.Snapshot.Identity.NightId,
             checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), true, boundary, true, true, true,
@@ -89,5 +77,23 @@ public sealed partial class DirectorAcquisition
         if (reviewed.Advice != RestartAdvice.RequestFreshAuthority)
             throw new InvalidOperationException($"Restart refused: {reviewed.Advice}.");
         return reviewed.Record.Snapshot.Identity;
+    }
+
+    private async Task ConfirmGuiderStoppedAsync(CancellationToken token)
+    {
+        var profile = profiles.ActiveProfile.Id;
+        // Disconnection is not proof that a surviving remote guider stopped.
+        if (guider?.GetInfo() is not { Connected: true } guide || guide.DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
+            || guider.GetDevice() is not NINA.Equipment.Interfaces.IGuider device || !device.Connected || device.Id != guide.DeviceId)
+            throw new InvalidOperationException("Connect the bound guider and confirm it can stop before restart admission.");
+        var guideId = guide.DeviceId;
+        var stopped = await guider.StopGuiding(token).WaitAsync(token);
+        // NINA's local pulse/dither guider returns false when already idle. Its
+        // in-process state is distinct from a remote guider's cached status.
+        if (!stopped && device is not NINA.Equipment.Equipment.MyGuider.DirectGuider { State: "Idle", ShiftEnabled: false })
+            throw new InvalidOperationException("The bound guider did not confirm stopping.");
+        if (profiles.ActiveProfile.Id != profile || !guider.GetInfo().Connected || !device.Connected || !ReferenceEquals(guider.GetDevice(), device)
+            || guider.GetInfo().DeviceId != guideId || device.Id != guideId || profiles.ActiveProfile.GuiderSettings.GuiderName != guideId)
+            throw new InvalidOperationException("Guider context changed while stopping.");
     }
 }

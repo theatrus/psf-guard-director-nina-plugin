@@ -157,11 +157,12 @@ public session uses this ledger; the runtime settings preview does not. See the
 The runtime client also supports opt-in recovery contract 1: admit a night,
 read its persistent state, submit revision-checked events and page its journal.
 Probe/park suggestions are accepted only for the exact newly committed request;
-replays and restart readback cannot issue work. **The public NINA Session does
-not enable this recovery mode yet.** Local enclosure-clearance evidence now
-guards acquisition and shutdown. Recovery policy, persistent session ownership
-and one-shot native dispatch
-remain required. See [session recovery](docs/native-capture.md#session-recovery-client).
+replays and restart readback cannot issue work. The public NINA Session has
+opt-in bounded equipment, weather and cloud recovery, with local enclosure
+clearance guarding acquisition and shutdown. Explicit
+[settled-night restart](docs/native-capture.md#explicit-settled-night-restart)
+also defaults off and requires fresh server authority. Terminal stops and
+uncertain work cannot be resumed.
 
 The typed program API binds immutable targets, exposure recipes, and equipment
 capabilities to durable execution. It rejects changed capture evidence and
@@ -216,7 +217,7 @@ omits `Channel`. The description and GitHub prerelease label explicitly identify
 Director as experimental; feed placement does not make it stable. It requires
 N.I.N.A. 3.3 nightly #58 or newer.
 This acquisition preview is simulator-validated, not approved for unattended
-imaging. Real-sky full-night acceptance and restart/resume remain open. Sync is
+imaging. Real-sky full-night acceptance and uncertain-work resume remain open. Sync is
 unchanged.
 
 ## License
