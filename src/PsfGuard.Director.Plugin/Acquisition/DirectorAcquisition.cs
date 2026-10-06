@@ -141,9 +141,11 @@ public sealed partial class DirectorAcquisition
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
         using var owner = new AcquisitionLease(LocalStateRoot);
+        RecoveryIdentity? restartedNight = null;
         if (container.ConsumeRestartRequest())
         {
             var original = await ReviewRestartAsync(container, token);
+            restartedNight = original;
             night = original.NightId;
             window = new(original.StartsAtMs, original.EndsAtMs, TimeProvider.System);
             container.RecordAction("", "Restart admission", "Settled boundary reviewed; fresh server work required");
@@ -152,7 +154,7 @@ public sealed partial class DirectorAcquisition
         do
         {
             token.ThrowIfCancellationRequested();
-            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, token);
+            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, token);
             firstAllocation = false;
             if (!more) break;
         } while (container.Options.AutomaticWorkloads);
@@ -179,7 +181,7 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, bool firstAllocation, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, CancellationToken token)
     {
         var options = container.Options.Clone();
         var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
@@ -224,6 +226,8 @@ public sealed partial class DirectorAcquisition
         using var operations = new NinaOperationLifetime(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
+        if (restartedNight is not null && (restartedNight.RigId != rig || restartedNight.ConfigurationId != configuration.Id))
+            throw new InvalidOperationException("The rig or configuration changed after restart review.");
         var admittedConstraints = constraintsReader.Refresh(constraintBinding);
         if (admittedConstraints.Revision != equipmentBinding.ConstraintRevision)
             throw new InvalidOperationException("Native constraints changed during admission.");

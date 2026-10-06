@@ -41,11 +41,24 @@ public sealed partial class DirectorAcquisition
             RestartScope(pairing.Binding, pairing.ClientId, endpoint, configuration.Id, options));
         var boundary = checkpoint.RequireIdle();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        if (now >= record.Snapshot.Identity.EndsAtMs) throw new InvalidOperationException("The recorded observing night has ended.");
+        var stableMs = options.Weather == DirectorWeatherPolicy.HoldAndResume ? checked((ulong)options.StableSafeSeconds * 1000) : 0;
+        deadline.CancelAfter(TimeSpan.FromMilliseconds(Math.Min(record.Snapshot.Identity.EndsAtMs - now, stableMs + 15000)));
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
-        while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
-            await Task.Delay(100, deadline.Token);
+        System.Diagnostics.Stopwatch? stable = null;
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            if (interlock.Read().Safety == PlannerSafety.Safe && enclosure.Read().Motion == RecoveryMotion.Permitted)
+            {
+                stable ??= System.Diagnostics.Stopwatch.StartNew();
+                if (stable.Elapsed.TotalMilliseconds >= stableMs) break;
+            }
+            else stable = null;
+            await Task.Delay(250, deadline.Token);
+        }
         interlock.Arm(); enclosure.Arm();
         NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipment.CameraDeviceId);
         var mount = telescope.GetInfo();
@@ -54,12 +67,20 @@ public sealed partial class DirectorAcquisition
         // This protective stop must complete positively, including for a guider
         // which survived the old host. Disconnection is not proof of quiescence.
         if (guider?.GetInfo() is not { Connected: true } guide || guide.DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
-            || !await guider.StopGuiding(deadline.Token).WaitAsync(deadline.Token))
+            || guider.GetDevice() is not NINA.Equipment.Interfaces.IGuider device || !device.Connected || device.Id != guide.DeviceId)
             throw new InvalidOperationException("Connect the bound guider and confirm it can stop before restart admission.");
+        var guideId = guide.DeviceId;
+        var stopped = await guider.StopGuiding(deadline.Token).WaitAsync(deadline.Token);
+        // NINA's local pulse/dither guider returns false when already idle. Its
+        // in-process state is distinct from a remote guider's cached status.
+        if (!stopped && device is not NINA.Equipment.Equipment.MyGuider.DirectGuider { State: "Idle", ShiftEnabled: false })
+            throw new InvalidOperationException("The bound guider did not confirm stopping.");
         NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipment.CameraDeviceId);
         mount = telescope.GetInfo();
         if (profiles.ActiveProfile.Id != profile || !mount.Connected || mount.DeviceId != equipment.TelescopeDeviceId
-            || !mount.AtPark || mount.Slewing || mount.TrackingEnabled || interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested)
+            || !mount.AtPark || mount.Slewing || mount.TrackingEnabled || interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested
+            || !guider.GetInfo().Connected || !device.Connected || !ReferenceEquals(guider.GetDevice(), device)
+            || guider.GetInfo().DeviceId != guideId || device.Id != guideId || profiles.ActiveProfile.GuiderSettings.GuiderName != guideId)
             throw new InvalidOperationException("Native context changed during restart admission.");
         var reviewed = (await runtime.ReviewRestartAsync(new(rig, configuration.Id, record.Snapshot.Identity.NightId,
             checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), true, boundary, true, true, true,
