@@ -338,7 +338,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
             || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
-            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != 1 || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
+            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != (QualityScenario is null ? 1U : 12U) || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
         previewRevision = second.Envelope.Revision;
