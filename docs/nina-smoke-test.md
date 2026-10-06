@@ -14,6 +14,11 @@ Runtime artifact workflow `37403862116` passed all native platforms.
   separately journaled and unsaved probes, resumed science acquisition, then
   park. The unverified-reference warning remained visible. Evidence:
   `artifacts/nina-smoke-fd1cec04f36b45fbab4b62a3e0d05c8b/probe/8584295f35d14576850788fb6fe6b090/result.json`.
+- Native `focus-always` failed autofocus twice with exactly one configured retry,
+  then parked with no science saves. Evidence:
+  `artifacts/nina-smoke-1afa42e65f764d40a0f3903a80f33d65/probe/d20bb92285684065823c1013afe6040d/result.json`.
+- Native `center` failure stopped and parked without a science save. Evidence:
+  `artifacts/nina-smoke-035449d81ee74a0c929c81dddcf7b339/probe/90c42636bf0845e8a2b6bbe8c1db39d8/result.json`.
 
 The fixture injects controlled quality measurements after real ASCOM captures
 and NINA preparation. It tests policy, dispatch, persistence and accounting, not
