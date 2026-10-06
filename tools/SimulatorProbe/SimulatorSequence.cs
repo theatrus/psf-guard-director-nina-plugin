@@ -434,6 +434,7 @@ public sealed class SimulatorSequence : SequenceItem
                         await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
                         Step(stopped ? "Cloud screening stopped after two poor frames and parked without probing" : "Cloud hold used two unsaved probes, resumed science and parked; reference remains unverified");
                         await coordinator.ReportStatusAsync(programTarget, stopped ? "quality_stopped" : "quality_recovered", lifetime.Token);
+                        captures.AddRange(journals.Where(j => j.Phase == CapturePhase.Saved));
                         ledger = service.LastLedger;
                         return;
                     }
@@ -1122,7 +1123,7 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : coordinator?.WeatherHoldScenario == "roof-startup-night-end" ? File.Exists(Path.Combine(run, "weather-hold-verified.txt")) && File.Exists(Path.Combine(run, "night-end-verified.txt")) : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.QualityScenario is not null ? File.Exists(Path.Combine(run, "quality-verified.txt")) : coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : coordinator?.WeatherHoldScenario == "roof-startup-night-end" ? File.Exists(Path.Combine(run, "weather-hold-verified.txt")) && File.Exists(Path.Combine(run, "night-end-verified.txt")) : captures.Count == 3),
                 enclosureCancellationVerified,
                 nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
                 nativeFailureVerified,
