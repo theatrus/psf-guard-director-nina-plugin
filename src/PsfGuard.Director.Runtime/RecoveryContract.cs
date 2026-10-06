@@ -14,7 +14,7 @@ public enum RecoveryError
 {
     Disabled, UnsupportedVersion, InvalidInput, InvalidDirectory, Busy, Unavailable, WrongScope,
     Conflict, Corrupt, UnsupportedSchema, ForeignDatabase, LimitReached, WrongPhase,
-    StaleEvidence, ChangedReference, ClockReversed, NotAdmitted, AcquisitionBlocked
+    StaleEvidence, ChangedReference, ClockReversed, NotAdmitted, AcquisitionBlocked, InsufficientSamples, UnstableBaseline
 }
 public sealed record RecoveryIdentity(string RigId, string ConfigurationId, string NightId, ulong StartsAtMs, ulong EndsAtMs);
 public sealed record RecoveryPolicy(ulong Revision, RecoveryQualityMode QualityMode, uint BadSamples, uint GoodProbes,
@@ -137,7 +137,8 @@ internal static class RecoveryContract
         {
             new StrictEnum<PlannerSafety>(), new StrictEnum<RecoveryMotion>(), new StrictEnum<RecoveryQualityMode>(),
             new StrictEnum<RecoveryVerdict>(), new StrictEnum<RecoveryOperation>(), new StrictEnum<RecoveryShutdown>(),
-            new StrictEnum<RecoveryParkResult>()
+            new StrictEnum<RecoveryParkResult>(), new StrictEnum<QualityReason>(),
+            new StrictEnum<RestartBoundary>(), new StrictEnum<RestartAdvice>()
         }
     };
 

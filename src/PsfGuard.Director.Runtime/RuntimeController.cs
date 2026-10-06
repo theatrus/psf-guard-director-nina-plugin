@@ -96,6 +96,14 @@ public sealed class RuntimeController : IAsyncDisposable
         RunRequestAsync((session, linked) => session.OpenRecoveryAsync(identity, policy, nowMs, linked), token);
     public Task<RecoveryResult<RecoveryCurrent>> ReadRecoveryAsync(CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ReadRecoveryAsync(linked), token);
+    public Task<RecoveryResult<QualityAssessment>> ClassifyQualityAsync(QualityPolicy policy, QualityReference reference,
+        QualityFrame frame, ulong nowMs, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ClassifyQualityAsync(policy, reference, frame, nowMs, linked), token);
+    public Task<RecoveryResult<QualityReference>> BuildQualityReferenceAsync(QualityPolicy policy, string id,
+        System.Collections.Immutable.ImmutableArray<QualityFrame> frames, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.BuildQualityReferenceAsync(policy, id, frames, linked), token);
+    public Task<RecoveryResult<RestartReviewed>> ReviewRestartAsync(RestartReview input, CancellationToken token = default) =>
+        RunRequestAsync((session, linked) => session.ReviewRestartAsync(input, linked), token);
     public Task<RecoveryResult<RecoveryApplied>> ApplyRecoveryAsync(RecoveryRequest request, CancellationToken token = default) =>
         RunRequestAsync((session, linked) => session.ApplyRecoveryAsync(request, linked), token);
     public Task<RecoveryResult<RecoveryPage>> ReadRecoveryEventsAsync(string nightId, ulong after, int limit = 16, CancellationToken token = default) =>

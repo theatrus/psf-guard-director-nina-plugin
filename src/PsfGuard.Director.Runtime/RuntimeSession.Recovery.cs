@@ -7,6 +7,83 @@ internal sealed partial class RuntimeSession
 {
     private RecoveryRecord? recoveryRecord;
 
+    internal Task<RecoveryResult<QualityReference>> BuildQualityReferenceAsync(QualityPolicy policy, string id,
+        System.Collections.Immutable.ImmutableArray<QualityFrame> frames, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        LedgerContract.CheckId(id);
+        if (frames.IsDefault || frames.Length > 16 || frames.Any(f => f.Context.RigId != rigId))
+            throw new ArgumentException("Initial quality group is invalid or belongs to another rig.");
+        return SendRecoveryAsync(new JsonObject
+        {
+            ["action"] = "build_quality_reference",
+            ["policy"] = JsonSerializer.SerializeToNode(policy, RecoveryContract.Options),
+            ["id"] = id,
+            ["frames"] = JsonSerializer.SerializeToNode(frames, RecoveryContract.Options)
+        }, response => RecoveryContract.Decode(response, "quality_reference_built", value =>
+        {
+            PipeProtocol.RequireFields(value, "status", "reference");
+            var result = RecoveryContract.Read<QualityReference>(value.GetProperty("reference"));
+            if (frames.Length < 5 || result.Id != id || result.Approved || result.Frame != frames[^1]
+                || result.InitialGroup is not { IsDefault: false } group || !group.SequenceEqual(frames))
+                throw new InvalidDataException("Initial reference changed its evidence or claimed approved quality.");
+            return result;
+        }), token);
+    }
+
+    internal Task<RecoveryResult<QualityAssessment>> ClassifyQualityAsync(QualityPolicy policy, QualityReference reference,
+        QualityFrame frame, ulong nowMs, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(frame);
+        if (frame.Context.RigId != rigId || reference.Frame.Context.RigId != rigId)
+            throw new ArgumentException("Quality evidence belongs to another rig.");
+        return SendRecoveryAsync(new JsonObject
+        {
+            ["action"] = "classify_quality",
+            ["policy"] = JsonSerializer.SerializeToNode(policy, RecoveryContract.Options),
+            ["reference"] = JsonSerializer.SerializeToNode(reference, RecoveryContract.Options),
+            ["frame"] = JsonSerializer.SerializeToNode(frame, RecoveryContract.Options),
+            ["now_ms"] = nowMs
+        }, response => RecoveryContract.Decode(response, "quality_classified", value =>
+        {
+            PipeProtocol.RequireFields(value, "status", "assessment");
+            var result = RecoveryContract.Read<QualityAssessment>(value.GetProperty("assessment"));
+            var ratios = new[] { result.StarRatio, result.BackgroundRatio, result.HfrRatio };
+            var expected = result.Reason switch
+            {
+                QualityReason.StarLossAndBackgroundRise => RecoveryVerdict.CorroboratedPoor,
+                QualityReason.ConsistentWithReference => RecoveryVerdict.ConfirmedGood,
+                _ => RecoveryVerdict.Unknown
+            };
+            if (ratios.Any(x => x.HasValue && (!double.IsFinite(x.Value) || x.Value < 0))
+                || ratios.Any(x => x.HasValue) && ratios.Any(x => !x.HasValue)
+                || result.Verdict != expected || result.ReferenceQualityUnknown != !reference.Approved
+                || result.Verdict != RecoveryVerdict.Unknown && ratios.Any(x => !x.HasValue))
+                throw new InvalidDataException("Quality assessment has inconsistent evidence.");
+            return result;
+        }), token);
+    }
+
+    internal Task<RecoveryResult<RestartReviewed>> ReviewRestartAsync(RestartReview input, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.RigId != rigId) throw new ArgumentException("Restart review belongs to another rig.");
+        return SendRecoveryAsync(new JsonObject
+        {
+            ["action"] = "review_restart",
+            ["input"] = JsonSerializer.SerializeToNode(input, RecoveryContract.Options)
+        }, response => RecoveryContract.Decode(response, "restart_reviewed", value =>
+        {
+            PipeProtocol.RequireFields(value, "status", "advice", "record");
+            var advice = RecoveryContract.Read<RestartAdvice>(value.GetProperty("advice"));
+            var record = RecoveryContract.Record(value.GetProperty("record"), rigId);
+            TrackRecovery(record);
+            return new RestartReviewed(advice, record);
+        }), token);
+    }
+
     internal Task<RecoveryResult<RecoveryOpened>> OpenRecoveryAsync(RecoveryIdentity identity, RecoveryPolicy policy, ulong nowMs, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(identity);
