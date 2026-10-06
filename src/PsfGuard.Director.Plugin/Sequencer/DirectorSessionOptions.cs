@@ -11,6 +11,7 @@ public enum DirectorEnclosurePolicy { Unconfigured, OpenAir, RequireOpenShutter 
 public enum DirectorAbortPolicy { ParkMount, StopMount }
 public enum DirectorWeatherPolicy { StopForNight, HoldAndResume }
 public enum DirectorCheckInMode { Live, Deferred }
+public enum DirectorQualityPolicy { Off, Monitor, ParkAndStop, HoldAndProbe }
 
 // Requested local policy, not an issued program or permission to operate equipment.
 [JsonObject(MemberSerialization.OptIn)]
@@ -29,6 +30,12 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private DirectorAbortPolicy onAbort = DirectorAbortPolicy.ParkMount;
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
     private bool retryFocusAndGuiding;
+    private DirectorQualityPolicy quality;
+    private int poorQualityFrames = 3, goodQualityProbes = 2, maximumOperationFailures = 3;
+    [JsonProperty] public DirectorQualityPolicy Quality { get => quality; set => Set(ref quality, value); }
+    [JsonProperty] public int PoorQualityFrames { get => poorQualityFrames; set => Set(ref poorQualityFrames, value); }
+    [JsonProperty] public int GoodQualityProbes { get => goodQualityProbes; set => Set(ref goodQualityProbes, value); }
+    [JsonProperty] public int MaximumOperationFailures { get => maximumOperationFailures; set => Set(ref maximumOperationFailures, value); }
     private DirectorWeatherPolicy weather;
     private int stableSafeSeconds = 300, maximumWeatherMinutes = 360, maximumWeatherInterruptions = 10;
     [JsonProperty] public DirectorWeatherPolicy Weather { get => weather; set => Set(ref weather, value); }
@@ -101,6 +108,12 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
         Range(RetryCooldownSeconds, 1, 3600, "Recovery cooldown (seconds)");
         Range(MaximumRecoveryMinutes, 1, 120, "Total recovery time (minutes)");
         Range(MaximumRecoveryAttempts, 1, 10, "Recovery attempts per session");
+        Range(PoorQualityFrames, 2, 20, "Poor quality frames before stopping");
+        Range(GoodQualityProbes, 1, 10, "Good probes before resuming");
+        Range(MaximumOperationFailures, 1, 100, "Equipment failures per night");
+        if (!Enum.IsDefined(Quality)) issues.Add("Unknown image quality policy.");
+        if (Quality == DirectorQualityPolicy.HoldAndProbe && GoodQualityProbes > MaximumRecoveryAttempts)
+            issues.Add("Good probes required cannot exceed the recovery attempt limit.");
         Range(StableSafeSeconds, 1, 3600, "Stable Safe/Open interval (seconds)");
         Range(MaximumWeatherMinutes, 1, 1440, "Total weather hold time (minutes)");
         Range(MaximumWeatherInterruptions, 1, 100, "Weather interruptions per night");

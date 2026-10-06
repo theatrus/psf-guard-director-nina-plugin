@@ -18,6 +18,7 @@ internal sealed class NinaGeometryDispatch
     private readonly object claimsLock = new();
     private readonly HashSet<(string PreparationId, uint Ordinal)> commands = [];
     private readonly HashSet<string> captures = [];
+    private readonly HashSet<string> probes = [];
 
     internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative, TimeProvider? clock = null)
     {
@@ -56,6 +57,24 @@ internal sealed class NinaGeometryDispatch
                 throw new InvalidOperationException("This reserved capture already has a native dispatch callback.");
         return Once(attempt.GoalId, (snapshot, token) => runtime.CheckGeometryCaptureDispatchAsync(preparationId, attempt,
             snapshot.Configuration, snapshot.Constraints, snapshot.State, token), validateContext);
+    }
+
+    internal Func<CancellationToken, Task<Action>> Probe(string goal, ExposureRecipe recipe, RecoveryApplied grant, Action validateContext)
+    {
+        CheckSession();
+        if (!grant.NewlyApplied || grant.Issued is not { Operation: "probe" } issued
+            || grant.Record.Snapshot.Phase is not RecoveryPhase.Recovering { Hold.Cause: RecoveryCause.Quality } phase
+            || phase.AttemptId != issued.AttemptId || phase.DeadlineMs != issued.DeadlineMs)
+            throw new InvalidOperationException("Only a newly issued quality probe can enter native dispatch.");
+        lock (claimsLock)
+            if (!probes.Add(issued.AttemptId)) throw new InvalidOperationException("Probe dispatch was already claimed.");
+        return Once(goal, (snapshot, token) => runtime.CheckQualityProbeAsync(goal, issued.AttemptId, recipe,
+            snapshot.Constraints, snapshot.State, token), () =>
+            {
+                if ((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds() >= issued.DeadlineMs)
+                    throw new TimeoutException("Quality probe expired.");
+                validateContext();
+            });
     }
 
     private Func<CancellationToken, Task<Action>> Once(string goal,

@@ -163,6 +163,54 @@ public sealed class NinaGeometryDispatchTests
         internal long Ticks;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => Ticks;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Start + Ticks / TimeSpan.TicksPerMillisecond);
+    }
+
+    [Theory]
+    [InlineData("ready")]
+    [InlineData("stop")]
+    [InlineData("unsafe")]
+    [InlineData("expired")]
+    [InlineData("recipe")]
+    public async Task ProbeRequiresFreshDurableRecoveryAndIsNeverAScienceReservation(string change)
+    {
+        await using var f = await Fixture.CreateAsync(recovery: true);
+        var reservation = await f.ReserveAsync();
+        Assert.Null((await f.Runtime.RecordAsync("capture", new LedgerEvidence.Saved("capture", 1))).Error);
+        var context = new RecoveryQualityContext("target", "filter-l", 1000, 1, 1, "reference", "nina-pixels", "analysis");
+        var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", Start, Start + 60000);
+        var poor = await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "poor", 1, Start,
+            new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.Quality(
+                new("rig-test", identity.ConfigurationId, "science", Start, context, RecoveryVerdict.CorroboratedPoor))));
+        f.State = f.State with { NowMs = Start + 1 };
+        var grant = (await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "probe", poor.Value!.Record.Revision, Start + 1,
+            new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.BeginRecovery("probe-attempt")))).Value!;
+        var clock = new DispatchClock();
+        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock);
+        var recipe = f.Program.Recipes[0];
+        if (change == "recipe") recipe = recipe with { ExposureMs = 2000 };
+        var check = guard.Probe("goal", recipe, grant, () => { });
+        Assert.Throws<InvalidOperationException>(() => guard.Probe("goal", recipe, grant, () => { }));
+        if (change == "stop") await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "stop", grant.Record.Revision, Start + 1,
+            new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.StopNight()));
+        if (change == "unsafe") f.State = f.State with { Safety = PlannerSafety.Unsafe };
+        if (change == "expired") clock.Ticks = TimeSpan.FromSeconds(11).Ticks;
+        if (change == "ready")
+        {
+            var final = await check(default);
+            final();
+            Assert.Throws<InvalidOperationException>(final);
+        }
+        else await Assert.ThrowsAnyAsync<Exception>(() => check(default));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+        if (change == "stop")
+        {
+            await f.Runtime.StopAsync();
+            await f.Runtime.StartAsync("rig-test");
+            Assert.Null((await f.Runtime.OpenGeometryAsync(f.Program, f.Constraints, f.State)).Error);
+        }
+        Assert.Null((await f.Runtime.FindAttemptAsync("probe-attempt")).Value!.Attempt);
+        Assert.IsType<LedgerEvidence.Saved>((await f.Runtime.FindAttemptAsync(reservation.Attempt!.CaptureId)).Value!.Attempt!.Evidence);
     }
 
     [Theory]
@@ -294,9 +342,10 @@ public sealed class NinaGeometryDispatchTests
         internal PlannerState State;
         internal PreparationNext.Run Next = null!;
 
-        private Fixture()
+        private Fixture(bool recovery)
         {
-            Runtime = new(ProcessTests.BundleDirectory, directory.FullName);
+            Runtime = recovery ? new(ProcessTests.BundleDirectory, directory.FullName,
+                Directory.CreateDirectory(Path.Combine(directory.FullName, "recovery")).FullName) : new(ProcessTests.BundleDirectory, directory.FullName);
             Equipment = new(Native.Profiles.Object, Native.CameraMediator.Object, Native.WheelMediator.Object);
             Native.CameraMediator.Setup(m => m.SetReadoutModeForNormalImages(1)).Callback(() => Native.Camera.ReadoutModeForNormalImages = 1);
             var configuration = Equipment.Read(Native.Binding);
@@ -315,12 +364,20 @@ public sealed class NinaGeometryDispatchTests
             State = baseline.State with { ConfigurationId = configuration.Id, NowMs = Start, ConditionsValidUntilMs = Start + 120000 };
         }
 
-        internal static async Task<Fixture> CreateAsync(CancellationToken token = default)
+        internal static async Task<Fixture> CreateAsync(CancellationToken token = default, bool recovery = false)
         {
-            var f = new Fixture();
+            var f = new Fixture(recovery);
             try
             {
                 await f.Runtime.StartAsync("rig-test", token);
+                if (recovery)
+                {
+                    var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", Start, Start + 60000);
+                    var policy = new RecoveryPolicy(1, RecoveryQualityMode.Pause, 1, 1, 1, 20000, 2, 10000, 30000, Start + 60000, 3, 3, true);
+                    Assert.Null((await f.Runtime.OpenRecoveryAsync(identity, policy, Start)).Error);
+                    Assert.Null((await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "tick", 0, Start,
+                        new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.Tick()))).Error);
+                }
                 Assert.Null((await f.Runtime.OpenGeometryAsync(f.Program, f.Constraints, f.State)).Error);
                 var local = new ProgramLocalState(f.Program.Configuration, new(f.Program.Configuration.Id, f.Program.Targets[0]), false, false, 0);
                 Assert.True((await f.Runtime.BeginGeometryPreparationAsync("prep", "goal", local, new(0, 0, 0, 0, 0, 2000, 1000), f.Constraints, f.State)).Value!.Created);

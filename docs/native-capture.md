@@ -1349,9 +1349,9 @@ evidence, and missing or contradictory reference-quality warnings.
 
 The shared core builds a provisional reference from 5-16 stable, compatible
 initial frames, retaining the original group and using median metrics. The
-future native collector must persist the first successful reference per exact
+native collector persists the first successful reference per exact
 target/recipe/configuration/analysis context and never adapt it to later poor
-frames. Display **Reference quality unknown** for this baseline even when a
+frames. The Status tab displays **Reference quality unknown** for this baseline even when a
 later frame is consistent with it: a stable initial group can still be cloudy.
 Missing measurements or an unstable group cannot establish a reference.
 
@@ -1362,9 +1362,41 @@ own constituent captures as recovery probes.
 
 Restart review preserves the original night, deadlines, budgets and stop
 latches. Its most permissive advice is to request fresh authority, not to
-resume or replay a consumed allocation. Native collection/persistence,
-separately journaled one-shot probe capture, and explicit restart admission are
-not enabled by these contracts and still require simulator acceptance tests.
+resume or replay a consumed allocation. Explicit process-restart admission is
+not enabled by this advice alone.
+
+### Native quality controls
+
+**Image quality** defaults to **Off**. Monitor only collects evidence without
+pausing. Stop for the night uses the existing abort park/stop policy after the
+configured number of corroborated poor frames. Hold and probe is experimental
+and must be selected explicitly. It shares bounded cooldown, attempt and total
+recovery-time limits; it also requires the configured number of good probes
+before resuming. A failure or uncertain probe stops the session.
+
+The collector uses NINA's star count, pixel HFR, eccentricity and physical-ADU
+background median. Missing metrics remain unknown. The first stable five-frame
+cohort within the first sixteen frames is written atomically, scoped to the
+observing night and exact target, pixel recipe, configuration, detector/settings
+and image dimensions. Later poor frames never replace it. A stable cloudy start
+can still establish an unreliable reference: the warning is permanent, and this
+feature is not a replacement for a safety monitor.
+
+IPC 14 checks probes against the actual durable recovery record, original
+allocation geometry, horizon, Moon and meridian limits, and a fresh deadline.
+The host cannot submit its own recovery snapshot. Each probe uses a one-shot
+NINA exposure instruction and inherited native triggers, with a separate
+`ProbeMeasured` journal outcome. It does not enqueue an image save, emit a
+science-save event, execute the science after-exposure slot, reserve a science
+attempt or change goal progress. Probe mode keeps the prepared target tracking
+during its bounded hold; Stop for the night is the choice for parking instead.
+
+Equipment failures are independent of this checkbox. Slew failures and uncertain
+operations stop. Known-completed focus/guide retries remain off by default; when
+enabled, both retry and failure budgets cap them. Abort defaults to parking when
+enclosure motion clearance permits it. Such failures can suggest clouds but do
+not prove them, so they do not fabricate an image-quality verdict or restart a
+stopped session.
 
 ### Capture evidence
 

@@ -24,6 +24,30 @@ namespace PsfGuard.Director.Tests;
 
 public sealed partial class NinaCaptureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QualityEvidenceUsesNativePixelsAndProbeNeverEnqueuesScience(bool probe)
+    {
+        using var f = new Fixture();
+        var task = f.RunQuality(probe);
+        if (!probe) { await f.Enqueued.Task; f.Saved(); }
+        var evidence = await task;
+        Assert.NotNull(evidence.Quality);
+        Assert.Equal(100u, evidence.Quality.Metrics.Stars);
+        Assert.Equal(1000, evidence.Quality.Metrics.BackgroundAdu);
+        Assert.Equal(2, evidence.Quality.Metrics.HfrPixels);
+        Assert.Equal(probe ? CapturePhase.ProbeMeasured : CapturePhase.Saved, evidence.Phase);
+        Assert.Equal(probe, evidence.Intent.QualityProbe);
+        Assert.Equal(evidence, f.Read());
+        if (probe)
+        {
+            Assert.Null(evidence.SavedPath);
+            Assert.False(f.Enqueued.Task.IsCompleted);
+            f.Saves.Verify(x => x.Enqueue(It.IsAny<IImageData>(), It.IsAny<Task<IRenderedImage>>(),
+                It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
     [Fact]
     public async Task WaitsForCorrelatedFinalSaveAndRecordsNativeMetadataAndTiming()
     {
@@ -746,6 +770,22 @@ public sealed partial class NinaCaptureTests
 
         public Task<CaptureEvidence> Run(Func<CancellationToken, Task>? authorize = null, CancellationToken token = default) =>
             adapter.CaptureAsync(Intent, NativeDispatchTest.After(authorize), Progress, token);
+        public Task<CaptureEvidence> RunQuality(bool probe)
+        {
+            Profile.SetupGet(x => x.ImageSettings).Returns(Mock.Of<IImageSettings>());
+            Image.SetupGet(x => x.Properties).Returns(new ImageProperties(1000, 1000, 16, false, 10, 20));
+            var stats = Mock.Of<IImageStatistics>(x => x.BitDepth == 16 && x.Median == 1000);
+            Image.SetupGet(x => x.Statistics).Returns(new AsyncLazy<IImageStatistics>(() => Task.FromResult(stats)));
+            Image.SetupGet(x => x.StarDetectionAnalysis).Returns(Mock.Of<IStarDetectionAnalysis>(x => x.HFR == 2 && x.DetectedStars == 100
+                && x.Eccentricity == 0.4 && x.HFRUnit == StarMeasurementUnit.Pixels));
+            adapter.CollectQuality = true;
+            return adapter.CaptureAsync(Intent with
+            {
+                QualityProbe = probe,
+                Program = new(Guid.NewGuid().ToString("D"), "target", "recipe", "L", 0)
+            },
+                NativeDispatchTest.After(null), Progress, CancellationToken.None);
+        }
         public Task<CaptureEvidence?> Reconcile(string? id = null) => adapter.ReconcileInterruptedAsync(id ?? Intent.CaptureId.ToString("D"), CancellationToken.None);
         public void Acknowledge() => adapter.AcknowledgeInterrupted(Intent.CaptureId.ToString("D"));
         public void DisposeAdapter() => adapter.Dispose();

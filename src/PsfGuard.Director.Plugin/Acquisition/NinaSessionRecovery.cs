@@ -28,10 +28,18 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
                 await ApplyAsync(new RecoveryEvent.StopNight(), token, new(PlannerSafety.Unknown, RecoveryMotion.Unknown));
         }
         var identity = new RecoveryIdentity(rig, configuration, night, start, end);
-        var policy = new RecoveryPolicy(1, RecoveryQualityMode.Disabled, 3, 1,
+        var qualityMode = options.Quality switch
+        {
+            DirectorQualityPolicy.Off => RecoveryQualityMode.Disabled,
+            DirectorQualityPolicy.Monitor => RecoveryQualityMode.MonitorOnly,
+            DirectorQualityPolicy.ParkAndStop => RecoveryQualityMode.ParkAndStop,
+            DirectorQualityPolicy.HoldAndProbe => RecoveryQualityMode.Pause,
+            _ => throw new InvalidOperationException("Invalid quality policy.")
+        };
+        var policy = new RecoveryPolicy(1, qualityMode, (uint)options.PoorQualityFrames, qualityMode == RecoveryQualityMode.Pause ? (uint)options.GoodQualityProbes : 1,
             checked((ulong)options.RetryCooldownSeconds * 1000), checked((ulong)options.MaximumRecoveryMinutes * 60000),
             checked((uint)options.MaximumRecoveryAttempts), checked((ulong)options.HookTimeoutSeconds * 1000),
-            5000, end, 100, 10000, options.OnAbort == DirectorAbortPolicy.ParkMount,
+            30000, end, (uint)options.MaximumOperationFailures, (uint)options.MaximumOperationFailures, options.OnAbort == DirectorAbortPolicy.ParkMount,
             options.Weather == DirectorWeatherPolicy.HoldAndResume
                 ? new(checked((ulong)options.StableSafeSeconds * 1000), checked((ulong)options.MaximumWeatherMinutes * 60000), checked((uint)options.MaximumWeatherInterruptions)) : null);
         record = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token)).Record;
@@ -56,6 +64,10 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
 
     internal Task InterruptWeatherAsync(bool enclosure, CancellationToken token) => ApplyAsync(new RecoveryEvent.WeatherInterrupted(enclosure), token);
     internal Task ObserveWeatherAsync(CancellationToken token) => ApplyAsync(new RecoveryEvent.Tick(), token);
+    internal Task ObserveQualityAsync(RecoveryQualitySample sample, CancellationToken token) => ApplyAsync(new RecoveryEvent.Quality(sample), token);
+    internal Task<RecoveryApplied> BeginProbeAsync(string attempt, CancellationToken token) => ApplyAsync(new RecoveryEvent.BeginRecovery(attempt), token);
+    internal Task CompleteProbeAsync(string attempt, RecoveryQualitySample sample, CancellationToken token) =>
+        ApplyAsync(new RecoveryEvent.RecoveryCompleted(attempt, new RecoveryOutcome.Quality(sample)), token);
     internal async Task ResumeWeatherAsync(CancellationToken token, bool idle = false)
     {
         // Idle resumes have no admitted allocation. The runtime independently

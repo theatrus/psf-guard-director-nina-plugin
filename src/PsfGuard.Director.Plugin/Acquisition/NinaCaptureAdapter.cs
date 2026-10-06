@@ -29,6 +29,8 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     private Action? detachSave;
     private long interruptedStarted, interruptedDownloaded;
     private volatile bool disposed;
+    internal bool CollectQuality { get; set; }
+    internal PsfGuard.Director.Runtime.QualityFrame? LastQuality { get; private set; }
 
     // Only the live owner can prove that its invocation ended before enqueue.
     // A journal recovered after a crash deliberately has no such authority.
@@ -103,6 +105,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         var downloaded = started;
         try
         {
+            LastQuality = null;
             if (interrupted is not null && interrupted.Evidence.Intent.CaptureId != intent.CaptureId)
                 throw new InvalidOperationException("Interrupted capture must be acknowledged before another exposure.");
             CheckLocalContext(intent);
@@ -159,13 +162,31 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             metadata.Target.Name = intent.TargetName;
             metadata.Target.Coordinates = new Coordinates(intent.RaDegrees, intent.DecDegrees, Epoch.J2000, Coordinates.RAType.Degrees);
             metadata.Target.PositionAngle = intent.PositionAngle ?? double.NaN;
-            history.Add(metadata.Image.Id, CaptureSequence.ImageTypes.LIGHT);
+            if (!intent.QualityProbe) history.Add(metadata.Image.Id, CaptureSequence.ImageTypes.LIGHT);
             Report("Preparing image");
+            var qualitySettings = CollectQuality ? NinaQualityEvidence.SettingsFingerprint(profiles) : null;
             var prepared = await imaging.PrepareImage(image, new PrepareImageParameters(true, true), token).ConfigureAwait(false);
             if (prepared is null) throw new IOException("NINA image preparation returned no result.");
-            history.PopulateStatistics(metadata.Image.Id, await image.Statistics.Task.WaitAsync(token).ConfigureAwait(false));
+            var statistics = await image.Statistics.Task.WaitAsync(token).ConfigureAwait(false);
+            if (!intent.QualityProbe) history.PopulateStatistics(metadata.Image.Id, statistics);
+            var quality = qualitySettings is not null && qualitySettings == NinaQualityEvidence.SettingsFingerprint(profiles)
+                ? NinaQualityEvidence.Read(intent, image, statistics, qualitySettings, checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds())) : null;
             CheckLocalContext(intent);
             token.ThrowIfCancellationRequested();
+
+            if (intent.QualityProbe)
+            {
+                if (quality is null) throw new InvalidOperationException("Probe quality measurements are unavailable.");
+                journal.Record(journal.Evidence with
+                {
+                    Phase = CapturePhase.ProbeMeasured,
+                    UpdatedAt = clock.GetUtcNow(),
+                    Quality = quality,
+                    TotalMs = clock.GetElapsedTime(started).TotalMilliseconds
+                });
+                LastQuality = quality;
+                return journal.Evidence;
+            }
 
             var receipt = new TaskCompletionSource<SaveReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
             ObserveFault(receipt.Task);
@@ -232,12 +253,14 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 journal.Record(journal.Evidence with
                 {
                     Phase = CapturePhase.Saved,
+                    Quality = quality,
                     UpdatedAt = saved.ObservedAt,
                     SavedPath = saved.Path,
                     ProcessingAndSaveMs = clock.GetElapsedTime(downloaded, saved.Timestamp).TotalMilliseconds,
                     TotalMs = clock.GetElapsedTime(started, saved.Timestamp).TotalMilliseconds
                 });
                 completed = journal.Evidence;
+                LastQuality = quality;
                 return completed;
             }
             finally

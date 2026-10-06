@@ -1,5 +1,10 @@
 # Unreleased
 
+- Image-quality screening is off by default. Optional monitoring, stop-and-park,
+  or bounded cloud probes use a frozen initial reference and keep its unknown-
+  quality warning visible. Probes are not saved as science images or credited
+  toward goals. Slew failures still stop; focus/guide retries remain opt-in and
+  have a configurable failure limit.
 - Optionally retry known-completed autofocus and guide-start failures during
   Director-owned target setup. Configure cooldown, a shared session retry budget
   and total recovery time; exhaustion uses the existing park/stop choice. Unsafe

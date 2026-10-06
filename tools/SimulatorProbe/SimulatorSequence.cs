@@ -124,6 +124,8 @@ public sealed class SimulatorSequence : SequenceItem
         var unsafeCancellationVerified = false;
         var constraintChangeVerified = false;
         NativeImagingProbe? nativeProbe = null;
+        QualityImagingProbe? qualityProbe = null;
+        var acquisitionImaging = imaging;
         var phd2 = Phd2Fixture.Read(root);
         float? rotatorFinalPosition = null;
         var nativeFailureVerified = false;
@@ -173,6 +175,7 @@ public sealed class SimulatorSequence : SequenceItem
             await SessionUiProbe.RenderAsync(run);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
+            if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);
             var rigId = coordinator?.RigId ?? "ascom-smoke";
             await runtime.StartAsync(rigId, lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
@@ -312,7 +315,7 @@ public sealed class SimulatorSequence : SequenceItem
                 {
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome,
+                    publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
                         nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
@@ -338,7 +341,7 @@ public sealed class SimulatorSequence : SequenceItem
                 Step("Running the public Director Session acquisition path");
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
-                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, imaging, saves, history, nighttime, dome,
+                var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
                     nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
@@ -372,6 +375,13 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Options.RetryCooldownSeconds = 1;
                     sessionContainer.Options.MaximumRecoveryAttempts = 1;
                 }
+                if (coordinator.QualityScenario is not null)
+                {
+                    sessionContainer.Options.Quality = coordinator.QualityScenario == "stop" ? DirectorQualityPolicy.ParkAndStop : DirectorQualityPolicy.HoldAndProbe;
+                    sessionContainer.Options.PoorQualityFrames = 2;
+                    sessionContainer.Options.GoodQualityProbes = 2;
+                    sessionContainer.Options.RetryCooldownSeconds = 1;
+                }
                 ConfigureImaging(sessionContainer.Options);
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
@@ -403,6 +413,30 @@ public sealed class SimulatorSequence : SequenceItem
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (coordinator.QualityScenario is not null)
+                    {
+                        Exception? failure = null;
+                        try { await executing.WaitAsync(TimeSpan.FromMinutes(4)); }
+                        catch (Exception error) when (error is not TimeoutException) { failure = error; }
+                        var stopped = coordinator.QualityScenario == "stop";
+                        var expectedScience = stopped ? 7 : 36;
+                        var journals = Directory.GetFiles(service.LastRunDirectory!, "*.json", SearchOption.AllDirectories)
+                            .Where(p => Path.GetDirectoryName(p)!.Contains(Path.DirectorySeparatorChar + "journal" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                            .Select(CaptureJournal.Read).ToArray();
+                        if ((failure is not null) != stopped || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || AcquisitionLease.IsActive
+                            || journals.Count(j => j.Phase == CapturePhase.Saved) != expectedScience
+                            || journals.Count(j => j.Phase == CapturePhase.ProbeMeasured && j.Intent.QualityProbe) != (stopped ? 0 : 2)
+                            || sessionHookEvents.Count(x => x == "AfterEachExposure") != expectedScience
+                            || qualityProbe!.Measurements != expectedScience + (stopped ? 0 : 2)
+                            || !sessionContainer.Display.Quality.Contains("Reference quality unknown", StringComparison.Ordinal))
+                            throw new InvalidDataException("Cloud policy did not preserve science accounting, bounded probes, warning and parking.", failure);
+                        await File.WriteAllTextAsync(Path.Combine(run, "quality-verified.txt"), $"{expectedScience} science saves; {qualityProbe.Measurements - expectedScience} separate probes; unknown-quality warning retained", lifetime.Token);
+                        await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
+                        Step(stopped ? "Cloud screening stopped after two poor frames and parked without probing" : "Cloud hold used two unsaved probes, resumed science and parked; reference remains unverified");
+                        await coordinator.ReportStatusAsync(programTarget, stopped ? "quality_stopped" : "quality_recovered", lifetime.Token);
+                        ledger = service.LastLedger;
+                        return;
+                    }
                     if (startupHold)
                     {
                         using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
