@@ -1,6 +1,8 @@
 # Director development
 
-Use .NET SDK 10 on Windows x64 and the authenticated `gh` CLI.
+Use .NET SDK 10 on Windows x64, the .NET 8 desktop runtime for tests, and the
+authenticated `gh` CLI. The plugin targets .NET 8 and NINA's 3.2.0.9001 API;
+the same package runs in NINA 3.2 and 3.3.
 NINA types belong in the plugin project; scheduling belongs in the shared Rust
 core in PSF Guard. Read [the contributor guide](../AGENTS.md) before changing code.
 
@@ -23,9 +25,10 @@ not build Rust locally or silently select a newer artifact. The host verifies
 the pin before starting the sidecar. Expired CI artifacts need a reviewed pin
 update; installed packages contain the runtime and do not fetch it at startup.
 
-The bundle contains the two Director assemblies, sidecar, runtime lock, license
-and third-party notices. It does not contain NINA, Target Scheduler, Sync or the
-test-only simulator plugin. Building does not install or publish anything.
+The bundle contains the two Director assemblies, sidecar, runtime lock, licenses
+and third-party notices. Three pinned .NET 8-compatible JSON assemblies preserve
+strict wire validation on both hosts. It does not contain NINA, Target Scheduler,
+Sync or the test-only simulator plugin. Building does not install or publish anything.
 
 Managed tests exercise the pinned runtime and malformed pipe peers. Native
 validation also needs the actual NINA plugin, simulated equipment and an
@@ -45,7 +48,7 @@ changing that policy is separate from editing the README.
 
 Copy the generated manifest into the
 [theatr.us registry](https://github.com/theatrus/nina-plugins-registry) at
-`manifests/p/PSF Guard Director/3.3.0.1058/manifest.json`. The registry has one feed;
+`manifests/p/PSF Guard Director/3.2.0.9001/manifest.json`. The registry has one feed;
 manifests omit `Channel`. Verify both the published archive checksum and live
 registry response before calling a release complete.
 

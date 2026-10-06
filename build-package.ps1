@@ -9,12 +9,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Restore failed.' }
     & dotnet build --configuration Release --no-restore
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-    $output = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Plugin/bin/Release/net10.0-windows7.0'
+    $output = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Plugin/bin/Release/net8.0-windows7.0'
+    $runtimeOutput = Join-Path $PSScriptRoot 'src/PsfGuard.Director.Runtime/bin/Release/net8.0-windows7.0'
     $stage = Join-Path $ArtifactDirectory "package-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path (Join-Path $stage 'runtime') -Force | Out-Null
     foreach ($name in @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll')) {
         Copy-Item -LiteralPath (Join-Path $output $name) -Destination $stage
     }
+    foreach ($name in @('System.Text.Json.dll', 'System.Text.Encodings.Web.dll', 'System.IO.Pipelines.dll', 'DOTNET-THIRD-PARTY-NOTICES.txt')) {
+        Copy-Item -LiteralPath (Join-Path $runtimeOutput $name) -Destination $stage
+    }
+    Copy-Item -LiteralPath "$PSScriptRoot/packaging/DOTNET-LICENSE.txt" -Destination $stage
     foreach ($name in @('psf-guard-director-runtime.exe', 'SOFARS-LICENSE.txt', 'THIRD_PARTY_NOTICES.md')) {
         Copy-Item -LiteralPath (Join-Path "$PSScriptRoot/runtime" $name) -Destination (Join-Path $stage 'runtime')
     }
@@ -25,7 +30,9 @@ try {
     try {
         $actual = @($zip.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName.Replace('\', '/') } | Sort-Object)
         $expected = @('PSF Guard Director.dll', 'PsfGuard.Director.Runtime.dll', 'runtime/psf-guard-director-runtime.exe',
-            'runtime/SOFARS-LICENSE.txt', 'runtime/THIRD_PARTY_NOTICES.md', 'runtime.lock.json', 'LICENSE') | Sort-Object
+            'runtime/SOFARS-LICENSE.txt', 'runtime/THIRD_PARTY_NOTICES.md', 'runtime.lock.json', 'LICENSE',
+            'System.Text.Json.dll', 'System.Text.Encodings.Web.dll', 'System.IO.Pipelines.dll',
+            'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt') | Sort-Object
         if (Compare-Object $actual $expected) { throw 'Unexpected files in plugin package.' }
     } finally { $zip.Dispose() }
     Write-Host "Development package: $archive"

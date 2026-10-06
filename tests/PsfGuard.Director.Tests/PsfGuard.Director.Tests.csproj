@@ -3,6 +3,7 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <UseWPF>true</UseWPF>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
@@ -13,7 +14,7 @@
     <ProjectReference Include="../../tools/SyntheticSolver/SyntheticSolver.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Runtime/PsfGuard.Director.Runtime.csproj" />
     <ProjectReference Include="../../src/PsfGuard.Director.Plugin/PsfGuard.Director.Plugin.csproj" />
-    <PackageReference Include="NINA.Plugin" Version="3.3.0.1058-nightly" PrivateAssets="all" />
+    <PackageReference Include="NINA.Plugin" Version="3.2.0.9001" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="xunit" Version="2.9.2" />
@@ -21,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="../../artifacts/nina-test/x64/SOFA/SOFA_2023_10_11.dll" Link="External/x64/SOFA/SOFA_2023_10_11.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../artifacts/nina-test/x64/SOFA/SOFAlib.dll" Link="External/x64/SOFA/SOFAlib.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../artifacts/nina-test/x64/NOVAS/NOVAS31lib.dll" Link="External/x64/NOVAS/NOVAS31lib.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../artifacts/nina-test/JPLEPH" Link="External/JPLEPH" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tools/SimulatorProbe/ascom.profile.xml" Link="ascom.profile.xml" CopyToOutputDirectory="PreserveNewest" />

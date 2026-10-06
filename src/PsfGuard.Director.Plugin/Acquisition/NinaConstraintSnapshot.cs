@@ -56,7 +56,7 @@ internal sealed class NinaConstraintSnapshot : IDisposable
             if (file.Length > 1024 * 1024) throw new InvalidDataException("Horizon file exceeds one MiB.");
             var bytes = new byte[checked((int)file.Length)];
             await file.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
-            if (Convert.ToHexStringLower(SHA256.HashData(bytes)) != expected.Horizon.ContentSha256)
+            if (HashEncoding.Lower(SHA256.HashData(bytes)) != expected.Horizon.ContentSha256)
                 throw new InvalidOperationException("The horizon file changed during acquisition.");
         }
         Check();
@@ -154,7 +154,7 @@ internal sealed class NinaConstraintSnapshot : IDisposable
             var value = new NinaConstraints(binding.ProfileId, site, horizon, binding.MinimumAltitudeDegrees,
                 binding.MeridianExclusion, flip, "pending");
             var digest = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { SchemaVersion = 1, Value = value }));
-            return value with { Revision = "constraints-" + Convert.ToHexStringLower(digest) };
+            return value with { Revision = "constraints-" + HashEncoding.Lower(digest) };
 
             void CheckProfile()
             {
@@ -217,7 +217,7 @@ internal sealed class NinaConstraintSnapshot : IDisposable
         }
         else if (!map.ContainsKey(0)) map[0] = map[360];
         else if (!map.ContainsKey(360)) map[360] = map[0];
-        return new(mw4 ? "nina-mw4-v1" : "nina-standard-v1", Convert.ToHexStringLower(SHA256.HashData(bytes)),
+        return new(mw4 ? "nina-mw4-v1" : "nina-standard-v1", HashEncoding.Lower(SHA256.HashData(bytes)),
             map.Select(p => new HorizonPoint(p.Key, p.Value)).ToImmutableArray());
     }
 

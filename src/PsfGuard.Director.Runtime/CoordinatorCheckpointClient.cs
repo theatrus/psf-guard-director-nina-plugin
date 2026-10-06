@@ -190,7 +190,7 @@ public sealed partial class CoordinatorCheckpointClient : IDisposable
     }
 
     private static bool ValidRevision(string value) => value.Length == 64 && value.All(char.IsAsciiHexDigitLower);
-    private string CursorChecksum(ulong through, string? programRevision) => Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+    private string CursorChecksum(ulong through, string? programRevision) => HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
         feed == CoordinatorEventFeed.Capture
             ? (object)new { origin = transport.Endpoint.AbsoluteUri, binding, ledger, through, programRevision }
             : new { origin = transport.Endpoint.AbsoluteUri, binding, ledger, through, programRevision, feed = "preparation" }, CoordinatorProgramContract.Options)));

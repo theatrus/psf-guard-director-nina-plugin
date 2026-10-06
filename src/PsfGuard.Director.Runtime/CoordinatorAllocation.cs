@@ -43,7 +43,7 @@ public sealed class CoordinatorAllocation
                 throw new InvalidDataException();
             var snapshot = CoordinatorProgramContract.Read(Wrap(envelope.Snapshot), $"\"{envelope.Snapshot.Revision}\"",
                 origin, binding, configuration, now, null);
-            var fingerprint = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(envelope, CoordinatorProgramContract.Options)));
+            var fingerprint = HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(envelope, CoordinatorProgramContract.Options)));
             return new(envelope, snapshot, fingerprint);
         }
         catch (Exception error) when (error is JsonException or InvalidDataException or InvalidOperationException

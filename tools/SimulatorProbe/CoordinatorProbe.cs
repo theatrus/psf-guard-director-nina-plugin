@@ -1,6 +1,6 @@
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Json;
+using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -148,8 +148,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         CoordinatorPairing? pairing = null;
         try
         {
-            using var issued = await http.PostAsJsonAsync($"api/director/v1/rigs/{fixture.RigId:D}/pairing-token",
-                new { coordinator_instance_id = fixture.CoordinatorInstanceId, catalog_id = fixture.CatalogId }, token);
+            using var issued = await http.PostAsync($"api/director/v1/rigs/{fixture.RigId:D}/pairing-token",
+                JsonBody(new { coordinator_instance_id = fixture.CoordinatorInstanceId, catalog_id = fixture.CatalogId }), token);
             issued.EnsureSuccessStatusCode();
             using var body = JsonDocument.Parse(await issued.Content.ReadAsByteArrayAsync(token));
             var code = body.RootElement.GetProperty("data").GetProperty("pairing_token").GetString()!;
@@ -359,8 +359,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 var site = Guid.NewGuid();
                 await OperatorAsync(HttpMethod.Post, "sites", new { id = site, name = "Priority simulator site" }, token);
                 await SetOrderAsync("site", site, rankedProjects, null, token);
-                await SetProjectOrderAsync(rankedProjects.Reverse().ToArray(), token);
-                await SetOrderAsync("rig", binding.RigId, rankedProjects.Reverse().ToArray(), site, token);
+                await SetProjectOrderAsync(rankedProjects.AsEnumerable().Reverse().ToArray(), token);
+                await SetOrderAsync("rig", binding.RigId, rankedProjects.AsEnumerable().Reverse().ToArray(), site, token);
                 var overridden = await client.ReadPreviewAsync(binding, configuration, token: token);
                 var highGoal = overridden.Envelope.Program.Assignment.Goals.MaxBy(g => g.Priority)!;
                 var highTarget = overridden.Envelope.Program.Bindings.Single(b => b.GoalId == highGoal.Id).TargetId;
@@ -478,7 +478,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         }, token);
     }
 
-    internal Task ReverseProjectOrderAsync(CancellationToken token) => SetProjectOrderAsync(rankedProjects.Reverse().ToArray(), token);
+    internal Task ReverseProjectOrderAsync(CancellationToken token) => SetProjectOrderAsync(rankedProjects.AsEnumerable().Reverse().ToArray(), token);
 
     internal async Task VerifyPriorityRefreshAsync(string root, DirectorConfiguration configuration,
         IReadOnlyList<PsfGuard.Director.Plugin.Acquisition.CaptureEvidence> captures, CancellationToken token)
@@ -510,7 +510,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
             request.Headers.Authorization = new("Bearer", pairing.Token);
             request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
-            request.Content = JsonContent.Create(new
+            request.Content = JsonBody(new
             {
                 coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,
                 catalog_id = pairing.Binding.CatalogId,
@@ -545,7 +545,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
         request.Headers.Authorization = new("Bearer", pairing.Token);
         request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
-        request.Content = JsonContent.Create(new
+        request.Content = JsonBody(new
         {
             coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,
             catalog_id = pairing.Binding.CatalogId,
@@ -620,7 +620,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         if (!ActivateSimulatorPlan) return;
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/status")
         {
-            Content = JsonContent.Create(new
+            Content = JsonBody(new
             {
                 pairing.Binding.CoordinatorInstanceId,
                 pairing.Binding.CatalogId,
@@ -669,13 +669,16 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
 
     private async Task<JsonElement> OperatorAsync(HttpMethod method, string path, object? value, CancellationToken token)
     {
-        using var request = new HttpRequestMessage(method, $"api/director/v1/{path}") { Content = value is null ? null : JsonContent.Create(value, options: Wire) };
+        using var request = new HttpRequestMessage(method, $"api/director/v1/{path}") { Content = value is null ? null : JsonBody(value, options: Wire) };
         using var response = await operatorClient.SendAsync(request, token);
         response.EnsureSuccessStatusCode();
         using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
         if (!body.RootElement.GetProperty("success").GetBoolean()) throw new InvalidDataException("Simulator operator setup failed.");
         return body.RootElement.GetProperty("data").Clone();
     }
+
+    private static StringContent JsonBody<T>(T value, JsonSerializerOptions? options = null) =>
+        new(JsonSerializer.Serialize(value, options), Encoding.UTF8, "application/json");
 
     internal async Task<CoordinatorCheckpointResult> DeliverAsync(string root, RuntimeController runtime, LedgerIdentity ledger, CancellationToken token)
     {

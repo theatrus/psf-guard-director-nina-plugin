@@ -66,6 +66,6 @@ public sealed class CoordinatorNightCheckpoint
         return state;
     }
     private void Write(bool idle, string? runId) => file.Write(new State(1, identity, scope, idle, runId, Checksum(idle, runId)));
-    private string Checksum(bool idle, string? runId) => Convert.ToHexStringLower(SHA256.HashData(
+    private string Checksum(bool idle, string? runId) => HashEncoding.Lower(SHA256.HashData(
         JsonSerializer.SerializeToUtf8Bytes(new { identity, scope, idle, runId }, CoordinatorProgramContract.Options)));
 }

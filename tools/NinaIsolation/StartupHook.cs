@@ -11,6 +11,9 @@ internal static class StartupHook
         var root = ValidateRoot(Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
             Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_TOKEN"));
 
+        AppContext.SetSwitch("Switch.System.Windows.Media.ShouldRenderEvenWhenNoDisplayDevicesAreAvailable", true);
+        AppContext.SetSwitch("Switch.System.Windows.Media.ShouldNotRenderInNonInteractiveWindowStation", false);
+
         var core = Assembly.Load("NINA.Core");
         var field = core.GetType("NINA.Core.Utility.CoreUtil", throwOnError: true)!
             .GetField("APPLICATIONTEMPPATH", BindingFlags.Public | BindingFlags.Static)

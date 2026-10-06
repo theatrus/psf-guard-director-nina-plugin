@@ -21,15 +21,16 @@ public sealed class NinaTargetContainerTests
         using var f = new Fixture(new("target", "Target", ra, dec, angle));
         var inner = new SequentialContainer();
         f.Container.Add(inner);
-        Assert.Same(f.Container, ItemUtility.FindDeepSkyObjectContainer(inner));
+        Assert.Same(f.Container, inner.Parent);
         var context = ItemUtility.RetrieveContextCoordinates(inner);
         Assert.Equal(ra / 3600000.0, context.Coordinates.RADegrees);
         Assert.Equal(dec / 3600000.0, context.Coordinates.Dec);
         Assert.Equal(Epoch.J2000, context.Coordinates.Epoch);
         Assert.True((angle is null ? double.NaN : angle.Value / 3600000.0).Equals(context.PositionAngle));
-        var runnerContext = ItemUtility.CreateTriggerRunnerContext(inner);
-        Assert.Same(f.Container.Target, ((IDeepSkyObjectContainer)runnerContext).Target);
-        Assert.Same(f.Nighttime, ((IDeepSkyObjectContainer)runnerContext).NighttimeData);
+        var runner = new SequentialContainer();
+        runner.AttachNewParent(inner);
+        Assert.Equal(context.Coordinates.RADegrees, ItemUtility.RetrieveContextCoordinates(runner).Coordinates.RADegrees);
+        Assert.Equal(context.Coordinates.Dec, ItemUtility.RetrieveContextCoordinates(runner).Coordinates.Dec);
         f.Container.ValidateContext();
     }
 

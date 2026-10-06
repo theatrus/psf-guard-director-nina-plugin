@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.12" GeneratePathProperty="true" />
+    <None Include="$(PkgSystem_Text_Json)/THIRD-PARTY-NOTICES.TXT" Link="DOTNET-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="PsfGuard.Director.Tests" />
     <InternalsVisibleTo Include="PSF Guard Director" />
     <EmbeddedResource Include="../../runtime.lock.json" LogicalName="Director.RuntimeLock" />

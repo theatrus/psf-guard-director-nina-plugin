@@ -28,5 +28,5 @@ public sealed class ProbeActionFactory : INinaActionFactory
         factory = new(profiles, camera, telescope, wheel, guider, focuser, rotator, dome, follower, imaging, history,
             safety, plates, windows, autofocus, meridian, status);
     public T GetItem<T>() where T : ISequenceItem => factory.GetItem<T>();
-    public T GetTrigger<T>() where T : ISequenceTrigger => factory.GetTrigger<T>();
+    public ISequenceTrigger GetTrigger<T>() where T : ISequenceTrigger => factory.GetTrigger<T>();
 }

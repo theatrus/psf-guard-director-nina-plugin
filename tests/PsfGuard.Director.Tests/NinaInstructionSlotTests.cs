@@ -111,7 +111,9 @@ public sealed class NinaInstructionSlotTests
             {
                 Action = (item, _) =>
                 {
-                    Assert.Same(target, ItemUtility.FindDeepSkyObjectContainer(item.Parent));
+                    var context = item.Parent;
+                    while (context is not null && context is not IDeepSkyObjectContainer) context = context.Parent;
+                    Assert.Same(target, context);
                     Assert.Equal(180, ItemUtility.RetrieveContextCoordinates(item.Parent).Coordinates.RADegrees);
                     Assert.Equal(20, ItemUtility.RetrieveContextCoordinates(item.Parent).Coordinates.Dec);
                     return Task.CompletedTask;

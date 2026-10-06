@@ -15,6 +15,7 @@ internal static class SessionUiProbe
 {
     internal static Task RenderAsync(string directory, DirectorSessionDisplay? display = null, DirectorSessionContainer? source = null) => Application.Current.Dispatcher.InvokeAsync(() =>
     {
+        RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         // NINA gives each plugin its own AssemblyLoadContext. The test plugin's
         // reference has a different CLR identity from the actual exported type.
         var template = Templates(Application.Current.Resources).SingleOrDefault(value =>

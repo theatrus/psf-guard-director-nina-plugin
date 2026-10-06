@@ -151,9 +151,8 @@ public sealed class NinaPreparationItemTests
         var f = new Fixture();
         var issued = f.Create(operation: new PreparationOperation.SwitchFilter("filter-l"));
         var filter = Assert.IsAssignableFrom<SwitchFilter>(issued.Item);
-        Assert.Equal(2, filter.Xfilter);
-        if (currentFilter) filter.ComboBoxText = NullFilter.Instance.Name;
-        else filter.Xfilter = 0;
+        Assert.True(NinaCompatibility.FilterMatches(filter, 2));
+        NinaCompatibility.SetOptional(filter, "Filter", currentFilter ? null : new NINA.Core.Model.Equipment.FilterInfo { Position = 0 });
         await Assert.ThrowsAsync<InvalidOperationException>(() => filter.Execute(Progress, default));
         Assert.IsType<PreparationOutcome.Failed>(issued.Fence.Completion!.Outcome);
         f.Native.WheelMediator.Verify(x => x.ChangeFilter(It.IsAny<NINA.Core.Model.Equipment.FilterInfo>(),
@@ -260,7 +259,7 @@ public sealed class NinaPreparationItemTests
             program, f.Native.Binding, NativeDispatchTest.Allow);
         var filter = Assert.IsAssignableFrom<SwitchFilter>(issued.Item);
         Assert.True(filter.Validate(), string.Join(", ", filter.Issues));
-        Assert.Equal(slot, filter.Xfilter);
+        Assert.True(NinaCompatibility.FilterMatches(filter, slot));
         await filter.Run(Progress, default);
         Assert.IsType<PreparationOutcome.Succeeded>(issued.Fence.Completion!.Outcome);
         f.Native.WheelMediator.Verify(x => x.ChangeFilter(f.Native.Filters[0], It.IsAny<CancellationToken>(), It.IsAny<IProgress<ApplicationStatus>>()), Times.Once);
