@@ -1,5 +1,29 @@
 # Real N.I.N.A. smoke test
 
+## Explicit Settled-Night Admission
+
+2026-10-05: plugin `c3160e9`, pinned runtime 0.14.0 / IPC 14,
+NINA 3.3.0.1065, ASCOM OmniSim and private PSF Guard built from `ec23f0e`.
+`-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -NativeImaging
+-RestartAdmission` passed. Evidence:
+`artifacts/nina-smoke-870f15ffe93a47a6b4210dd249d9f002/probe/064c8bad5ef64a3da255d83062299e9e/result.json`.
+
+The fixture records an unused night, closes that sidecar, and explicitly admits
+a new public acquisition owner in real NINA. It requests fresh server work,
+captures three science frames across two targets, completes native preparation
+and hooks, checks in, and releases the allocation. The original night identity
+and deadline survive. Cancellation while awaiting more work persists a terminal
+parked stop; a second explicit restart request is refused. No duplicate capture
+or receipt is produced. This does not simulate killing and relaunching NINA or
+claim that interrupted allocations can resume.
+
+The run exposed and fixed idle-guider confirmation and premature sidecar shutdown
+during cancellation. Native views rendered at 640 and 1000 px with all 14 policy
+selectors, 19 numeric fields and 12 toggles. Restart, cloud recovery and focus/guide
+retries remain off by default. All 909 managed tests, formatter verification,
+runtime-fetch regression checks, package build and `git diff --check` passed.
+Real-sky cloud accuracy and arbitrary crash/hook reconciliation remain unverified.
+
 ## Native Quality Screening and Probes
 
 2026-10-05: plugin `325c149`, verified runtime 0.14.0 / IPC 14,
@@ -32,7 +56,7 @@ context, deadline/replay refusal and exclusion from science-save queues.
 Release package build, formatter verification, runtime-fetch regressions and
 `git diff --check` passed. Cloud recovery and focus/guide retries default off;
 the existing abort policy defaults to park when enclosure clearance permits.
-Process-restart acquisition remains a separate acceptance gate.
+The later settled-night admission acceptance is recorded above.
 
 ## Quality Contract Runtime Regression
 
