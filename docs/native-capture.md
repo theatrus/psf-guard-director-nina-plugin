@@ -225,8 +225,8 @@ allows idle readmission only with exclusively leased, unused execution storage;
 an unopened historical ledger does not qualify. No idle resume grants a capture
 or preparation permit. Coordinator requests are interrupted when weather changes.
 
-Restart readmission, cloud classification and probes remain
-unfinished. Hold status and spent limits appear in Session/Activity and live
+Opt-in cloud classification, probes and narrow settled-night restart are
+described below. Hold status and spent limits appear in Session/Activity and live
 telemetry when connected; the separate recovery journal remains local.
 
 ## Normal Night End
@@ -1397,6 +1397,35 @@ enabled, both retry and failure budgets cap them. Abort defaults to parking when
 enclosure motion clearance permits it. Such failures can suggest clouds but do
 not prove them, so they do not fabricate an image-quality verdict or restart a
 stopped session.
+
+### Explicit settled-night restart
+
+**Restart admission > Record settled night boundaries** defaults off and requires
+automatic workloads. It must be enabled before the original night starts.
+**Resume recorded night on next Run** is a separate, one-use operator request;
+it is neither saved in the sequence nor copied when cloning it.
+
+Admission accepts only an unused night or a fully released allocation boundary.
+The original rig, pairing, server, equipment configuration, session options,
+night deadline and spent recovery budgets must match. The mount must be parked
+with tracking stopped, the camera idle, and the bound guider must confirm a
+stop. The local NINA direct guider may confirm its already-idle state; a remote
+guider's stale status or disconnection does not establish quiescence. Safety and
+enclosure readings must be fresh, with the configured stable-clearance interval
+when weather recovery is enabled. The shared core reviews these facts, then
+Director requests a new workload and fresh server start authority.
+
+This first version refuses session-level or inherited triggers and conditions
+when restart recording is enabled, because their cross-allocation lifecycle is
+not journaled. Named instruction hook slots remain supported. Ordinary sessions
+retain their existing trigger/condition compatibility.
+
+Missing or corrupt checkpoints, active or interrupted allocations, uncertain
+captures, unfinished hooks, holding/recovery states and terminal stops block
+admission. There is no override and no replay of a consumed allocation. A new
+owner cannot extend the night or refund retry budgets. Cancelling a running
+session records its terminal stop before shutting down the sidecar; cancellation
+is not a restartable pause. Arbitrary crash reconciliation remains unavailable.
 
 ### Capture evidence
 

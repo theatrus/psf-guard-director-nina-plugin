@@ -16,6 +16,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
         bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null, bool ForceNativeFlip = false, string? RecoveryScenario = null, string? NightEndScenario = null, string? WeatherHoldScenario = null, string? QualityScenario = null);
     private readonly HttpClient operatorClient;
+    internal bool RestartAdmission { get; private set; }
+    private RecoveryIdentity? restartIdentity;
+    private CoordinatorNightCheckpoint? restartCheckpoint;
     private readonly Uri endpoint;
     private readonly CoordinatorPairing pairing;
     internal bool ActivateSimulatorPlan { get; private init; }
@@ -95,6 +98,39 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) }
     };
     internal string RigId => pairing.Binding.RigId.ToString("D");
+    internal async Task PrepareRestartAsync(string root, DirectorConfiguration configuration,
+        PsfGuard.Director.Plugin.Sequencer.DirectorSessionOptions options, CancellationToken token)
+    {
+        var recovery = Directory.CreateDirectory(Path.Combine(root, "recovery", RigId)).FullName;
+        var ledger = Directory.CreateDirectory(Path.Combine(root, "restart-fixture")).FullName;
+        await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledger, recovery);
+        await runtime.StartAsync(RigId, token);
+        var host = new PsfGuard.Director.Plugin.Acquisition.NinaSessionRecovery(runtime, options,
+            () => new(PlannerSafety.Safe, RecoveryMotion.Permitted), () => { }, _ => { }, TimeProvider.System);
+        var start = NowMs();
+        await host.AdmitAsync(RigId, configuration.Id, Guid.NewGuid().ToString("D"), start,
+            start + checked((ulong)(options.MaximumHours * 3600000)), token);
+        restartIdentity = host.Record!.Snapshot.Identity;
+        restartCheckpoint = new(recovery, restartIdentity,
+            PsfGuard.Director.Plugin.Acquisition.DirectorAcquisition.RestartScope(pairing.Binding, pairing.ClientId, endpoint, configuration.Id, options));
+        restartCheckpoint.Begin();
+        await runtime.StopAsync();
+    }
+
+    internal async Task VerifyRestartAsync(string root, CancellationToken token)
+    {
+        if (restartCheckpoint?.RequireIdle() != RestartBoundary.Settled) throw new InvalidDataException("Released allocation did not settle its night boundary.");
+        // Read the database only after the active session relinquishes its lease.
+        var ledger = Directory.CreateDirectory(Path.Combine(root, "restart-inspect")).FullName;
+        await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledger, Path.Combine(root, "recovery", RigId));
+        await runtime.StartAsync(RigId, token);
+        var record = (await runtime.ReadRecoveryAsync(token)).Value?.Record;
+        if (record is null || record.Snapshot.Identity != restartIdentity)
+            throw new InvalidDataException("Restart changed the original observing-night identity or duration.");
+        if (record.Snapshot.Phase is not RecoveryPhase.Stopped { Shutdown: RecoveryShutdown.Parked })
+            throw new InvalidDataException("Cancellation did not retain a terminal parked night.");
+        await runtime.StopAsync();
+    }
     private CoordinatorProbe(Uri endpoint, HttpClient operatorClient, CoordinatorPairing pairing) =>
         (this.endpoint, this.operatorClient, this.pairing) = (endpoint, operatorClient, pairing);
 
@@ -123,7 +159,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            return new(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
+            var probe = new CoordinatorProbe(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
+            using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
+            probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
+            return probe;
         }
         catch
         {

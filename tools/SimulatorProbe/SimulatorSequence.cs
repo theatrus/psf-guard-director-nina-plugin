@@ -383,6 +383,12 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Options.RetryCooldownSeconds = 1;
                 }
                 ConfigureImaging(sessionContainer.Options);
+                if (coordinator.RestartAdmission)
+                {
+                    sessionContainer.Options.AllowSettledRestart = true;
+                    await coordinator.PrepareRestartAsync(service.LocalStateRoot, equipment, sessionContainer.Options, lifetime.Token);
+                    sessionContainer.ResumeRecordedNight = true;
+                }
                 sessionContainer.AttachNewParent(Parent);
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
@@ -695,6 +701,12 @@ public sealed class SimulatorSequence : SequenceItem
                             catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
                         }
                         if (!coordinator.PriorityRefresh) await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
+                        if (coordinator.RestartAdmission)
+                        {
+                            await coordinator.VerifyRestartAsync(service.LocalStateRoot, lifetime.Token);
+                            if (sessionContainer.ResumeRecordedNight) throw new InvalidDataException("Restart intent was not consumed.");
+                            await File.WriteAllTextAsync(Path.Combine(run, "restart-verified.txt"), "Recorded unused night readmitted explicitly; fresh workload ran and released; original night identity/deadline retained", lifetime.Token);
+                        }
                     }
                     else await executing;
                 }
@@ -828,10 +840,17 @@ public sealed class SimulatorSequence : SequenceItem
                 retry.Options.MaximumAltitude = 89;
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 ConfigureImaging(retry.Options);
+                if (coordinator.RestartAdmission)
+                {
+                    retry = (DirectorSessionContainer)sessionContainer.Clone();
+                    retry.ResumeRecordedNight = true;
+                }
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
                 catch (InvalidOperationException e) when ((coordinator.RecoveryScenario is not null || coordinator.NightEndScenario is not null) && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
-                Step("Public acquisition saved three frames; server refused a second launch");
+                catch (InvalidOperationException e) when (coordinator.RestartAdmission && e.Message.Contains("recorded night is stopped", StringComparison.Ordinal)) { }
+                Step(coordinator.RestartAdmission ? "Public acquisition saved three frames; explicit restart refused the terminal stopped night"
+                    : "Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
                 if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
                     || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")

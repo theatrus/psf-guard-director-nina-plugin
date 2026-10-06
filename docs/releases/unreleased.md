@@ -1,5 +1,11 @@
 # Unreleased
 
+- Optional settled-night restart preserves the original night deadline and retry
+  budgets, checks fresh native safety and idle equipment, and requests new work.
+  It defaults off and never clears a terminal stop or resumes uncertain captures
+  or hooks. Session cancellation now keeps recovery storage alive through shutdown
+  so the stopped night is recorded before the sidecar exits.
+
 - Image-quality screening is off by default. Optional monitoring, stop-and-park,
   or bounded cloud probes use a frozen initial reference and keep its unknown-
   quality warning visible. Probes are not saved as science images or credited

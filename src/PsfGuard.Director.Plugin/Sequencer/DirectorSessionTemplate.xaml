@@ -163,6 +163,19 @@
                                         <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MaxWidth="280" Margin="0,3" />
                                     </Grid>
                                 </Expander>
+                                <Expander Header="Restart admission" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <Grid Margin="8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <TextBlock Text="Record settled night boundaries" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Column="1" IsChecked="{Binding AllowSettledRestart}" AutomationProperties.Name="Record settled night boundaries" VerticalAlignment="Center"
+                                            ToolTip="Off by default. Automatic workloads only. Interrupted allocations, hooks and terminal stops cannot resume. Session or inherited triggers and conditions are not supported by this restart mode." />
+                                        <TextBlock Grid.Row="1" Text="Resume recorded night on next Run" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="1" Grid.Column="1" IsEnabled="{Binding AllowSettledRestart}" IsChecked="{Binding DataContext.ResumeRecordedNight, RelativeSource={RelativeSource AncestorType=TabControl}}"
+                                            AutomationProperties.Name="Resume recorded night on next Run" VerticalAlignment="Center"
+                                            ToolTip="One-use operator request, never saved with the sequence. Requires the same policy, parked mount, idle camera, connected stoppable guider, fresh Safe/Open conditions and fresh server work. Keeps the original night deadline and spent budgets." />
+                                    </Grid>
+                                </Expander>
                                 <Expander Header="Image quality" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

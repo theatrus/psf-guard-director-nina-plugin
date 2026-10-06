@@ -12,6 +12,7 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
 {
     private RecoveryRecord? record;
     internal RecoveryRecord? Record => record;
+    internal bool NewlyAdmitted { get; private set; }
     private ulong Now() => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
 
     internal async Task AdmitAsync(string rig, string configuration, string night, ulong start, ulong end, CancellationToken token)
@@ -42,7 +43,9 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
             30000, end, (uint)options.MaximumOperationFailures, (uint)options.MaximumOperationFailures, options.OnAbort == DirectorAbortPolicy.ParkMount,
             options.Weather == DirectorWeatherPolicy.HoldAndResume
                 ? new(checked((ulong)options.StableSafeSeconds * 1000), checked((ulong)options.MaximumWeatherMinutes * 60000), checked((uint)options.MaximumWeatherInterruptions)) : null);
-        record = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token)).Record;
+        var opened = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token));
+        NewlyAdmitted = opened.Created;
+        record = opened.Record;
         if (record.Snapshot.Phase is not RecoveryPhase.Acquiring)
             throw new InvalidOperationException("The observing session is stopped or needs recovery reconciliation.");
         if (options.Weather == DirectorWeatherPolicy.HoldAndResume)

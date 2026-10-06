@@ -19,7 +19,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // Rust selects local work; native sequence slots own target preparation. The
 // prepared-target mode remains available for existing single-target sessions.
 [Export(typeof(DirectorAcquisition))]
-public sealed class DirectorAcquisition
+public sealed partial class DirectorAcquisition
 {
     private readonly IProfileService profiles;
     private readonly ICameraMediator camera;
@@ -141,11 +141,20 @@ public sealed class DirectorAcquisition
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
         using var owner = new AcquisitionLease(LocalStateRoot);
+        RecoveryIdentity? restartedNight = null;
+        if (container.ConsumeRestartRequest())
+        {
+            var original = await ReviewRestartAsync(container, token);
+            restartedNight = original;
+            night = original.NightId;
+            window = new(original.StartsAtMs, original.EndsAtMs, TimeProvider.System);
+            container.RecordAction("", "Restart admission", "Settled boundary reviewed; fresh server work required");
+        }
         var firstAllocation = true;
         do
         {
             token.ThrowIfCancellationRequested();
-            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, token);
+            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, token);
             firstAllocation = false;
             if (!more) break;
         } while (container.Options.AutomaticWorkloads);
@@ -172,7 +181,7 @@ public sealed class DirectorAcquisition
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, bool firstAllocation, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, CancellationToken token)
     {
         var options = container.Options.Clone();
         var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
@@ -217,6 +226,8 @@ public sealed class DirectorAcquisition
         using var operations = new NinaOperationLifetime(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
         using var constraintsReader = new NinaConstraintSnapshot(profiles);
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, rig, constraintsReader);
+        if (restartedNight is not null && (restartedNight.RigId != rig || restartedNight.ConfigurationId != configuration.Id))
+            throw new InvalidOperationException("The rig or configuration changed after restart review.");
         var admittedConstraints = constraintsReader.Refresh(constraintBinding);
         if (admittedConstraints.Revision != equipmentBinding.ConstraintRevision)
             throw new InvalidOperationException("Native constraints changed during admission.");
@@ -226,17 +237,22 @@ public sealed class DirectorAcquisition
         var ledgerDirectory = Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName;
         var recoveryDirectory = Path.Combine(LocalStateRoot, "recovery", rig);
         // Once commissioned, a later checkbox change cannot bypass a stored stop.
-        var recoveryRequired = weatherHolds || options.RetryFocusAndGuiding || options.Quality != DirectorQualityPolicy.Off || Directory.Exists(recoveryDirectory);
+        var recoveryRequired = options.AllowSettledRestart || weatherHolds || options.RetryFocusAndGuiding || options.Quality != DirectorQualityPolicy.Off || Directory.Exists(recoveryDirectory);
         if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
         await using var runtime = recoveryRequired
             ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
-        await runtime.StartAsync(rig, lifetime.Token);
+        // Keep recovery storage available during bounded shutdown after session
+        // cancellation. Cancellation still aborts startup and every operation.
+        using var runtimeLifetime = new CancellationTokenSource();
+        using (lifetime.Token.Register(runtimeLifetime.Cancel))
+            await runtime.StartAsync(rig, runtimeLifetime.Token);
         Action recoveryCheck = CheckIdleContext;
         NinaSessionRecovery? recovery = recoveryRequired
             ? new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
                 () => recoveryCheck(), message => Report(message, null), TimeProvider.System) : null;
         var mountShutdown = new NinaMountShutdown();
+        CoordinatorNightCheckpoint? nightCheckpoint = null;
         if (recoveryRequired)
         {
             var prior = (await runtime.ReadRecoveryAsync(lifetime.Token)).Value
@@ -253,6 +269,13 @@ public sealed class DirectorAcquisition
         try
         {
             if (recovery is not null) await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
+            if (options.AllowSettledRestart)
+            {
+                nightCheckpoint = new(recoveryDirectory, recovery!.Record!.Snapshot.Identity,
+                    RestartScope(pairing.Binding, pairing.ClientId, endpoint, configuration.Id, options));
+                if (recovery.NewlyAdmitted) nightCheckpoint.Begin();
+                else nightCheckpoint.RequireIdle();
+            }
             if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
             // Native interlocks own cancellation before any network wait. Batch
             // receipts are idempotent if weather interrupts this initial replay.
@@ -365,9 +388,7 @@ public sealed class DirectorAcquisition
             stopped.CancelAfter(TimeSpan.FromSeconds(15));
             if (guider?.GetInfo().Connected == true)
             {
-                if (guider.GetInfo().DeviceId != profiles.ActiveProfile.GuiderSettings.GuiderName
-                    || !await guider.StopGuiding(stopped.Token).WaitAsync(stopped.Token))
-                    throw new InvalidOperationException("Guider stop could not be confirmed.");
+                await ConfirmGuiderStoppedAsync(stopped.Token);
             }
         }
         async Task<bool> AdmitIdleWeatherAsync()
@@ -517,6 +538,7 @@ public sealed class DirectorAcquisition
             owner.BeginExecution();
             var ledger = Require(await runtime.OpenGeometryAsync(program, snapshot.Constraints, snapshot.State, lifetime.Token));
             LastLedger = ledger;
+            nightCheckpoint?.MarkDispatched(Path.GetFileName(runRoot));
             archive.Store(new(allocation.Envelope, snapshot.Constraints, snapshot.State, ledger,
                 options.AutomaticWorkloads, options.LocalTargetScheduling));
             // Server accepts this only once. Nothing on disk can replay this permit.
@@ -1049,6 +1071,7 @@ public sealed class DirectorAcquisition
                             if (!finalOperations.CaughtUp) throw new InvalidOperationException("Operation feed is not fully delivered; workload remains outstanding.");
                             await workloads.ReleaseAsync(allocation, LastLedger!, final.AcknowledgedThrough, cleanup.Token);
                             archive.MarkReleased();
+                            nightCheckpoint?.MarkSettled(Path.GetFileName(runRoot));
                             released = true;
                         }
                         catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
