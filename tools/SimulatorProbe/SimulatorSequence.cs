@@ -842,7 +842,7 @@ public sealed class SimulatorSequence : SequenceItem
                 ConfigureImaging(retry.Options);
                 if (coordinator.RestartAdmission)
                 {
-                    retry.Options = sessionContainer.Options.Clone();
+                    retry = (DirectorSessionContainer)sessionContainer.Clone();
                     retry.ResumeRecordedNight = true;
                 }
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
