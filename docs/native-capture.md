@@ -225,8 +225,8 @@ allows idle readmission only with exclusively leased, unused execution storage;
 an unopened historical ledger does not qualify. No idle resume grants a capture
 or preparation permit. Coordinator requests are interrupted when weather changes.
 
-Restart readmission, cloud classification and probes remain
-unfinished. Hold status and spent limits appear in Session/Activity and live
+Opt-in cloud classification, probes and narrow settled-night restart are
+described below. Hold status and spent limits appear in Session/Activity and live
 telemetry when connected; the separate recovery journal remains local.
 
 ## Normal Night End

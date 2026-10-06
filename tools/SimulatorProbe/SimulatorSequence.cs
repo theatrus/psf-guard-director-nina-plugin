@@ -840,10 +840,17 @@ public sealed class SimulatorSequence : SequenceItem
                 retry.Options.MaximumAltitude = 89;
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 ConfigureImaging(retry.Options);
+                if (coordinator.RestartAdmission)
+                {
+                    retry.Options = sessionContainer.Options.Clone();
+                    retry.ResumeRecordedNight = true;
+                }
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
                 catch (InvalidOperationException e) when ((coordinator.RecoveryScenario is not null || coordinator.NightEndScenario is not null) && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
-                Step("Public acquisition saved three frames; server refused a second launch");
+                catch (InvalidOperationException e) when (coordinator.RestartAdmission && e.Message.Contains("recorded night is stopped", StringComparison.Ordinal)) { }
+                Step(coordinator.RestartAdmission ? "Public acquisition saved three frames; explicit restart refused the terminal stopped night"
+                    : "Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
                 if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
                     || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")
