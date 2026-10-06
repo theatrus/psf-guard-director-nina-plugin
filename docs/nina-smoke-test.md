@@ -7,17 +7,29 @@ unchanged runtime 0.14.0 / IPC 14, ASCOM OmniSim and private PSF Guard `ec23f0e`
 No real profile, hardware or catalog was used. Native editors rendered at 640
 and 1000 px in both hosts; the hidden 3.2 harness uses software rendering.
 
-- NINA 3.2.0.9001 passed all 13 cases in `tools/run-simulator-matrix.ps1`:
+- The compatibility baseline passed all 13 NINA 3.2.0.9001 cases in
+  `tools/run-simulator-matrix.ps1`:
   native automatic acquisition through an outage, unsafe park/stop, roof closure,
   horizon/site/meridian changes, Moon avoidance, ranked priority refresh,
   deferred check-in, and failed native centering, autofocus and meridian flip.
   Evidence: `artifacts/matrix-94da870aff9944dab9bbce74630019e8.json`.
-- NINA 3.3.0.1065 passed public multi-target automatic native acquisition through
+- The NINA 3.3.0.1065 baseline passed public multi-target native acquisition through
   an outage, live telemetry, batch replay and delayed workload release.
   Evidence: `artifacts/nina-smoke-b7e217cb3b8e433aae956c9c3d1eeb52/probe/4ea0071596a142a6907407b6d723ac08/result.json`.
-- The final package also passed NINA 3.3 unsafe parking, roof closure and failed
+- The compatibility baseline also passed NINA 3.3 unsafe parking, roof closure and failed
   native meridian-flip regressions.
   Evidence: `artifacts/matrix-215db0a0c7e34e928cbd76b85a704692.json`.
+- After the PHD2 idle-confirmation fix, NINA 3.2 passed a complete successful
+  native flip with the private PHD2 simulator. The mount changed pier side;
+  before/after flip events, autofocus, recentering, guide-star selection,
+  guiding recovery and all workflow steps completed. The next science frame
+  was saved, the workload was released and idle cancellation shut down cleanly.
+  Evidence: `artifacts/nina-smoke-70bae066a60f4b799898a6e69454d010/probe/3c86df772db94cee8eea3084ba5bc2f2/result.json`.
+- The same ZIP passed that complete successful native flip and clean shutdown
+  scenario on NINA 3.3.0.1065 with private PHD2.
+  Evidence: `artifacts/nina-smoke-878b2e7af82a49d0b7c97726e296515a/probe/d48b8cbe8fbe4ffe90c080ff4320c7fa/result.json`.
+  Tested ZIP SHA-256:
+  `4d3c2ddf6abbd3e824a877b66474f0460df98bf98f1358636fe8b7e0fc7c6ef6`.
 
 Review and native tests caught three fixes: a failed write must not settle the
 capture before NINA exhausts its three retries, and shutdown must drain an
@@ -30,10 +42,16 @@ exceptions retain their original type, final receipts remain correlated, and
 missing receipts remain uncertain. Optional missing quality metrics are not
 inferred, and existing unit encoding in quality fingerprints is preserved.
 
+One intermediate rerun hit the unchanged two-second constraint-read deadline
+while simulator device polling was also delayed. Director interrupted the
+native meridian wait, saved no further science frame and parked. The deadline
+was not relaxed to make the test pass; the later full run above passed.
+Diagnostic evidence: `artifacts/nina-smoke-e55d2a1d03354534bbf1d5b9493adb1a/probe/237e2ebad0d6407eb1875a50a668b061/result.json`.
+
 All 940 managed tests passed under .NET 8. These checks also passed: locked
 package build and ZIP allowlist, local release metadata, formatter verification,
-runtime-fetch corruption
-regressions, preview-manifest guards and `git diff --check`. Optical centering and
+runtime-fetch corruption regressions, preview-manifest guards and
+`git diff --check`. Optical centering and
 autofocus results in the native fixture are synthetic. This does not establish
 real-sky cloud accuracy or real-hardware unattended operation. Recovery remains
 off by default.
