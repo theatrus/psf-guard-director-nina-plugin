@@ -1339,6 +1339,33 @@ pending commands, failed or uncertain preparation observations, and non-refusal
 halt values. Original capture evidence remains available for late save receipts.
 The client requires IPC 8; older runtimes cannot negotiate this contract.
 
+### Shared quality and restart review contracts
+
+Runtime 0.13.0 / IPC 13 supplies `BuildQualityReferenceAsync`,
+`ClassifyQualityAsync`, and `ReviewRestartAsync`. These are read-only evidence
+and advice, not equipment authority. They do not advance recovery or science
+progress. The managed client rejects malformed replies, changed initial-group
+evidence, and missing or contradictory reference-quality warnings.
+
+The shared core builds a provisional reference from 5-16 stable, compatible
+initial frames, retaining the original group and using median metrics. The
+future native collector must persist the first successful reference per exact
+target/recipe/configuration/analysis context and never adapt it to later poor
+frames. Display **Reference quality unknown** for this baseline even when a
+later frame is consistent with it: a stable initial group can still be cloudy.
+Missing measurements or an unstable group cannot establish a reference.
+
+Poor evidence requires both star loss and physical-ADU background rise, with
+usable HFR and eccentricity. Focus/tracking-shaped changes remain unknown. No
+result grades an image or proves clear sky. A reference cannot authorize its
+own constituent captures as recovery probes.
+
+Restart review preserves the original night, deadlines, budgets and stop
+latches. Its most permissive advice is to request fresh authority, not to
+resume or replay a consumed allocation. Native collection/persistence,
+separately journaled one-shot probe capture, and explicit restart admission are
+not enabled by these contracts and still require simulator acceptance tests.
+
 ### Capture evidence
 
 Save waiting has a bounded deadline and honors cancellation. A receipt already

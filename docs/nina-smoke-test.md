@@ -1,5 +1,28 @@
 # Real N.I.N.A. smoke test
 
+## Quality Contract Runtime Regression
+
+2026-10-05: plugin `cb70d7d` with verified runtime 0.13.0 / IPC 13,
+NINA 3.3.0.1065, ASCOM OmniSim and private PSF Guard built from `ec23f0e`.
+Runtime artifact workflow `37395148503` passed all native platforms.
+
+`-PublicAcquisition -PublicUnsafe -WeatherHoldScenario safety-exposure` passed:
+weather interrupts the active exposure, recovery waits for stable clearance,
+fresh target setup resumes capture offline, and batch replay remains
+duplicate-free. Evidence:
+`artifacts/nina-smoke-eba8e262a31a453988421e415d9ca097/probe/6d8135b33f7444b88dddc1a5b7be48ef/result.json`.
+
+All 895 managed tests passed, including real bundled-runtime roundtrips for
+stable initial references, incomplete/unstable groups, the unknown-quality
+warning, conservative classification and read-only restart review. Package
+build had zero warnings/errors; formatter verification, runtime-fetch
+regressions and `git diff --check` passed.
+
+The native run is a runtime-upgrade regression, not an end-to-end cloud test.
+The new classification tests use synthetic metrics. Native reference
+collection/persistence, separately authorized cloud probes and process-restart
+acquisition remain disabled and need their own acceptance campaign.
+
 ## Live Capture and Idle Weather Recovery
 
 2026-10-05: packaged Director with verified runtime 0.12.1 / IPC 12,
