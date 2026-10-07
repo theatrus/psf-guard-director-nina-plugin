@@ -2,6 +2,16 @@
 
 ## Central telemetry and batch replay
 
+Saved FITS and XISF files retain `PGCAPID` for correlation with Director's
+capture ledger, independently of the catalog GUID assigned during import.
+Director also writes `PGGRMS` (arcseconds) when NINA recorded at least two guide
+samples and a valid guider scale, and `PGHFR` (pixels) when NINA explicitly
+declares that unit. Missing measurements are omitted. These headers survive
+delayed Sync uploads or folder copies; capture check-ins alone do not transfer
+images or establish calibration. Managed PSF Guard contribution review requires
+both the accepted saved file with a fresh pixel solve and the matching save
+receipt for the assigned exposure goal.
+
 When status reporting is enabled, Director sends the current native operation,
 monotonic elapsed time, goal, safety, wait/queue state and connected mount's
 J2000 position in degrees. Reports expire after three reporting intervals,

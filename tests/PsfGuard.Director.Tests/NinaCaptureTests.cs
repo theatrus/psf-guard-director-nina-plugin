@@ -183,6 +183,46 @@ public sealed partial class NinaCaptureTests
         Assert.Contains(f.Intent.CaptureId.ToString("D"), (string?)keyword.Attribute("value"));
     }
 
+    [Fact]
+    public async Task ContributionHeadersPreserveMeasuredGuiderScaleAndPixelHfr()
+    {
+        using var f = new Fixture();
+        var rms = new RMS();
+        rms.SetScale(0.5);
+        rms.AddDataPoint(-1, 0);
+        rms.AddDataPoint(1, 0);
+        f.Metadata.Image.RecordedRMS = rms;
+        var task = f.RunQuality(probe: false);
+        await f.Enqueued.Task;
+        var headers = f.Metadata.GenericHeaders.OfType<DoubleMetaDataHeader>().ToArray();
+        Assert.Equal(0.5, Assert.Single(headers, h => h.Key == "PGGRMS").Value);
+        Assert.Equal(2, Assert.Single(headers, h => h.Key == "PGHFR").Value);
+        var fits = new FITSHeader(2, 2);
+        fits.PopulateFromMetaData(f.Metadata);
+        Assert.Single(fits.HeaderCards, c => c.Key == "PGGRMS");
+        Assert.Single(fits.HeaderCards, c => c.Key == "PGHFR");
+        var xisf = new XISFHeader();
+        xisf.AddImageMetaData(new ImageProperties(2, 2, 16, false, 10, 20), CaptureSequence.ImageTypes.LIGHT);
+        xisf.Populate(f.Metadata);
+        Assert.Single(xisf.Image.Elements(), e => e.Name.LocalName == "FITSKeyword" && (string?)e.Attribute("name") == "PGGRMS");
+        f.Saved();
+        await task;
+    }
+
+    [Fact]
+    public async Task ContributionHeadersDoNotInventUnguidedZeroOrUnknownHfrUnits()
+    {
+        using var f = new Fixture();
+        f.Metadata.Image.RecordedRMS = new RMS();
+        f.Metadata.GenericHeaders.Add(new DoubleMetaDataHeader("PGGRMS", 0, "stale"));
+        f.Metadata.GenericHeaders.Add(new DoubleMetaDataHeader("PGHFR", 1, "stale"));
+        var task = f.RunQuality(probe: false, extendedMetrics: false);
+        await f.Enqueued.Task;
+        Assert.DoesNotContain(f.Metadata.GenericHeaders, h => h.Key is "PGGRMS" or "PGHFR");
+        f.Saved();
+        await task;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -37,6 +37,28 @@ Use private profiles and catalogs; never run these tests on real equipment.
 
 ### Collaboration Validation
 
+The saved-evidence increment passed 956 Release tests, formatter verification,
+and the locked development package build on 2026-10-07. Native public Session
+acquisition passed on NINA 3.3.0.1065 with automatic workloads, and on
+3.2.0.9001 with deferred capture/preparation check-in, each against an isolated
+PSF Guard build with ASCOM simulators and bundled runtime 0.14.0 / IPC 14.
+Each run saved three frames and acknowledged six capture events without
+replaying hardware. The nightly files preserved `PGCAPID` and measured pixel
+`PGHFR`; the unmeasured guider RMS was correctly omitted. Unit tests verify
+recorded guider-scale conversion in both FITS and XISF metadata.
+
+Local evidence paths:
+
+- Nightly: `artifacts/nina-smoke-6c4e714d957c4004a450a8acbb0bc919/probe/b1f29fc8f20b421ebbc368ba4feed4ab/result.json`.
+- Stable: `artifacts/nina-smoke-38bd58aab42f4e1383a69c7fedb919a6/probe/549c6ead861e424d82a397abae105dce/result.json`.
+
+The separate PSF Guard browser test uses a local M31 assignment, public
+import/activation APIs, a real TS schema, delayed image arrival, receipt-gated
+review and offline report replay. Its pixel solutions and remote receiver are
+test fixtures, not optical or live Starfront credit validation. The native
+NINA runs use visible simulator targets, not the M31 assignment. This does not
+claim a single live Starfront-to-TS/Sync-to-Director scientific-credit run.
+
 On 2026-10-07 the standalone authentication increment passed 954 Release tests,
 the locked development package build, and formatter verification. Tests cover
 separate credentials, missing-credential recovery, uncertain enrollment,
