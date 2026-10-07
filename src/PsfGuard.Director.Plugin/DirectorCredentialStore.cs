@@ -37,7 +37,7 @@ internal static class DirectorCredentialStore
         JsonSerializer.Serialize(new Entry(1, endpoint.AbsoluteUri, pairing.Binding, pairing.ClientId, pairing.Token)));
     internal static void Forget(Uri endpoint, Guid profile) => WriteSecret(Target(endpoint, profile), null);
 
-    private static string? ReadSecret(string target)
+    internal static string? ReadSecret(string target)
     {
         if (!CredRead(target, 1, 0, out var pointer))
         {
@@ -54,7 +54,7 @@ internal static class DirectorCredentialStore
         finally { CredFree(pointer); }
     }
 
-    private static void WriteSecret(string target, string? secret)
+    internal static void WriteSecret(string target, string? secret)
     {
         if (secret is null)
         {

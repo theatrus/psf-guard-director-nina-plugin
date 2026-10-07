@@ -68,6 +68,28 @@
                     </Button>
                 </WrapPanel>
                 <TextBlock Text="{Binding CheckInStatus}" TextWrapping="Wrap" />
+                <StackPanel DataContext="{Binding Collaboration}" Margin="0,16,0,0">
+                    <TextBlock Text="Standalone collaboration" FontWeight="Bold" Margin="0,0,0,8" />
+                    <TextBlock Text="Server URL" Margin="0,0,0,4" />
+                    <TextBox Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" />
+                    <TextBlock Text="Remote rig name" Margin="0,8,0,4" />
+                    <TextBox Text="{Binding RigName, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MaxLength="128" />
+                    <CheckBox IsChecked="{Binding AllowLoopbackHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8">
+                        <TextBlock Text="Allow loopback HTTP for isolated testing" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                    </CheckBox>
+                    <TextBlock Text="Pairing code" Margin="0,0,0,4" />
+                    <TextBox Text="{Binding PairingCode, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MaxLength="512" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Command="{Binding PairCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Pair" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding SigninCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Browser sign-in" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding OpenSigninCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Open sign-in" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding PollCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Check approval" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding ValidateCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Check connection" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding DisconnectCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Disconnect" Style="{StaticResource ActionLabel}" /></Button>
+                        <Button Command="{Binding NewConnectionCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="New connection" Style="{StaticResource ActionLabel}" /></Button>
+                    </WrapPanel>
+                    <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+                </StackPanel>
             </StackPanel>
         </Grid>
     </DataTemplate>

@@ -32,6 +32,9 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     private string? commandError;
     internal DirectorConnection ConnectionModel { get; }
     public object Connection => ConnectionModel;
+    internal CollaborationConnection CollaborationModel { get; }
+    public object Collaboration => CollaborationModel;
+    private bool refreshingConnections;
 
     [ImportingConstructor]
     public DirectorPlugin(IProfileService profileService)
@@ -39,24 +42,40 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         profiles = profileService;
         settings = new PluginOptionsAccessor(profiles, PluginId);
         runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
+        CollaborationModel = new(() => profiles.ActiveProfile.Id,
+            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !ConnectionModel!.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => settings.GetValueString("CollaborationBindings", ""), value => settings.SetValueString("CollaborationBindings", value));
         ConnectionModel = new(() => profiles.ActiveProfile.Id,
-            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !CollaborationModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             () => settings.GetValueString("CoordinatorUrl", ""), value => settings.SetValueString("CoordinatorUrl", value),
             readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""),
             writeHttpConsent: value => settings.SetValueString("HttpConsentOrigin", value));
         start = new AsyncCommand(StartRuntimeAsync,
-            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !ConnectionModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
+            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !ConnectionModel.IsBusy && !CollaborationModel.IsBusy && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             ReportError);
         stop = new AsyncCommand(runtime.StopAsync,
             () => initialized && runtime.Status.State is RuntimeState.Starting or RuntimeState.Ready or RuntimeState.Faulted,
             ReportError);
         checkIn = new(CheckInAsync,
-            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !ConnectionModel.IsBusy
+            () => initialized && checkInCancellation is null && !AcquisitionLease.IsActive && !ConnectionModel.IsBusy && !CollaborationModel.IsBusy
                 && Volatile.Read(ref profileTransitions) == 0 && runtime.Status.State is RuntimeState.Stopped or RuntimeState.Faulted,
             error => { Logger.Error(error); checkInStatus = "Check-in failed; saved data retained. See the NINA log."; Refresh(); });
         cancelCheckIn = new(() => { checkInCancellation?.Cancel(); return Task.CompletedTask; },
             () => checkInCancellation is not null, ReportError);
-        ConnectionModel.PropertyChanged += (_, _) => { start.Refresh(); checkIn.Refresh(); };
+        ConnectionModel.PropertyChanged += (_, _) => ConnectionsChanged();
+        CollaborationModel.PropertyChanged += (_, _) => ConnectionsChanged();
+    }
+
+    private void ConnectionsChanged()
+    {
+        if (refreshingConnections) return;
+        refreshingConnections = true;
+        try
+        {
+            start.Refresh(); checkIn.Refresh();
+            ConnectionModel.Changed(); CollaborationModel.Changed();
+        }
+        finally { refreshingConnections = false; }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -77,6 +96,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         runtime.StateChanged += RuntimeStateChanged;
         initialized = true;
         ConnectionModel.Reload();
+        CollaborationModel.Reload();
         Refresh();
     }
 
@@ -86,6 +106,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         checkInCancellation?.Cancel();
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
         ConnectionModel.Dispose();
+        CollaborationModel.Dispose();
         profiles.ProfileChanged -= ProfileChanged;
         runtime.StateChanged -= RuntimeStateChanged;
         try { await runtime.DisposeAsync(); }
@@ -140,6 +161,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         checkInCancellation?.Cancel();
         Interlocked.Increment(ref profileTransitions);
         ConnectionModel.ProfileChanged();
+        CollaborationModel.ProfileChanged();
         commandError = null;
         Refresh();
         try { await runtime.StopAsync(); }
@@ -178,5 +200,6 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         checkIn.Refresh();
         cancelCheckIn.Refresh();
         ConnectionModel.Changed();
+        CollaborationModel.Changed();
     }
 }
