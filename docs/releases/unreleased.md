@@ -1,5 +1,9 @@
 # Unreleased
 
+- Preserve measured guider RMS in arcseconds and explicitly pixel-valued HFR
+  in saved FITS/XISF headers. PSF Guard can use these measurements after delayed
+  image delivery without treating missing guiding data as zero.
+
 - Use the same Director package in NINA 3.2 and 3.3. Native imaging, sequence
   hooks and safety policies remain unchanged. Older hosts report writer failures
   directly and leave missing quality metrics unavailable rather than guessing.

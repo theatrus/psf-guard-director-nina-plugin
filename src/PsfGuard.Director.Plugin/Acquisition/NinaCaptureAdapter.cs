@@ -168,6 +168,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
             var prepared = await imaging.PrepareImage(image, new PrepareImageParameters(true, true), token).ConfigureAwait(false);
             if (prepared is null) throw new IOException("NINA image preparation returned no result.");
             var statistics = await image.Statistics.Task.WaitAsync(token).ConfigureAwait(false);
+            NinaContributionHeaders.Write(image);
             if (!intent.QualityProbe) history.PopulateStatistics(metadata.Image.Id, statistics);
             var quality = qualitySettings is not null && qualitySettings == NinaQualityEvidence.SettingsFingerprint(profiles)
                 ? NinaQualityEvidence.Read(intent, image, statistics, qualitySettings, checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds())) : null;
