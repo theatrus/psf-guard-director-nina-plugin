@@ -35,6 +35,20 @@ validation also needs the actual NINA plugin, simulated equipment and an
 isolated PSF Guard server. Follow the [smoke-test procedure](nina-smoke-test.md).
 Use private profiles and catalogs; never run these tests on real equipment.
 
+### Collaboration Validation
+
+On 2026-10-07 the standalone authentication increment passed 954 Release tests,
+the locked development package build, and formatter verification. Tests cover
+separate credentials, missing-credential recovery, uncertain enrollment,
+browser approval and malformed or ambiguous replies. The real NINA 3.3.0.1058
+host also completed public Director Session acquisition with the pinned
+runtime 0.14.0, ASCOM simulators and an isolated PSF Guard server: three frames,
+multiple targets, native centering/focus, session hooks, live status and saved
+check-in replay. Local evidence is
+`artifacts/nina-smoke-8cb6587f1aa44c5fb971677a62d03329/probe/aac2bb5d937643ffbafd7aa751a6736f/result.json`.
+That acquisition regression uses local Director allocations. Standalone
+collaboration registration does not yet import, admit or run remote workloads.
+
 ## Release
 
 Run `./build-release.ps1` after validation. It checks the assembly version against
