@@ -135,18 +135,23 @@ Local records survive disconnection, and repeated check-ins do not duplicate
 capture credit or replay equipment actions. Check-ins transfer evidence, not
 image files.
 
-## Future work: AstroCollab
+## AstroCollab
 
-We plan to support [theatrus/astrocollab-api](https://github.com/theatrus/astrocollab-api),
-an API for contributing observations to shared projects across rigs and sites.
-**This integration is not implemented yet.**
+Director can register its own rig with an
+[AstroCollab server](https://github.com/theatrus/astrocollab-api) using a pairing
+code or browser sign-in in plugin settings. This connection is separate from
+PSF Guard pairing. Credentials stay in Windows Credential Manager; only remote
+identity and connection state are stored in the NINA profile. Deleting a
+credential retains the original agent. **New connection** explicitly registers
+a different agent; it does not recover or relabel the old agent's work.
 
 The [interoperability design](https://github.com/theatrus/psf-guard/blob/main/docs/design/collaboration.md)
 maps AstroCollab's Starfront-compatible hello, tonight and report protocol to
 two modes: plugin-only acquisition through the bundled Rust sidecar, or import
-into PSF Guard's existing projects and rig databases. Both would use the same
+into PSF Guard's existing projects and rig databases. Both use the same
 planning core, NINA actions and trigger hooks. Plugin-only mode would need a
-reviewed local workload policy; the current plugin still requires PSF Guard
+reviewed local workload policy; direct authentication alone does not supply
+acquisition authority. The current plugin still requires PSF Guard
 pairing and an allocation to begin acquisition.
 
 Local priorities, safety, equipment limits and bounded acquisition permission

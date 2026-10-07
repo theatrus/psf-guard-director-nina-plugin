@@ -67,7 +67,7 @@ public sealed class SettingsViewTests
                 host.UpdateLayout();
                 Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
                 var buttons = Descendants(host).OfType<Button>().ToArray();
-                Assert.Equal(6, buttons.Length);
+                Assert.Equal(13, buttons.Length);
                 Assert.Equal(state != "Ready", buttons[0].IsEnabled);
                 Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                 foreach (var button in buttons)
@@ -122,6 +122,7 @@ public sealed class SettingsViewTests
     public sealed class ViewModel(string state)
     {
         public object Connection { get; } = new ConnectionViewModel();
+        public object Collaboration { get; } = new CollaborationViewModel();
         public string ProfileName => "Director simulator - long profile name";
         public string RuntimeStatus => state;
         public string EngineVersion => "0.2.0";
@@ -142,6 +143,22 @@ public sealed class SettingsViewTests
         public bool IsEditable => true;
         public ICommand PairCommand { get; } = new StubCommand(false);
         public ICommand ResetPairingCommand { get; } = new StubCommand(true);
+    }
+    public sealed class CollaborationViewModel
+    {
+        public string ServerUrl { get; set; } = "https://collaboration.example/community/";
+        public string RigName { get; set; } = "Director simulator";
+        public string PairingCode { get; set; } = "";
+        public string Status => "Registered as 000000000001";
+        public bool IsEditable => true;
+        public bool AllowLoopbackHttp { get; set; }
+        public ICommand PairCommand { get; } = new StubCommand(false);
+        public ICommand SigninCommand { get; } = new StubCommand(true);
+        public ICommand OpenSigninCommand { get; } = new StubCommand(false);
+        public ICommand PollCommand { get; } = new StubCommand(false);
+        public ICommand ValidateCommand { get; } = new StubCommand(true);
+        public ICommand DisconnectCommand { get; } = new StubCommand(true);
+        public ICommand NewConnectionCommand { get; } = new StubCommand(true);
     }
 
     private sealed class StubCommand(bool enabled) : ICommand
