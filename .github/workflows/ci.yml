@@ -35,7 +35,11 @@ jobs:
         shell: pwsh
         run: ./tools/test-runtime-fetch.ps1
       - run: dotnet build --configuration Release --no-restore
-      - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"
+      # At most 8 xUnit threads. On a 32-core runner xUnit otherwise runs ~32
+      # tests at once, and SettingsViewTests (a WPF render with a 20 s budget)
+      # timed out under that contention; alone it takes 2 s. 4 and 8 threads
+      # both pass and finish the suite sooner (20 s against 24 s).
+      - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx" -- xUnit.MaxParallelThreads=8
       - name: Stress ledger and preparation recovery
         shell: pwsh
         run: |
