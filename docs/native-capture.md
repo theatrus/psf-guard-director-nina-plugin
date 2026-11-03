@@ -794,8 +794,9 @@ Director sends the settings when NINA starts with a paired profile, after
 pairing, after a profile switch, and when one of the settings changes. NINA
 reports most changes at once; Director also checks once a minute for changes
 NINA does not report. It sends only when the settings differ from the last ones
-the server accepted. When the server is unreachable, Director retries after
-30 seconds, doubling the wait up to 30 minutes. A server without this endpoint
+the server accepted. When the server is unreachable, busy or answers with a
+server error, Director retries after 30 seconds, doubling the wait up to 30
+minutes. A server without this endpoint
 is asked again after six hours. When the server refuses the settings as
 invalid (HTTP 400), Director logs the refusal and sends again only after the
 settings change.
