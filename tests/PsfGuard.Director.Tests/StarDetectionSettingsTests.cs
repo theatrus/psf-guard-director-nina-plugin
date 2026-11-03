@@ -337,7 +337,6 @@ public sealed class StarDetectionSettingsTests
     [InlineData(HttpStatusCode.Forbidden, CoordinatorIntakeFailure.Forbidden, false)]
     [InlineData(HttpStatusCode.Conflict, CoordinatorIntakeFailure.UnexpectedStatus, false)]
     [InlineData(HttpStatusCode.RequestEntityTooLarge, CoordinatorIntakeFailure.UnexpectedStatus, false)]
-    [InlineData(HttpStatusCode.UnprocessableEntity, CoordinatorIntakeFailure.NotReady, false)]
     public async Task ClientRetriesEveryFailureButAValidationRefusal(HttpStatusCode status, CoordinatorIntakeFailure failure, bool missingRoute)
     {
         using var client = Client(new Handler((_, _) => Task.FromResult(Response("""{"success":false}""", status))));
@@ -348,10 +347,12 @@ public sealed class StarDetectionSettingsTests
         Assert.False(CoordinatorStarDetectionClient.IsRefused(error));
     }
 
-    [Fact]
-    public async Task ClientReportsOnlyHttp400AsARefusal()
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task ClientReportsOnlyAnInvalidSnapshotAsARefusal(HttpStatusCode status)
     {
-        using var client = Client(new Handler((_, _) => Task.FromResult(Response("""{"success":false,"error":"invalid"}""", HttpStatusCode.BadRequest))));
+        using var client = Client(new Handler((_, _) => Task.FromResult(Response("""{"success":false,"error":"invalid"}""", status))));
 
         var error = await Assert.ThrowsAsync<StarDetectionSettingsRefusedException>(() => client.SendAsync(Report(), CancellationToken.None));
         Assert.True(CoordinatorStarDetectionClient.IsRefused(error));
@@ -366,6 +367,7 @@ public sealed class StarDetectionSettingsTests
     [InlineData(HttpStatusCode.InternalServerError, StarDetectionSendResult.Failed)]
     [InlineData(HttpStatusCode.ServiceUnavailable, StarDetectionSendResult.Failed)]
     [InlineData(HttpStatusCode.BadRequest, StarDetectionSendResult.Refused)]
+    [InlineData(HttpStatusCode.UnprocessableEntity, StarDetectionSendResult.Refused)]
     public async Task ReporterRetriesServerErrorsAndHoldsOnlyA400(HttpStatusCode status, StarDetectionSendResult first)
     {
         var current = status;
@@ -420,7 +422,7 @@ public sealed class StarDetectionSettingsTests
                 LastDestination = capture.DestinationKey;
                 var failure = Failure;
                 OnRequest?.Invoke(count);
-                if (Refuse) return Task.FromException(new StarDetectionSettingsRefusedException());
+                if (Refuse) return Task.FromException(new StarDetectionSettingsRefusedException(400));
                 return failure is null ? Task.CompletedTask : Task.FromException(new CoordinatorIntakeException(failure.Value));
             }, CoordinatorStarDetectionClient.IsMissingRoute, CoordinatorStarDetectionClient.IsRefused,
             line => { lock (Log) Log.Add(line); }, timing, time ?? Clock);
