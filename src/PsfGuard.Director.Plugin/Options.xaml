@@ -62,7 +62,7 @@
                 <CheckBox IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4">
                     <TextBlock Text="Send star-detection settings to PSF Guard" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
                 </CheckBox>
-                <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does. Sent while this profile is paired, even when acquisition is off." TextWrapping="Wrap" />
+                <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
                 <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />

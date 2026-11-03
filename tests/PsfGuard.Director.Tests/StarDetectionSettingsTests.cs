@@ -313,6 +313,8 @@ public sealed class StarDetectionSettingsTests
 
         Assert.Equal(JsonSerializer.Serialize(Report(), StarDetectionJson.Options), body);
         Assert.DoesNotContain(Token, body!, StringComparison.Ordinal);
+        // The server takes the catalog from the rig's pairing, not the body.
+        Assert.DoesNotContain("catalog_id", body!, StringComparison.Ordinal);
     }
 
     [Fact]
