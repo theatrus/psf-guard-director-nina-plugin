@@ -54,6 +54,9 @@ public sealed class CoordinatorStarDetectionClient : IDisposable
             try { response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/star-detection-settings", bytes, deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             catch (CoordinatorIntakeException) when (status.Status == HttpStatusCode.BadRequest)
             { throw new StarDetectionSettingsRefusedException(); }
+            // PSF Guard answers 404 or 405 when it has no such route, as Sync treats them.
+            catch (CoordinatorIntakeException) when (status.Status == HttpStatusCode.MethodNotAllowed)
+            { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.NotFound); }
             using var body = JsonDocument.Parse(response.Bytes);
             var root = body.RootElement;
             CoordinatorProgramContract.CheckTree(root);
@@ -67,7 +70,7 @@ public sealed class CoordinatorStarDetectionClient : IDisposable
             or ArgumentException or FormatException or OverflowException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement); }
     }
-    /// <summary>True when the server has no route for these settings: HTTP 404, an older PSF Guard.</summary>
+    /// <summary>True when the server has no route for these settings: HTTP 404 or 405, an older PSF Guard.</summary>
     public static bool IsMissingRoute(Exception error) =>
         error is CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound };
 

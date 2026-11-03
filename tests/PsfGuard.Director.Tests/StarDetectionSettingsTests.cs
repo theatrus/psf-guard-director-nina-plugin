@@ -327,6 +327,8 @@ public sealed class StarDetectionSettingsTests
 
     [Theory]
     [InlineData(HttpStatusCode.NotFound, CoordinatorIntakeFailure.NotFound, true)]
+    [InlineData(HttpStatusCode.MethodNotAllowed, CoordinatorIntakeFailure.NotFound, true)]
+    [InlineData(HttpStatusCode.RequestTimeout, CoordinatorIntakeFailure.UnexpectedStatus, false)]
     [InlineData(HttpStatusCode.InternalServerError, CoordinatorIntakeFailure.ServerUnavailable, false)]
     [InlineData(HttpStatusCode.BadGateway, CoordinatorIntakeFailure.ServerUnavailable, false)]
     [InlineData(HttpStatusCode.ServiceUnavailable, CoordinatorIntakeFailure.Busy, false)]
