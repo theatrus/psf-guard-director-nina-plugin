@@ -34,6 +34,12 @@ public enum StarDetectionSendResult
     /// <summary>The server does not accept star-detection settings.</summary>
     Unsupported,
 
+    /// <summary>
+    /// The server refused these settings as invalid; they are not sent again
+    /// until they change.
+    /// </summary>
+    Refused,
+
     Failed,
 }
 
@@ -66,6 +72,7 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
     private readonly Func<StarDetectionSettingsCapture?> capture;
     private readonly Func<StarDetectionSettingsCapture, CancellationToken, Task> send;
     private readonly Func<Exception, bool> isUnsupported;
+    private readonly Func<Exception, bool> isRefused;
     private readonly Action<string> log;
     private readonly StarDetectionReporterTiming timing;
     private readonly TimeProvider time;
@@ -79,6 +86,7 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
     private Task? worker;
     private string? lastSent;
     private string? unsupportedDestination;
+    private string? refused;
     private DateTimeOffset unsupportedUntil;
     private volatile bool enabled = true;
     private int generation;
@@ -93,13 +101,25 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
     /// True for a failure that shows the server has no endpoint for these
     /// settings, such as HTTP 404.
     /// </param>
+    /// <param name="isRefused">
+    /// True for a failure that shows the server will not take these settings
+    /// as sent, such as HTTP 400. Retrying the same settings cannot succeed.
+    /// </param>
     /// <param name="log">Writes one line to the N.I.N.A. log.</param>
     public StarDetectionSettingsReporter(
         Func<StarDetectionSettingsCapture?> capture,
         Func<StarDetectionSettingsCapture, CancellationToken, Task> send,
         Func<Exception, bool> isUnsupported,
+        Func<Exception, bool> isRefused,
         Action<string> log)
-        : this(capture, send, isUnsupported, log, StarDetectionReporterTiming.Default, TimeProvider.System)
+        : this(
+            capture,
+            send,
+            isUnsupported,
+            isRefused,
+            log,
+            StarDetectionReporterTiming.Default,
+            TimeProvider.System)
     {
     }
 
@@ -107,6 +127,7 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
         Func<StarDetectionSettingsCapture?> capture,
         Func<StarDetectionSettingsCapture, CancellationToken, Task> send,
         Func<Exception, bool> isUnsupported,
+        Func<Exception, bool> isRefused,
         Action<string> log,
         StarDetectionReporterTiming timing,
         TimeProvider time)
@@ -114,6 +135,7 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
         this.capture = capture;
         this.send = send;
         this.isUnsupported = isUnsupported;
+        this.isRefused = isRefused;
         this.log = log;
         this.timing = timing;
         this.time = time;
@@ -220,6 +242,7 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
             sendGeneration = currentGeneration;
             lastSent = null;
             unsupportedDestination = null;
+            refused = null;
         }
 
         StarDetectionSettingsCapture? current;
@@ -243,6 +266,11 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
         if (string.Equals(key, lastSent, StringComparison.Ordinal))
         {
             return StarDetectionSendResult.Unchanged;
+        }
+
+        if (string.Equals(key, refused, StringComparison.Ordinal))
+        {
+            return StarDetectionSendResult.Refused;
         }
 
         if (string.Equals(destination, unsupportedDestination, StringComparison.Ordinal)
@@ -270,6 +298,14 @@ public sealed class StarDetectionSettingsReporter : IAsyncDisposable
                 + $"({exception.Message}). The plugin will try again in "
                 + $"{timing.UnsupportedHold.TotalHours:0.#} hours.");
             return StarDetectionSendResult.Unsupported;
+        }
+        catch (Exception exception) when (isRefused(exception))
+        {
+            refused = key;
+            log(
+                $"PSF Guard refused these star-detection settings ({exception.Message}). "
+                + "The plugin sends them again when they change.");
+            return StarDetectionSendResult.Refused;
         }
         catch (Exception exception)
         {

@@ -68,7 +68,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         ConnectionModel.PropertyChanged += (_, _) => ConnectionsChanged();
         CollaborationModel.PropertyChanged += (_, _) => ConnectionsChanged();
         starDetection = new(CaptureStarDetectionSettings, SendStarDetectionSettingsAsync,
-            error => error is CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound },
+            CoordinatorStarDetectionClient.IsMissingRoute, CoordinatorStarDetectionClient.IsRefused,
             message => Logger.Info($"PSF Guard Director: {message}"));
     }
 

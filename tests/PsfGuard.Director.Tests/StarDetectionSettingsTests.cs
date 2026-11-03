@@ -291,7 +291,7 @@ public sealed class StarDetectionSettingsTests
     }
     private static HttpResponseMessage Response(string json, HttpStatusCode status = HttpStatusCode.OK) => new(status)
     { Content = new StringContent(json, Encoding.UTF8, "application/json") };
-    private const string Ack = """{"success":true,"data":{"accepted":true,"received_at_ms":1010},"error":null,"status":"ready"}""";
+    private static readonly string Ack = $$"""{"success":true,"data":{"profile_id":"{{Binding.ProfileId:D}}","stored":true},"error":null,"status":"ready"}""";
     private static CoordinatorStarDetectionClient Client(Handler handler) =>
         new(CoordinatorProgramTests.Endpoint, Binding, _ => ValueTask.FromResult<string?>(Token), handler);
 
@@ -326,14 +326,19 @@ public sealed class StarDetectionSettingsTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.NotFound, CoordinatorIntakeFailure.NotFound)]
-    [InlineData(HttpStatusCode.ServiceUnavailable, CoordinatorIntakeFailure.Busy)]
-    [InlineData(HttpStatusCode.Unauthorized, CoordinatorIntakeFailure.AuthenticationRequired)]
-    public async Task ClientReportsRefusals(HttpStatusCode status, CoordinatorIntakeFailure failure)
+    [InlineData(HttpStatusCode.NotFound, CoordinatorIntakeFailure.NotFound, true, false)]
+    [InlineData(HttpStatusCode.BadRequest, CoordinatorIntakeFailure.UnexpectedStatus, false, true)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, CoordinatorIntakeFailure.Busy, false, false)]
+    [InlineData(HttpStatusCode.Unauthorized, CoordinatorIntakeFailure.AuthenticationRequired, false, false)]
+    [InlineData(HttpStatusCode.Forbidden, CoordinatorIntakeFailure.Forbidden, false, false)]
+    public async Task ClientReportsRefusals(HttpStatusCode status, CoordinatorIntakeFailure failure, bool missingRoute, bool refused)
     {
         using var client = Client(new Handler((_, _) => Task.FromResult(Response("""{"success":false}""", status))));
 
-        Assert.Equal(failure, (await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.SendAsync(Report(), CancellationToken.None))).Failure);
+        var error = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.SendAsync(Report(), CancellationToken.None));
+        Assert.Equal(failure, error.Failure);
+        Assert.Equal(missingRoute, CoordinatorStarDetectionClient.IsMissingRoute(error));
+        Assert.Equal(refused, CoordinatorStarDetectionClient.IsRefused(error));
     }
 
     [Theory]
@@ -370,7 +375,7 @@ public sealed class StarDetectionSettingsTests
                 var failure = Failure;
                 OnRequest?.Invoke(count);
                 return failure is null ? Task.CompletedTask : Task.FromException(new CoordinatorIntakeException(failure.Value));
-            }, error => error is CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound },
+            }, CoordinatorStarDetectionClient.IsMissingRoute, CoordinatorStarDetectionClient.IsRefused,
             line => { lock (Log) Log.Add(line); }, timing, time ?? Clock);
         }
         public StarDetectionSettingsReporter Reporter { get; }
@@ -545,6 +550,36 @@ public sealed class StarDetectionSettingsTests
     }
 
     [Fact]
+    public async Task ReporterSendsRefusedSettingsAgainOnlyOnceTheyChange()
+    {
+        var fixture = new ReporterFixture { Current = Capture(), Failure = CoordinatorIntakeFailure.UnexpectedStatus };
+        var report = fixture.Current.Report;
+
+        Assert.Equal(StarDetectionSendResult.Refused, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(StarDetectionSendResult.Refused, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(1, fixture.Requests);
+
+        fixture.Failure = null;
+        fixture.Current = fixture.Current with { Report = report with { ProfileName = "C925 fixed" } };
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(2, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task TurningSendingBackOnResendsRefusedSettings()
+    {
+        var fixture = new ReporterFixture { Current = Capture(), Failure = CoordinatorIntakeFailure.UnexpectedStatus };
+        Assert.Equal(StarDetectionSendResult.Refused, await fixture.Reporter.SendIfChangedAsync(default));
+
+        fixture.Reporter.Enabled = false;
+        fixture.Reporter.Enabled = true;
+        fixture.Failure = null;
+
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(2, fixture.Requests);
+    }
+
+    [Fact]
     public void RetryDelayDoublesUpToTheLimit()
     {
         var first = TimeSpan.FromSeconds(30);
@@ -601,7 +636,7 @@ public sealed class StarDetectionSettingsTests
         {
             started.TrySetResult();
             await Task.Delay(Timeout.Infinite, token);
-        }, _ => false, _ => { }, StarDetectionReporterTiming.Default with { SettleDelay = TimeSpan.Zero }, TimeProvider.System);
+        }, _ => false, _ => false, _ => { }, StarDetectionReporterTiming.Default with { SettleDelay = TimeSpan.Zero }, TimeProvider.System);
 
         reporter.Start();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10));

@@ -43,5 +43,18 @@ public sealed class CoordinatorStarDetectionClient : IDisposable
             or ArgumentException or FormatException or OverflowException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement); }
     }
+    /// <summary>True when the server has no route for these settings: HTTP 404, an older PSF Guard.</summary>
+    public static bool IsMissingRoute(Exception error) =>
+        error is CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound };
+
+    /// <summary>
+    /// True when the server refused these settings as sent. PSF Guard answers
+    /// 400 for a snapshot that fails validation; the transport reports that,
+    /// and any other status this route never returns, as UnexpectedStatus.
+    /// The same snapshot cannot succeed on a retry.
+    /// </summary>
+    public static bool IsRefused(Exception error) =>
+        error is CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.UnexpectedStatus };
+
     public void Dispose() => transport.Dispose();
 }
