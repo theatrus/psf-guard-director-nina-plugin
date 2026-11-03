@@ -776,6 +776,37 @@ reset remains idempotent and a new code enables Pair without restarting NINA.
 Lost exchange responses or vault write failures require a new code. The server
 UI for issuing/revoking Director codes is separate frontend work.
 
+### Star-detection settings
+
+PSF Guard's quality scan can reproduce the star count and HFR that NINA
+recorded for a frame, but only when it knows the rig's star-detection settings.
+FITS headers do not record them, so a paired Director sends them to
+`POST /api/director/v1/rigs/{rig}/star-detection-settings`. You do not need to
+do anything; the send runs in the background and never delays imaging,
+planning or the sequence.
+
+Director sends the settings when NINA starts with a paired profile, after
+pairing, after a profile switch, and when one of the settings changes. NINA
+reports most changes at once; Director also checks once a minute for changes
+NINA does not report. It sends only when the settings differ from the last ones
+the server accepted. When the server is unreachable, Director retries after
+30 seconds, doubling the wait up to 30 minutes. A server without this endpoint
+is asked again after six hours.
+
+The report contains the NINA profile ID and name, the NINA and Hocus Focus
+versions, and these settings:
+
+- star sensitivity, noise reduction, autostretch factor and black clipping;
+- the autofocus inner and outer crop ratios and the number of brightest stars;
+- the selected star detector;
+- the telescope focal length and camera pixel size;
+- the Hocus Focus options that change which stars it finds or how it measures
+  them.
+
+It uses the same format as PSF Guard Sync, and the server stores both the same
+way. Hocus Focus's other settings, such as save paths and autofocus history,
+are not sent.
+
 ### Capture checkpoint delivery
 
 `CoordinatorCheckpointClient.DeliverAsync` reads the already-open runtime's
