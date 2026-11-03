@@ -102,6 +102,21 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     public string EngineVersion => RuntimeContract.EngineVersion;
     public string AcquisitionStatus => "Not armed";
 
+    // Per profile, on by default, and separate from pairing and every other
+    // option. Turning it back on sends the current settings once.
+    internal const string SendStarDetectionSettingsKey = "SendStarDetectionSettings";
+    public bool SendStarDetectionSettings
+    {
+        get => settings.GetValueBoolean(SendStarDetectionSettingsKey, true);
+        set
+        {
+            if (value == SendStarDetectionSettings) return;
+            settings.SetValueBoolean(SendStarDetectionSettingsKey, value);
+            starDetection.Enabled = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
+        }
+    }
+
     public override async Task Initialize()
     {
         await base.Initialize();
@@ -111,6 +126,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         ConnectionModel.Reload();
         CollaborationModel.Reload();
         WatchStarDetectionSettings(profiles.ActiveProfile);
+        starDetection.Enabled = SendStarDetectionSettings;
         starDetection.Start();
         Refresh();
     }
@@ -181,6 +197,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         ConnectionModel.ProfileChanged();
         CollaborationModel.ProfileChanged();
         WatchStarDetectionSettings(profiles.ActiveProfile);
+        starDetection.Enabled = SendStarDetectionSettings;
         starDetection.RequestSend();
         commandError = null;
         Refresh();
@@ -273,6 +290,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProfileName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CheckInStatus)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
         start.Refresh();
         stop.Refresh();
         checkIn.Refresh();

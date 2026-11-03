@@ -21,6 +21,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <TextBlock Grid.Row="0" Text="Profile" Margin="0,4,16,8" />
             <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProfileName}" TextWrapping="Wrap" Margin="0,4,0,8" />
@@ -57,7 +58,13 @@
                 </WrapPanel>
                 <TextBlock Text="{Binding PairingStatus}" TextWrapping="Wrap" />
             </StackPanel>
-            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,16,0,0">
+            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                <CheckBox IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4">
+                    <TextBlock Text="Send star-detection settings to PSF Guard" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does. Sent while this profile is paired, even when acquisition is off." TextWrapping="Wrap" />
+            </StackPanel>
+            <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
                 <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />
                 <WrapPanel>
                     <Button Command="{Binding CheckInCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6">

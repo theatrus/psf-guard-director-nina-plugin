@@ -132,6 +132,7 @@ public sealed class SettingsViewTests
         public ICommand CheckInCommand { get; } = new StubCommand(state != "Ready");
         public ICommand CancelCheckInCommand { get; } = new StubCommand(false);
         public string CheckInStatus => "Checked in 128 runs; 16000 events; 4 workloads released";
+        public bool SendStarDetectionSettings { get; set; } = true;
     }
 
     public sealed class ConnectionViewModel

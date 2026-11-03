@@ -166,6 +166,30 @@ public sealed class StarDetectionSettingsTests
     }
 
     [Fact]
+    public void SendingIsAPerProfileSwitchThatDefaultsOn()
+    {
+        var plugins = new NINA.Profile.PluginSettings();
+        plugins.SetValue(DirectorPluginId, "CoordinatorUrl", "https://psf-guard.example/");
+        var profile = new Mock<IProfile>();
+        profile.SetupGet(p => p.Id).Returns(Binding.ProfileId);
+        profile.SetupGet(p => p.PluginSettings).Returns(plugins);
+        var profiles = new Mock<IProfileService>();
+        profiles.SetupGet(p => p.ActiveProfile).Returns(profile.Object);
+        var plugin = new DirectorPlugin(profiles.Object);
+
+        Assert.True(plugin.SendStarDetectionSettings);
+        plugin.SendStarDetectionSettings = false;
+
+        Assert.False(plugin.SendStarDetectionSettings);
+        Assert.True(plugins.TryGetValue(DirectorPluginId, DirectorPlugin.SendStarDetectionSettingsKey, out bool stored));
+        Assert.False(stored);
+        Assert.True(plugins.TryGetValue(DirectorPluginId, "CoordinatorUrl", out string url));
+        Assert.Equal("https://psf-guard.example/", url);
+        plugin.SendStarDetectionSettings = true;
+        Assert.True(plugin.SendStarDetectionSettings);
+    }
+
+    [Fact]
     public void HocusFocusSelectionKeepsOnlyAllowlistedKeys()
     {
         var selected = HocusFocusSettings.Select(HocusFocusBlock().TryGetValue);
@@ -332,11 +356,12 @@ public sealed class StarDetectionSettingsTests
     private sealed class ReporterFixture
     {
         private int requests;
+        private int captures;
         public ReporterFixture() : this(StarDetectionReporterTiming.Default, null) { }
         public ReporterFixture(StarDetectionReporterTiming timing, TimeProvider? time)
         {
             Capture = () => Current;
-            Reporter = new(() => Capture(), (capture, _) =>
+            Reporter = new(() => { Interlocked.Increment(ref captures); return Capture(); }, (capture, _) =>
             {
                 var count = Interlocked.Increment(ref requests);
                 LastDestination = capture.DestinationKey;
@@ -355,6 +380,7 @@ public sealed class StarDetectionSettingsTests
         public string? LastDestination { get; private set; }
         public List<string> Log { get; } = [];
         public int Requests => Volatile.Read(ref requests);
+        public int Captures => Volatile.Read(ref captures);
     }
 
     private static StarDetectionSettingsCapture Capture(string destination = "rig-a") => new(destination, Report());
@@ -394,6 +420,82 @@ public sealed class StarDetectionSettingsTests
 
         Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
         Assert.Equal("rig-b", fixture.LastDestination);
+    }
+
+    [Fact]
+    public async Task ReporterSendsWhileOn()
+    {
+        var fixture = new ReporterFixture { Current = Capture() };
+
+        Assert.True(fixture.Reporter.Enabled);
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(1, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task ReporterReadsAndSendsNothingWhileOff()
+    {
+        var fixture = new ReporterFixture { Current = Capture() };
+        fixture.Reporter.Enabled = false;
+
+        Assert.Equal(StarDetectionSendResult.Disabled, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(0, fixture.Captures);
+        Assert.Equal(0, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task TurningSendingBackOnSendsTheSameSettingsOnce()
+    {
+        var fixture = new ReporterFixture { Current = Capture() };
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+
+        fixture.Reporter.Enabled = false;
+        Assert.Equal(StarDetectionSendResult.Disabled, await fixture.Reporter.SendIfChangedAsync(default));
+        fixture.Reporter.Enabled = true;
+
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(StarDetectionSendResult.Unchanged, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(2, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task TurningSendingBackOnEndsTheMissingRouteHold()
+    {
+        var fixture = new ReporterFixture { Current = Capture(), Failure = CoordinatorIntakeFailure.NotFound };
+        Assert.Equal(StarDetectionSendResult.Unsupported, await fixture.Reporter.SendIfChangedAsync(default));
+
+        fixture.Reporter.Enabled = false;
+        fixture.Reporter.Enabled = true;
+        fixture.Failure = null;
+
+        Assert.Equal(StarDetectionSendResult.Sent, await fixture.Reporter.SendIfChangedAsync(default));
+        Assert.Equal(2, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task BackgroundWorkerWaitsWhileOffAndSendsOnceTurnedOn()
+    {
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fixture = new ReporterFixture(StarDetectionReporterTiming.Default with
+        {
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            SettleDelay = TimeSpan.FromMilliseconds(10)
+        }, TimeProvider.System)
+        { Current = Capture() };
+        fixture.OnRequest = _ => sent.TrySetResult();
+        fixture.Reporter.Enabled = false;
+
+        fixture.Reporter.Start();
+        fixture.Reporter.RequestSend();
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        Assert.Equal(0, fixture.Captures);
+        Assert.Equal(0, fixture.Requests);
+
+        fixture.Reporter.Enabled = true;
+        await sent.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await fixture.Reporter.DisposeAsync();
+
+        Assert.Equal(1, fixture.Requests);
     }
 
     [Fact]

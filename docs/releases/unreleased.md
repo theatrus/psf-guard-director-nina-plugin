@@ -3,8 +3,10 @@
 - Send the profile's star-detection settings to PSF Guard, so its quality scan
   can reproduce the star count and HFR NINA recorded. Director sends them at
   startup, after pairing or a profile switch, and when a setting changes, and
-  retries in the background without delaying imaging. Requires a PSF Guard
-  server with the Director star-detection settings endpoint.
+  retries in the background without delaying imaging. Turn off **Send
+  star-detection settings** in plugin settings to stop sending them; it is on by
+  default. Requires a PSF Guard server with the Director star-detection
+  settings endpoint.
 
 - Preserve measured guider RMS in arcseconds and explicitly pixel-valued HFR
   in saved FITS/XISF headers. PSF Guard can use these measurements after delayed

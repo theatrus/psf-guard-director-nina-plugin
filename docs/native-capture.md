@@ -781,9 +781,14 @@ UI for issuing/revoking Director codes is separate frontend work.
 PSF Guard's quality scan can reproduce the star count and HFR that NINA
 recorded for a frame, but only when it knows the rig's star-detection settings.
 FITS headers do not record them, so a paired Director sends them to
-`POST /api/director/v1/rigs/{rig}/star-detection-settings`. You do not need to
-do anything; the send runs in the background and never delays imaging,
-planning or the sequence.
+`POST /api/director/v1/rigs/{rig}/star-detection-settings`. The send runs in
+the background and never delays imaging, planning or the sequence.
+
+**Send star-detection settings** in Director's plugin settings controls this
+for the current NINA profile. It is on by default and does not depend on any
+other option. When it is off, Director reads and sends nothing. When you turn
+it back on, Director sends the current settings once, even if the server
+already has them.
 
 Director sends the settings when NINA starts with a paired profile, after
 pairing, after a profile switch, and when one of the settings changes. NINA
