@@ -206,7 +206,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Reporting equipment silently changed the active rig setup.");
             var manual = await OperatorAsync(HttpMethod.Put, "catalogs/director-simulator/rig/profile", new
             {
-                expected_revision = 0,
+                expected_revision = before.RootElement.GetProperty("data").GetProperty("profile").GetProperty("revision").GetUInt64(),
                 optics = new
                 {
                     value = new
@@ -375,11 +375,20 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var restarted = new CoordinatorProgramClient(endpoint, Credential);
         var second = await restarted.ReadAndCachePreviewAsync(binding, configuration,
             new CoordinatorPreviewCache(root, endpoint, binding, configuration), token);
+        await File.WriteAllTextAsync(Path.Combine(root, "preview-program.json"), JsonSerializer.Serialize(second.Envelope, Wire), token);
+        // The server folds identical native-imaging contributions on the
+        // first target into one two-frame goal; the total capture budget is
+        // still three frames across two targets.
+        var expectedGoals = NativeImaging ? 2 : MoonAvoidance ? 4 : 3;
+        var expectedFrames = (MoonAvoidance ? 4U : 3U) * (QualityScenario is null ? 1U : 12U);
         if (first.ETag != second.ETag || first.Envelope.Program.Assignment.Id != second.Envelope.Program.Assignment.Id
-            || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
-            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested != (QualityScenario is null ? 1U : 12U) || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
+            || second.Envelope.Omitted.Length != 0 || second.Envelope.Program.Assignment.Goals.Length != expectedGoals
+            || second.Envelope.Program.Assignment.Goals.Sum(g => (long)g.Requested) != expectedFrames
+            || second.Envelope.Program.Assignment.Goals.Any(g => g.Requested == 0
+                || (!NativeImaging && g.Requested != (QualityScenario is null ? 1U : 12U))
+                || g.ExposureMs != (PublicUnsafe || EnclosureClosure ? 30000UL : 1000UL))
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
-            throw new InvalidDataException("Server program does not match the bounded simulator fixture.");
+            throw new InvalidDataException($"Server program does not match the bounded simulator fixture: same ETag={first.ETag == second.ETag}, same assignment={first.Envelope.Program.Assignment.Id == second.Envelope.Program.Assignment.Id}, omitted={second.Envelope.Omitted.Length}, goals={second.Envelope.Program.Assignment.Goals.Length}, targets={second.Envelope.Program.Targets.Length}.");
         previewRevision = second.Envelope.Revision;
         if (ObservingPreferences && second.Envelope.Program.ObservingPreferences?.Bindings.Count != 3)
             throw new InvalidDataException("Server omitted the observing preferences from its program.");
@@ -605,9 +614,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             new CoordinatorPreviewCache(root, endpoint, pairing.Binding, configuration), token);
         if (!delivered && preview.Envelope.Revision != previewRevision)
             throw new InvalidDataException("Server restart changed unchanged program identity.");
-        if (delivered && (preview.Envelope.Revision == previewRevision || preview.Envelope.Program.Assignment.Goals.Length != (MoonAvoidance ? 4 : 3)
-            || preview.Envelope.Program.Assignment.Goals.Any(g => g.Pending != (MoonAvoidance && g.Priority == 100 ? 0U : 1U) || g.Accepted != 0)))
-            throw new InvalidDataException("Server did not retain exactly one pending capture per goal after duplicate delivery.");
+        if (delivered && (preview.Envelope.Revision == previewRevision || preview.Envelope.Program.Assignment.Goals.Length != (NativeImaging ? 2 : MoonAvoidance ? 4 : 3)
+            || preview.Envelope.Program.Assignment.Goals.Any(g => g.Pending != (NativeImaging ? g.Requested : MoonAvoidance && g.Priority == 100 ? 0U : 1U) || g.Accepted != 0)))
+            throw new InvalidDataException("Server did not retain the expected pending captures after duplicate delivery.");
         using var allocations = new CoordinatorAllocationClient(endpoint, Credential);
         var current = await allocations.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);
         if (current.Fingerprint != allocation?.Fingerprint)
@@ -671,7 +680,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     {
         using var request = new HttpRequestMessage(method, $"api/director/v1/{path}") { Content = value is null ? null : JsonBody(value, options: Wire) };
         using var response = await operatorClient.SendAsync(request, token);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"{path}: {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(token)}");
         using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
         if (!body.RootElement.GetProperty("success").GetBoolean()) throw new InvalidDataException("Simulator operator setup failed.");
         return body.RootElement.GetProperty("data").Clone();

@@ -44,6 +44,10 @@ public sealed class SettingsViewTests
         {
             Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/Button.xaml")
         });
+        resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/CheckBox.xaml")
+        });
         var dictionary = new Options();
         var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
         foreach (var width in new[] { 240, 280, 360, 640 })
@@ -78,6 +82,18 @@ public sealed class SettingsViewTests
                     Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(label.Foreground).Color);
                     Assert.True(button.ActualWidth >= label.ActualWidth + 20);
                     var bounds = button.TransformToAncestor(host).TransformBounds(new Rect(button.RenderSize));
+                    Assert.True(bounds.Right <= width && bounds.Left >= 0);
+                }
+                var options = Descendants(host).OfType<CheckBox>().ToArray();
+                Assert.Equal(3, options.Length);
+                Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Allow loopback HTTP for isolated testing" },
+                    options.Select(option => Assert.IsType<string>(option.Content)));
+                foreach (var option in options)
+                {
+                    var label = Assert.Single(Descendants(option).OfType<TextBlock>(), text => text.Text == (string)option.Content);
+                    Assert.True(label.Visibility == Visibility.Visible && label.ActualWidth > 0 && label.ActualHeight > 0,
+                        $"The NINA theme must not hide '{option.Content}'.");
+                    var bounds = label.TransformToAncestor(host).TransformBounds(new Rect(label.RenderSize));
                     Assert.True(bounds.Right <= width && bounds.Left >= 0);
                 }
                 var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);

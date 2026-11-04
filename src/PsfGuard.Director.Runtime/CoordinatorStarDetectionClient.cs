@@ -68,6 +68,11 @@ public sealed class CoordinatorStarDetectionClient : IDisposable
             PipeProtocol.RequireFields(root, "success", "data", "error", "status");
             if (root.GetProperty("success").ValueKind != JsonValueKind.True || root.GetProperty("error").ValueKind != JsonValueKind.Null
                 || root.GetProperty("status").GetString() != "ready") throw new InvalidDataException();
+            var data = root.GetProperty("data");
+            PipeProtocol.RequireFields(data, "profile_id", "stored");
+            if (data.GetProperty("profile_id").GetGuid() != binding.ProfileId
+                || data.GetProperty("stored").ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidDataException();
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }

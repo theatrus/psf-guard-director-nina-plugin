@@ -4,6 +4,16 @@
     <DataTemplate x:Key="PSF Guard Director_Options">
         <Grid MaxWidth="640" HorizontalAlignment="Left" Margin="0,8">
             <Grid.Resources>
+                <!-- NINA's implicit CheckBox style draws only an ON/OFF switch. -->
+                <Style x:Key="LabeledOption" TargetType="CheckBox">
+                    <Setter Property="ContentTemplate">
+                        <Setter.Value>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
                 <Style x:Key="ActionLabel" TargetType="TextBlock">
                     <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
                     <Setter Property="Margin" Value="{Binding Padding, RelativeSource={RelativeSource AncestorType=Button}}" />
@@ -43,9 +53,7 @@
                 <TextBlock Text="Coordinator" FontWeight="Bold" Margin="0,0,0,8" />
                 <TextBlock Text="Server URL" Margin="0,0,0,4" />
                 <TextBox Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MinWidth="160" />
-                <CheckBox IsChecked="{Binding AllowInsecureHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8">
-                    <TextBlock Text="Allow unencrypted HTTP" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
-                </CheckBox>
+                <CheckBox Content="Allow unencrypted HTTP" Style="{StaticResource LabeledOption}" IsChecked="{Binding AllowInsecureHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8" />
                 <TextBlock Text="Pairing code" Margin="0,0,0,4" />
                 <TextBox Text="{Binding PairingCode, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MinWidth="160" />
                 <WrapPanel Margin="0,8,0,0">
@@ -59,9 +67,7 @@
                 <TextBlock Text="{Binding PairingStatus}" TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                <CheckBox IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4">
-                    <TextBlock Text="Send star-detection settings to PSF Guard" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
-                </CheckBox>
+                <CheckBox Content="Send star-detection settings to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4" />
                 <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
@@ -81,9 +87,7 @@
                     <TextBox Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" />
                     <TextBlock Text="Remote rig name" Margin="0,8,0,4" />
                     <TextBox Text="{Binding RigName, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MaxLength="128" />
-                    <CheckBox IsChecked="{Binding AllowLoopbackHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8">
-                        <TextBlock Text="Allow loopback HTTP for isolated testing" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
-                    </CheckBox>
+                    <CheckBox Content="Allow loopback HTTP for isolated testing" Style="{StaticResource LabeledOption}" IsChecked="{Binding AllowLoopbackHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8" />
                     <TextBlock Text="Pairing code" Margin="0,0,0,4" />
                     <TextBox Text="{Binding PairingCode, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MaxLength="512" />
                     <WrapPanel Margin="0,8,0,0">

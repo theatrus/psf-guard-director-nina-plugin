@@ -394,10 +394,26 @@ public sealed class StarDetectionSettingsTests
     [InlineData("""{"success":true,"data":{},"error":null,"status":"pending"}""")]
     [InlineData("""{"success":true,"data":{},"error":null}""")]
     [InlineData("""{"success":true,"data":{},"error":null,"status":"ready","status":"ready"}""")]
+    [InlineData("""{"success":true,"data":null,"error":null,"status":"ready"}""")]
+    [InlineData("""{"success":true,"data":{},"error":null,"status":"ready"}""")]
+    [InlineData("""{"success":true,"data":{"profile_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","stored":true},"error":null,"status":"ready"}""")]
+    [InlineData("""{"success":true,"data":{"profile_id":"invalid","stored":true},"error":null,"status":"ready"}""")]
     public async Task ClientFailsClosedOnMalformedAcknowledgements(string json)
     {
         using var client = Client(new Handler((_, _) => Task.FromResult(Response(json))));
 
+        Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement,
+            (await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.SendAsync(Report(), CancellationToken.None))).Failure);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"true\"")]
+    [InlineData("0")]
+    public async Task ClientRequiresAnExplicitBooleanStorageAcknowledgement(string stored)
+    {
+        var json = Ack.Replace("\"stored\":true", "\"stored\":" + stored);
+        using var client = Client(new Handler((_, _) => Task.FromResult(Response(json))));
         Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement,
             (await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.SendAsync(Report(), CancellationToken.None))).Failure);
     }
