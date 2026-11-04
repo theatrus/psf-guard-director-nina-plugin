@@ -10,6 +10,10 @@ using Xunit;
 
 namespace PsfGuard.Director.Tests;
 
+[CollectionDefinition("WPF settings rendering", DisableParallelization = true)]
+public sealed class WpfSettingsRenderingCollection;
+
+[Collection("WPF settings rendering")]
 public sealed class SettingsViewTests
 {
     [Fact]
@@ -30,7 +34,8 @@ public sealed class SettingsViewTests
     {
         RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         // WPF's pack resource loader needs an application resource scope. This
-        // test uses NINA's actual button template, not a browser approximation.
+        // test uses NINA's actual themes. Keep the process-wide Application
+        // exclusive: native workflow fixtures can capture its dispatcher.
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var resources = app.Resources;
         foreach (var key in new[] { "BackgroundBrush", "SecondaryBackgroundBrush", "TertiaryBackgroundBrush", "BorderBrush" })
@@ -48,71 +53,81 @@ public sealed class SettingsViewTests
         {
             Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/CheckBox.xaml")
         });
-        var dictionary = new Options();
-        var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
-        foreach (var width in new[] { 240, 280, 360, 640 })
-            foreach (var state in new[] { "Stopped", "Ready", "Runtime verification or protocol failed. Reinstall the matching Director bundle." })
-            {
-                var model = new ViewModel(state);
-                var content = (FrameworkElement)template.LoadContent();
-                content.DataContext = model;
-                var host = new Border
+        try
+        {
+            var dictionary = new Options();
+            var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
+            foreach (var width in new[] { 240, 280, 360, 640 })
+                foreach (var state in new[] { "Stopped", "Ready", "Runtime verification or protocol failed. Reinstall the matching Director bundle." })
                 {
-                    Width = width,
-                    Padding = new Thickness(16),
-                    Background = Brushes.Black,
-                    Child = content
-                };
-                TextElementForeground(host);
-                host.Measure(new Size(width, double.PositiveInfinity));
-                host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
-                host.UpdateLayout();
-                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
-                host.UpdateLayout();
-                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
-                var buttons = Descendants(host).OfType<Button>().ToArray();
-                Assert.Equal(13, buttons.Length);
-                Assert.Equal(state != "Ready", buttons[0].IsEnabled);
-                Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
-                foreach (var button in buttons)
-                {
-                    Assert.NotNull(button.Command);
-                    Assert.Same(resources["StandardButton"], button.Style);
-                    var label = Assert.IsType<TextBlock>(button.Content);
-                    Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(label.Foreground).Color);
-                    Assert.True(button.ActualWidth >= label.ActualWidth + 20);
-                    var bounds = button.TransformToAncestor(host).TransformBounds(new Rect(button.RenderSize));
-                    Assert.True(bounds.Right <= width && bounds.Left >= 0);
+                    var model = new ViewModel(state);
+                    var content = (FrameworkElement)template.LoadContent();
+                    content.DataContext = model;
+                    var host = new Border
+                    {
+                        Width = width,
+                        Padding = new Thickness(16),
+                        Background = Brushes.Black,
+                        Child = content
+                    };
+                    TextElementForeground(host);
+                    host.Measure(new Size(width, double.PositiveInfinity));
+                    host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
+                    host.UpdateLayout();
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                    host.UpdateLayout();
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                    var buttons = Descendants(host).OfType<Button>().ToArray();
+                    Assert.Equal(13, buttons.Length);
+                    Assert.Equal(state != "Ready", buttons[0].IsEnabled);
+                    Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
+                    foreach (var button in buttons)
+                    {
+                        Assert.NotNull(button.Command);
+                        Assert.Same(resources["StandardButton"], button.Style);
+                        var label = Assert.IsType<TextBlock>(button.Content);
+                        Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(label.Foreground).Color);
+                        Assert.True(button.ActualWidth >= label.ActualWidth + 20);
+                        var bounds = button.TransformToAncestor(host).TransformBounds(new Rect(button.RenderSize));
+                        Assert.True(bounds.Right <= width && bounds.Left >= 0);
+                    }
+                    var options = Descendants(host).OfType<CheckBox>().ToArray();
+                    Assert.Equal(3, options.Length);
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Allow loopback HTTP for isolated testing" },
+                        options.Select(option => Assert.IsType<string>(option.Content)));
+                    foreach (var option in options)
+                    {
+                        var label = Assert.Single(Descendants(option).OfType<TextBlock>(), text => text.Text == (string)option.Content);
+                        Assert.True(label.Visibility == Visibility.Visible && label.ActualWidth > 0 && label.ActualHeight > 0,
+                            $"The NINA theme must not hide '{option.Content}'.");
+                        var bounds = label.TransformToAncestor(host).TransformBounds(new Rect(label.RenderSize));
+                        Assert.True(bounds.Right <= width && bounds.Left >= 0);
+                    }
+                    var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+                    var drawing = new DrawingVisual();
+                    using (var context = drawing.RenderOpen())
+                        context.DrawRectangle(new VisualBrush(host), null, new Rect(0, 0, width, host.ActualHeight));
+                    bitmap.Render(drawing);
+                    var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+                    bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+                    Assert.True(pixels.Where((_, index) => index % 4 != 3).Count(value => value > 150) > 1000,
+                        "Settings render must contain visible controls and text.");
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                    var path = Path.Combine(FindRoot(), "artifacts", $"settings-{width}-{(state.Length > 10 ? "fault" : state.ToLowerInvariant())}.png");
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    using var file = File.Create(path);
+                    encoder.Save(file);
                 }
-                var options = Descendants(host).OfType<CheckBox>().ToArray();
-                Assert.Equal(3, options.Length);
-                Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Allow loopback HTTP for isolated testing" },
-                    options.Select(option => Assert.IsType<string>(option.Content)));
-                foreach (var option in options)
-                {
-                    var label = Assert.Single(Descendants(option).OfType<TextBlock>(), text => text.Text == (string)option.Content);
-                    Assert.True(label.Visibility == Visibility.Visible && label.ActualWidth > 0 && label.ActualHeight > 0,
-                        $"The NINA theme must not hide '{option.Content}'.");
-                    var bounds = label.TransformToAncestor(host).TransformBounds(new Rect(label.RenderSize));
-                    Assert.True(bounds.Right <= width && bounds.Left >= 0);
-                }
-                var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
-                var drawing = new DrawingVisual();
-                using (var context = drawing.RenderOpen())
-                    context.DrawRectangle(new VisualBrush(host), null, new Rect(0, 0, width, host.ActualHeight));
-                bitmap.Render(drawing);
-                var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
-                bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
-                Assert.True(pixels.Where((_, index) => index % 4 != 3).Count(value => value > 150) > 1000,
-                    "Settings render must contain visible controls and text.");
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                var path = Path.Combine(FindRoot(), "artifacts", $"settings-{width}-{(state.Length > 10 ? "fault" : state.ToLowerInvariant())}.png");
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                using var file = File.Create(path);
-                encoder.Save(file);
-            }
-        app.Shutdown();
+        }
+        finally
+        {
+            app.Shutdown();
+            // Shutdown queues its cleanup on the dispatcher. Drain it before
+            // exiting this thread so native collections cannot retain a dead UI.
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        }
+        Assert.Null(Application.Current);
     }
 
     private static void TextElementForeground(DependencyObject host) =>
