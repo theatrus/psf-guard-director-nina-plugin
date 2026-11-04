@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using System.Windows.Media.Imaging;
 using PsfGuard.Director.Plugin;
 using Xunit;
 
@@ -14,7 +15,7 @@ public sealed class ReleaseManifestTests
         var template = JsonNode.Parse(File.ReadAllText(Path.Combine(ProcessTests.BundleDirectory, "packaging", "manifest.template.json")))!;
         template["Installer"] = new JsonObject
         {
-            ["URL"] = "https://github.com/theatrus/psf-guard-director-nina-plugin/releases/download/0.1.0.0-preview.1/PSFGuardDirector-0.1.0.0.zip",
+            ["URL"] = "https://github.com/theatrus/psf-guard-director-nina-plugin/releases/download/0.1.0.0-beta.1/PSFGuardDirector-0.1.0.0.zip",
             ["Type"] = "ARCHIVE",
             ["ChecksumType"] = "SHA256",
             ["Checksum"] = new string('A', 64)
@@ -24,7 +25,7 @@ public sealed class ReleaseManifestTests
     }
 
     [Fact]
-    public void RegistryTemplateMatchesCompiledPluginAndLabelsNarrowExperimentalMode()
+    public void RegistryTemplateMatchesCompiledPluginWithBetaLabelAndIcon()
     {
         var template = JsonNode.Parse(File.ReadAllText(Path.Combine(ProcessTests.BundleDirectory, "packaging", "manifest.template.json")))!;
         var assembly = typeof(DirectorPlugin).Assembly;
@@ -40,7 +41,7 @@ public sealed class ReleaseManifestTests
             Assert.Equal(metadata[key], template[key]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], template["Descriptions"]!["ShortDescription"]!.GetValue<string>());
         Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
-        Assert.Contains("Experimental", metadata["ShortDescription"]);
+        Assert.StartsWith("Beta ", metadata["ShortDescription"]);
         Assert.Contains("local target scheduling", metadata["ShortDescription"]);
         var description = template["Descriptions"]!["LongDescription"]!.GetValue<string>();
         Assert.Equal(metadata["LongDescription"], description);
@@ -48,7 +49,15 @@ public sealed class ReleaseManifestTests
         Assert.Contains("Settled-night restart is opt-in; uncertain-work resume and real-sky full-night acceptance remain unavailable", description);
         Assert.Contains("Do not use for unattended imaging", description);
         Assert.Null(template["Channel"]);
+        Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "beta");
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "experimental");
+        const string iconUrl = "https://raw.githubusercontent.com/theatrus/psf-guard-director-nina-plugin/main/assets/psf-guard-director.png";
+        Assert.Equal(iconUrl, metadata["FeaturedImageURL"]);
+        Assert.Equal(iconUrl, template["Descriptions"]!["FeaturedImageURL"]!.GetValue<string>());
+        using var iconFile = File.OpenRead(Path.Combine(ProcessTests.BundleDirectory, "assets", "psf-guard-director.png"));
+        var icon = BitmapDecoder.Create(iconFile, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
+        Assert.Equal(256, icon.PixelWidth);
+        Assert.Equal(256, icon.PixelHeight);
         Assert.Null(template["Installer"]);
     }
 }

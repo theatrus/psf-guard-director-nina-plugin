@@ -1,5 +1,9 @@
 # PSF Guard Director for N.I.N.A.
 
+<img src="assets/psf-guard-director.png" alt="PSF Guard Director icon" width="96" />
+
+**Beta.** Installable from the PSF Guard plugin source in NINA 3.2 or 3.3.
+
 **Plan in PSF Guard. Image in N.I.N.A.** Director runs your observing projects
 through NINA's Advanced Sequencer. It chooses what to image next, prepares the
 equipment, captures frames, and reports progress back to
