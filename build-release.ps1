@@ -13,7 +13,7 @@ try {
         throw 'Manifest version does not match the built plugin.'
     }
     & "$PSScriptRoot/tools/validate-preview-manifest.ps1" -Manifest $manifest
-    $tag = "$version-preview.1"
+    $tag = "$version-beta.1"
     $name = "PSFGuardDirector-$version.zip"
     $archive = Join-Path $PSScriptRoot "artifacts/$name"
     Copy-Item -LiteralPath "$PSScriptRoot/artifacts/PSFGuardDirector-0.1.0.0-dev.zip" -Destination $archive

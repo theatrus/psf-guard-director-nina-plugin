@@ -9,6 +9,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -30,7 +31,7 @@ jobs:
         shell: pwsh
         run: ./tools/test-runtime-fetch.ps1
       - run: dotnet build --configuration Release --no-restore
-      - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx"
+      - run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=director.trx" --blame-hang-timeout 2m --blame-hang-dump-type none
       - name: Stress ledger and preparation recovery
         shell: pwsh
         run: |
@@ -55,8 +56,8 @@ jobs:
         with:
           name: director-preview-release
           path: |
-            artifacts/PSFGuardDirector-0.1.0.2.zip
-            artifacts/PSFGuardDirector-0.1.0.2.manifest.json
+            artifacts/PSFGuardDirector-0.1.0.3.zip
+            artifacts/PSFGuardDirector-0.1.0.3.manifest.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: always()
@@ -64,4 +65,5 @@ jobs:
           name: director-test-results
           path: |
             **/TestResults/*.trx
+            **/TestResults/**/*.xml
             artifacts/settings-*.png

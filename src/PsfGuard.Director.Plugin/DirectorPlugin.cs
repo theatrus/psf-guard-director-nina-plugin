@@ -35,6 +35,9 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     internal CollaborationConnection CollaborationModel { get; }
     public object Collaboration => CollaborationModel;
     private bool refreshingConnections;
+    private readonly StarDetectionSettingsReporter starDetection;
+    private readonly List<INotifyPropertyChanged> watchedStarDetectionSettings = [];
+    private string? starDetectionConnection;
 
     [ImportingConstructor]
     public DirectorPlugin(IProfileService profileService)
@@ -64,6 +67,9 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
             () => checkInCancellation is not null, ReportError);
         ConnectionModel.PropertyChanged += (_, _) => ConnectionsChanged();
         CollaborationModel.PropertyChanged += (_, _) => ConnectionsChanged();
+        starDetection = new(CaptureStarDetectionSettings, SendStarDetectionSettingsAsync,
+            CoordinatorStarDetectionClient.IsMissingRoute, CoordinatorStarDetectionClient.IsRefused,
+            message => Logger.Info($"PSF Guard Director: {message}"));
     }
 
     private void ConnectionsChanged()
@@ -74,6 +80,13 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         {
             start.Refresh(); checkIn.Refresh();
             ConnectionModel.Changed(); CollaborationModel.Changed();
+            // Pairing, reset or a new server URL can change where the settings go.
+            var connection = ConnectionModel.ServerUrl + "\n" + ConnectionModel.PairingStatus;
+            if (initialized && connection != starDetectionConnection)
+            {
+                starDetectionConnection = connection;
+                starDetection.RequestSend();
+            }
         }
         finally { refreshingConnections = false; }
     }
@@ -89,6 +102,21 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     public string EngineVersion => RuntimeContract.EngineVersion;
     public string AcquisitionStatus => "Not armed";
 
+    // Per profile, on by default, and separate from pairing and every other
+    // option. Turning it back on sends the current settings once.
+    internal const string SendStarDetectionSettingsKey = "SendStarDetectionSettings";
+    public bool SendStarDetectionSettings
+    {
+        get => settings.GetValueBoolean(SendStarDetectionSettingsKey, true);
+        set
+        {
+            if (value == SendStarDetectionSettings) return;
+            settings.SetValueBoolean(SendStarDetectionSettingsKey, value);
+            starDetection.Enabled = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
+        }
+    }
+
     public override async Task Initialize()
     {
         await base.Initialize();
@@ -97,6 +125,9 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         initialized = true;
         ConnectionModel.Reload();
         CollaborationModel.Reload();
+        WatchStarDetectionSettings(profiles.ActiveProfile);
+        starDetection.Enabled = SendStarDetectionSettings;
+        starDetection.Start();
         Refresh();
     }
 
@@ -105,6 +136,9 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         initialized = false;
         checkInCancellation?.Cancel();
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
+        WatchStarDetectionSettings(null);
+        try { await starDetection.DisposeAsync(); }
+        catch (Exception error) { Logger.Error(error); }
         ConnectionModel.Dispose();
         CollaborationModel.Dispose();
         profiles.ProfileChanged -= ProfileChanged;
@@ -162,12 +196,73 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         Interlocked.Increment(ref profileTransitions);
         ConnectionModel.ProfileChanged();
         CollaborationModel.ProfileChanged();
+        WatchStarDetectionSettings(profiles.ActiveProfile);
+        starDetection.Enabled = SendStarDetectionSettings;
+        starDetection.RequestSend();
         commandError = null;
         Refresh();
         try { await runtime.StopAsync(); }
         catch (Exception error) { ReportError(error); }
         finally { Interlocked.Decrement(ref profileTransitions); Refresh(); }
     }
+
+    private sealed record StarDetectionDestination(Uri Endpoint, CoordinatorBinding Binding, Guid ClientId, bool AllowInsecureHttp);
+
+    // Null until this profile is paired with the configured server. The report
+    // carries no credential; the token is read again when the request is sent.
+    private StarDetectionSettingsCapture? CaptureStarDetectionSettings()
+    {
+        if (!initialized) return null;
+        var profile = profiles.ActiveProfile;
+        var endpoint = ConnectionModel.ResolvedEndpoint;
+        if (endpoint is null) return null;
+        var pairing = DirectorCredentialStore.Read(endpoint, profile.Id);
+        if (pairing is null || pairing.Binding.ProfileId != profile.Id) return null;
+        var report = StarDetectionProfileReader.Read(profile, StarDetectionProfileReader.NinaVersion(),
+            StarDetectionProfileReader.HocusFocusVersion(), DateTimeOffset.UtcNow);
+        if (profiles.ActiveProfile.Id != profile.Id)
+            throw new InvalidOperationException("The active NINA profile changed while Director read its star-detection settings.");
+        var binding = pairing.Binding;
+        return new($"{endpoint.AbsoluteUri}\n{binding.CoordinatorInstanceId:D}\n{binding.CatalogId:D}\n{binding.RigId:D}\n{binding.ProfileId:D}\n{pairing.ClientId:D}",
+            report, new StarDetectionDestination(endpoint, binding, pairing.ClientId, ConnectionModel.AllowInsecureHttp));
+    }
+
+    private static async Task SendStarDetectionSettingsAsync(StarDetectionSettingsCapture capture, CancellationToken token)
+    {
+        var target = (StarDetectionDestination)capture.Destination!;
+        ValueTask<string?> Credential(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var current = DirectorCredentialStore.Read(target.Endpoint, target.Binding.ProfileId);
+            if (current?.ClientId != target.ClientId || current.Binding != target.Binding)
+                throw new InvalidOperationException("Pairing changed while sending star-detection settings.");
+            return ValueTask.FromResult<string?>(current.Token);
+        }
+        using var client = new CoordinatorStarDetectionClient(target.Endpoint, target.Binding, Credential, target.AllowInsecureHttp);
+        await client.SendAsync(capture.Report, token);
+    }
+
+    // Check again as soon as NINA reports a change to a settings group that
+    // holds star-detection settings. The reporter's once-a-minute check covers
+    // changes NINA does not report.
+    private void WatchStarDetectionSettings(IProfile? profile)
+    {
+        lock (watchedStarDetectionSettings)
+        {
+            foreach (var watched in watchedStarDetectionSettings) watched.PropertyChanged -= StarDetectionSettingChanged;
+            watchedStarDetectionSettings.Clear();
+            if (profile is null) return;
+            foreach (var group in new INotifyPropertyChanged?[] { profile.ImageSettings, profile.FocuserSettings, profile.TelescopeSettings,
+                profile.CameraSettings, profile.ApplicationSettings, profile.PluginSettings })
+            {
+                if (group is null) continue;
+                group.PropertyChanged += StarDetectionSettingChanged;
+                watchedStarDetectionSettings.Add(group);
+            }
+        }
+    }
+
+    private void StarDetectionSettingChanged(object? sender, PropertyChangedEventArgs args) => starDetection.RequestSend();
 
     private void RuntimeStateChanged(object? sender, EventArgs args)
     {
@@ -195,6 +290,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RuntimeStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProfileName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CheckInStatus)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
         start.Refresh();
         stop.Refresh();
         checkIn.Refresh();
