@@ -332,9 +332,7 @@ It consumes the attempt and never replays it.
 The native `run-server-plan-smoke.ps1 -CloudHolds` scenario requires
 `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -NativeImaging`.
 It runs the packaged plugin and pinned runtime in NINA with ASCOM simulators,
-a private PSF Guard server and a loopback forecast provider. It selects **Stop
-mount** for interruptions, independently of the simulator's park operation;
-normal night completion still parks. It checks separate
+a private PSF Guard server and a loopback forecast provider. It checks separate
 telemetry, cloudy-forecast startup hold, an in-flight save, a reported-cloud hold,
 clear readmission and one provider request across all weather polls.
 
