@@ -104,7 +104,7 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard" },
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard", "Send NINA weather telemetry to PSF Guard" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
                     foreach (var option in options)
                     {

@@ -148,7 +148,7 @@
                                 <Expander Header="Weather and roof" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                         <TextBlock Text="When unsafe or roof closes" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.WeatherPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Weather}" AutomationProperties.Name="Weather and roof policy" MaxWidth="320" Margin="0,3" />
                                         <TextBlock Grid.Row="1" Text="Stable Safe/Open (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
@@ -157,6 +157,11 @@
                                         <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumWeatherMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather hold time (minutes)" MaxWidth="280" Margin="0,3" />
                                         <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MaxWidth="280" Margin="0,3" />
+                                        <TextBlock Grid.Row="4" Text="Use PSF Guard site forecast" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="4" Grid.Column="1" IsChecked="{Binding UseSiteCloudForecast}" AutomationProperties.Name="Use PSF Guard site forecast" Margin="0,5" ToolTip="Uses the site's shared cloud and dew-point clear rule through the PSF Guard pairing. Provider keys stay on the server." />
+                                        <TextBlock Grid.Row="5" Text="Use NINA reported cloud cover" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="5" Grid.Column="1" IsChecked="{Binding UseReportedCloudCover}" AutomationProperties.Name="Use NINA reported cloud cover" Margin="0,5" />
+                                        <TextBlock Grid.Row="6" Grid.ColumnSpan="2" Text="Weather holds begin between exposures. Every selected source must be fresh and clear before the stable-clear timer can finish. Forecasts use the site's cloud threshold and optional dew limit. NINA cloud cover uses the cloud threshold; missing cover remains unknown. Forecasts never override the safety monitor or roof." TextWrapping="Wrap" Margin="0,8,0,0" />
                                     </Grid>
                                 </Expander>
                                 <Expander Header="Image quality" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
