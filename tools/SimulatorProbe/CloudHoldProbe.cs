@@ -84,9 +84,6 @@ internal sealed class CloudHoldProbe : IAsyncDisposable
     {
         await coordinator.ConfigureCloudForecastAsync(token);
         session.Options.Weather = DirectorWeatherPolicy.HoldAndResume;
-        // Exercise the supported stop-motion policy independently of OmniSim's
-        // long-running park operation. Normal night completion still parks.
-        session.Options.OnAbort = DirectorAbortPolicy.StopMount;
         session.Options.UseReportedCloudCover = session.Options.UseSiteCloudForecast = true;
         session.Options.StableSafeSeconds = 2;
         session.Options.MaximumWeatherMinutes = 3;
