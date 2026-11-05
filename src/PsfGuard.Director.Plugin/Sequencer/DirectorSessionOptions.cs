@@ -37,6 +37,9 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     [JsonProperty] public int GoodQualityProbes { get => goodQualityProbes; set => Set(ref goodQualityProbes, value); }
     [JsonProperty] public int MaximumOperationFailures { get => maximumOperationFailures; set => Set(ref maximumOperationFailures, value); }
     private DirectorWeatherPolicy weather;
+    private bool useReportedCloudCover, useSiteCloudForecast;
+    [JsonProperty] public bool UseReportedCloudCover { get => useReportedCloudCover; set => Set(ref useReportedCloudCover, value); }
+    [JsonProperty] public bool UseSiteCloudForecast { get => useSiteCloudForecast; set => Set(ref useSiteCloudForecast, value); }
     private int stableSafeSeconds = 300, maximumWeatherMinutes = 360, maximumWeatherInterruptions = 10;
     [JsonProperty] public DirectorWeatherPolicy Weather { get => weather; set => Set(ref weather, value); }
     [JsonProperty] public int StableSafeSeconds { get => stableSafeSeconds; set => Set(ref stableSafeSeconds, value); }
@@ -121,6 +124,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
         Range(MaximumWeatherMinutes, 1, 1440, "Total weather hold time (minutes)");
         Range(MaximumWeatherInterruptions, 1, 100, "Weather interruptions per night");
         if (!Enum.IsDefined(Weather)) issues.Add("Unknown weather policy.");
+        if ((UseReportedCloudCover || UseSiteCloudForecast) && Weather != DirectorWeatherPolicy.HoldAndResume)
+            issues.Add("Cloud holds require the Hold and resume weather policy.");
         if (StableSafeSeconds >= MaximumWeatherMinutes * 60) issues.Add("Stable Safe/Open interval must be shorter than the weather hold limit.");
         if (RetryCooldownSeconds >= MaximumRecoveryMinutes * 60)
             issues.Add("Recovery cooldown must be shorter than the total recovery time.");

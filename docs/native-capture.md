@@ -243,6 +243,41 @@ Opt-in cloud classification, probes and narrow settled-night restart are
 described below. Hold status and spent limits appear in Session/Activity and live
 telemetry when connected; the separate recovery journal remains local.
 
+### Cloud cover and the central forecast
+
+Under **Director Session > Session > Weather and roof**, choose **Hold and resume**
+and enable **Use PSF Guard site forecast**, **Use NINA reported cloud cover**, or
+both. Both switches are off by default. Every enabled source must be fresh and
+clear; unavailable or stale data holds the session. NINA reported values and the
+site forecast remain separate in the plugin settings and PSF Guard's rig weather
+view. A NINA weather source may itself be a weather service; its report time is
+when NINA supplied the values, not a claimed sensor measurement time.
+
+PSF Guard supplies the site's cloud threshold and optional dew limit. The
+forecast applies the same clear rule as Nights, including temperature, dew point
+and humidity from the central provider. NINA cloud cover uses the cloud threshold
+only. Paid provider configuration and keys remain on PSF Guard. The plugin uses
+its existing pairing, reads only cached forecasts and never refreshes a provider.
+**Send NINA weather telemetry to PSF Guard** in plugin settings controls reporting.
+Disabling it also prevents a NINA cloud source from authorizing exposures.
+
+Cloud changes hold between exposures. An in-flight frame can finish saving;
+physical safety and enclosure changes still interrupt immediately. The existing
+Rust recovery state owns the stable-safe delay, cumulative budget, interruption
+limit and night deadline. Decisions expire within 30 seconds including request
+time; NINA reports expire after 90 seconds. A cloud change at final dispatch
+validation can settle a reserved attempt as failed without invoking the camera.
+It consumes the attempt and never replays it.
+
+The native `run-server-plan-smoke.ps1 -CloudHolds` scenario requires
+`-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads -NativeImaging`.
+It runs the packaged plugin and pinned runtime in NINA with ASCOM simulators,
+a private PSF Guard server and a loopback forecast provider. It selects **Stop
+mount** for interruptions, independently of the simulator's park operation;
+normal night completion still parks. It checks separate
+telemetry, cloudy-forecast startup hold, an in-flight save, a reported-cloud hold,
+clear readmission and one provider request across all weather polls.
+
 ## Normal Night End
 
 **Maximum duration** defines one deadline from Session start, including initial

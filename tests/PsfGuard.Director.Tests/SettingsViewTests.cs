@@ -92,8 +92,8 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(3, options.Length);
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Allow loopback HTTP for isolated testing" },
+                    Assert.Equal(4, options.Length);
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Send NINA weather telemetry to PSF Guard", "Allow loopback HTTP for isolated testing" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
                     foreach (var option in options)
                     {

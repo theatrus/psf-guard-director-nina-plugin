@@ -46,6 +46,7 @@ public sealed class SimulatorSequence : SequenceItem
 {
     private readonly IProfileService profiles;
     private readonly ICameraMediator camera;
+    private readonly IWeatherDataMediator? weatherMediator;
     private readonly ITelescopeMediator telescope;
     private readonly IGuiderMediator guider;
     private readonly IFilterWheelMediator filters;
@@ -66,7 +67,7 @@ public sealed class SimulatorSequence : SequenceItem
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
         IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome,
         INinaActionFactory? factory = null, IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
-        NINA.Equipment.Interfaces.IDomeFollower? follower = null)
+        NINA.Equipment.Interfaces.IDomeFollower? follower = null, IWeatherDataMediator? weatherMediator = null)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -84,11 +85,12 @@ public sealed class SimulatorSequence : SequenceItem
         this.focuser = focuser;
         this.rotator = rotator;
         this.follower = follower;
+        this.weatherMediator = weatherMediator;
     }
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower, weatherMediator);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -113,6 +115,7 @@ public sealed class SimulatorSequence : SequenceItem
         NinaTargetContainer? sessionTarget = null;
         LedgerIdentity? ledger = null;
         CoordinatorProbe? coordinator = null;
+        CloudHoldProbe? cloudProbe = null;
         CoordinatorCheckpointResult? checkpoint = null;
         DirectorConfiguration? equipment = null;
         NinaConstraints? constraints = null;
@@ -175,6 +178,7 @@ public sealed class SimulatorSequence : SequenceItem
             await SessionUiProbe.RenderAsync(run);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
+            if (coordinator?.CloudHolds == true) cloudProbe = new(profiles, weatherMediator ?? throw new InvalidOperationException("Weather mediator unavailable."));
             if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);
             var rigId = coordinator?.RigId ?? "ascom-smoke";
             await runtime.StartAsync(rigId, lifetime.Token);
@@ -208,6 +212,16 @@ public sealed class SimulatorSequence : SequenceItem
             await telescope.Rescan();
             CheckProfile();
             if (!await telescope.Connect()) throw new IOException("Simulator telescope connection failed.");
+            if (coordinator?.CloudHolds == true)
+            {
+                // A previous timed-out simulator park may retain Slewing.
+                if (telescope.GetInfo().DeviceId != "ASCOM.OmniSim.Telescope") throw new InvalidOperationException("Simulator telescope changed.");
+                if (!telescope.GetInfo().AtPark)
+                {
+                    telescope.StopSlew();
+                    telescope.SetTrackingEnabled(false);
+                }
+            }
             await filters.Rescan();
             CheckProfile();
             if (!await filters.Connect()) throw new IOException("Simulator filter wheel connection failed.");
@@ -316,7 +330,7 @@ public sealed class SimulatorSequence : SequenceItem
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
                     publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                        nativeProbe?.Factory ?? factory, guider, focuser, rotator)
+                        nativeProbe?.Factory ?? factory, guider, focuser, rotator, cloudProbe?.Service)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
@@ -342,7 +356,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
                 var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                    nativeProbe?.Factory ?? factory, guider, focuser, rotator)
+                    nativeProbe?.Factory ?? factory, guider, focuser, rotator, cloudProbe?.Service)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
@@ -410,6 +424,7 @@ public sealed class SimulatorSequence : SequenceItem
                     nightSequence.Add(sessionContainer);
                     nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
                 }
+                if (cloudProbe is not null) await cloudProbe.PrepareAsync(coordinator, sessionContainer, lifetime.Token);
                 var startupHold = coordinator.WeatherHoldScenario is "safety-startup" or "roof-startup" or "roof-startup-night-end";
                 if (startupHold)
                 {
@@ -419,6 +434,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (cloudProbe is not null) await cloudProbe.VerifyAsync(executing, coordinator, sessionContainer, service, camera, run, lifetime.Token);
                     if (coordinator.QualityScenario is not null)
                     {
                         Exception? failure = null;
@@ -1092,6 +1108,7 @@ public sealed class SimulatorSequence : SequenceItem
         finally
         {
             profiles.ProfileChanged -= ProfileChanged;
+            if (cloudProbe is not null) await cloudProbe.DisposeAsync();
             safetyCancellation.Dispose();
             interlock?.Dispose();
             sessionTarget?.AttachNewParent(null);
@@ -1311,7 +1328,7 @@ public sealed class SimulatorSequence : SequenceItem
                 && Phd2Fixture.Read(root)?.Matches(profile.GuiderSettings) != true)
             || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
             || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
-            || profile.WeatherDataSettings.Id != "No_Device")
+            || profile.WeatherDataSettings.Id is not ("No_Device" or CloudHoldProbe.Source))
             throw new InvalidOperationException("The probe requires its simulator-only test profile.");
         return root;
     }
