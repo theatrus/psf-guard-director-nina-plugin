@@ -31,6 +31,7 @@ public sealed class SimulatorProbeTests
     [InlineData("rotator")]
     [InlineData("guider")]
     [InlineData("safety")]
+    [InlineData("weather")]
     [InlineData("output")]
     [InlineData("pattern")]
     [InlineData("profile")]
@@ -46,10 +47,21 @@ public sealed class SimulatorProbeTests
             case "rotator": f.Profile.RotatorSettings.Id = "ASCOM.Real.Rotator"; break;
             case "guider": f.Profile.GuiderSettings.GuiderName = "PHD2"; break;
             case "safety": f.Profile.SafetyMonitorSettings.Id = "ASCOM.Real.SafetyMonitor"; break;
+            case "weather": f.Profile.WeatherDataSettings.Id = "ASCOM.Real.ObservingConditions"; break;
             case "output": f.Profile.ImageFileSettings.FilePath = Path.GetTempPath(); break;
             case "pattern": f.Profile.ImageFileSettings.FilePattern = "../escape"; break;
             case "profile": f.Profile.Name = "Live profile"; break;
         }
+        Assert.Throws<InvalidOperationException>(() => f.Validate());
+    }
+
+    [Fact]
+    public void WeatherFixtureAcceptsOnlyItsSyntheticIdentity()
+    {
+        using var f = new Fixture();
+        f.Profile.WeatherDataSettings.Id = CloudHoldProbe.Source;
+        Assert.Equal(f.Root, f.Validate());
+        f.Profile.WeatherDataSettings.Id += "-other";
         Assert.Throws<InvalidOperationException>(() => f.Validate());
     }
 

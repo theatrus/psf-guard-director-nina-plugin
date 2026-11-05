@@ -18,6 +18,7 @@ param(
     [switch]$ProjectOrder,
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
+    [switch]$CloudHolds,
     [switch]$RestartAdmission,
     [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
     [ValidateSet('stop', 'recover')][string]$QualityScenario,
@@ -30,6 +31,7 @@ param(
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
+if ($CloudHolds -and (!$NativeImaging -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or !$PublicAcquisition)) { throw 'CloudHolds requires native automatic public local scheduling.' }
 if ($RestartAdmission -and (!$NativeImaging -or !$AutomaticWorkloads -or !$PublicAcquisition -or !$LocalTargetScheduling -or $RecoveryScenario -or $QualityScenario -or $NativeImagingFailure -or $WeatherHoldScenario)) { throw 'RestartAdmission requires safe native automatic workloads.' }
 if ($QualityScenario -and (!$PublicAcquisition -or $AutomaticWorkloads -or $LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $EnclosureClosure -or $WeatherHoldScenario -or $RecoveryScenario)) { throw 'QualityScenario requires only PublicAcquisition.' }
 if ($NightEndScenario -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $RecoveryScenario -or $ConstraintChange -or $EnclosureClosure -or $PriorityRefresh -or $DeferredCheckIn -or $OfflineWorkloadRelease)) { throw 'NightEndScenario requires safe public local scheduling without other fault scenarios.' }
@@ -72,6 +74,7 @@ $serverArgs = @('server', '--registry', "$root/registry.json", '--director-meta'
 $script:server = $null
 $nina = $null
 $phd2 = $null
+$forecastServer = $null
 $generation = 0
 function Start-TestServer {
     $script:generation++
@@ -93,6 +96,15 @@ function Json-Request($method, $path, $body) {
     Invoke-RestMethod "${endpoint}api/$path" -Method $method -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 20) -TimeoutSec 20
 }
 try {
+    if ($CloudHolds) {
+        $provider = Join-Path $PSScriptRoot 'SimulatorProbe/forecast_server.py'
+        $forecastServer = Start-Process -FilePath $Python -ArgumentList @("`"$provider`"", "`"$root`"") -WindowStyle Hidden -PassThru -RedirectStandardError "$root/forecast.err"
+        $ready = [DateTime]::UtcNow.AddSeconds(10)
+        while (!(Test-Path "$root/forecast-port.txt") -and [DateTime]::UtcNow -lt $ready -and !$forecastServer.HasExited) { Start-Sleep -Milliseconds 100 }
+        $forecastPort = [int](Get-Content "$root/forecast-port.txt")
+        "[server.forecasts]`nopen_meteo_url = 'http://127.0.0.1:$forecastPort'`n[cache]" | Set-Content "$root/forecast.toml"
+        $serverArgs += @('--config', "$root/forecast.toml")
+    }
     $status = Start-TestServer
     $slug = 'director-simulator'
     $db = "$root/rig.sqlite"
@@ -110,6 +122,7 @@ try {
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
         ForEach-Object { $_.WeatherHoldScenario=$(if ($WeatherHoldScenario) { $WeatherHoldScenario } else { $null }); $_.NightEndScenario=$(if ($NightEndScenario) { $NightEndScenario } else { $null }); $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
         ForEach-Object { if ($RestartAdmission) { $_.RestartAdmission=$true }; if ($QualityScenario) { $_.QualityScenario=$QualityScenario; $_.ExerciseOutage=$false }; if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
+        ForEach-Object { $_.CloudHolds=[bool]$CloudHolds; $_ } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -145,6 +158,7 @@ try {
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     if ($NightEndScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'night-end-verified.txt'))) { throw 'Normal night end and following native sequence step were not verified.' }
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
+    if ($CloudHolds -and (!(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'cloud-hold-verified.txt')) -or [int](Get-Content "$root/forecast-requests.txt") -ne 1)) { throw 'Cloud holds or cached provider reuse were not verified.' }
     if ($QualityScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'quality-verified.txt'))) { throw 'Quality policy was not verified.' }
     if ($RestartAdmission -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'restart-verified.txt'))) { throw 'Restart admission was not verified.' }
     if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
@@ -169,6 +183,7 @@ finally {
         if (!$nina.WaitForExit(15000)) { Write-Warning "Isolated NINA still open: PID $($nina.Id). Close it after inspecting its test sequence." }
     }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id; $server.WaitForExit() }
+    if ($forecastServer -and !$forecastServer.HasExited) { Stop-Process -Id $forecastServer.Id; $forecastServer.WaitForExit() }
     if ($phd2 -and !$phd2.Process.HasExited) {
         [void]$phd2.Process.CloseMainWindow()
         if (!$phd2.Process.WaitForExit(10000)) { $phd2.Process.Kill(); $phd2.Process.WaitForExit() }

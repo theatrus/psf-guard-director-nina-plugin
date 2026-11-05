@@ -38,10 +38,13 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     private readonly StarDetectionSettingsReporter starDetection;
     private readonly List<INotifyPropertyChanged> watchedStarDetectionSettings = [];
     private string? starDetectionConnection;
+    private readonly DirectorWeatherService? weather;
+    public object? Weather => weather;
 
     [ImportingConstructor]
-    public DirectorPlugin(IProfileService profileService)
+    public DirectorPlugin(IProfileService profileService, [Import(AllowDefault = true)] DirectorWeatherService? weather = null)
     {
+        this.weather = weather;
         profiles = profileService;
         settings = new PluginOptionsAccessor(profiles, PluginId);
         runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!);
@@ -86,6 +89,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
             {
                 starDetectionConnection = connection;
                 starDetection.RequestSend();
+                weather?.RequestRefresh();
             }
         }
         finally { refreshingConnections = false; }
@@ -105,6 +109,16 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     // Per profile, on by default, and separate from pairing and every other
     // option. Turning it back on sends the current settings once.
     internal const string SendStarDetectionSettingsKey = "SendStarDetectionSettings";
+    public bool SendWeatherTelemetry
+    {
+        get => settings.GetValueBoolean("SendWeatherTelemetry", true);
+        set
+        {
+            settings.SetValueBoolean("SendWeatherTelemetry", value);
+            weather?.RequestRefresh();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendWeatherTelemetry)));
+        }
+    }
     public bool SendStarDetectionSettings
     {
         get => settings.GetValueBoolean(SendStarDetectionSettingsKey, true);
@@ -128,6 +142,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         WatchStarDetectionSettings(profiles.ActiveProfile);
         starDetection.Enabled = SendStarDetectionSettings;
         starDetection.Start();
+        weather?.Start();
         Refresh();
     }
 
@@ -138,6 +153,8 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
         WatchStarDetectionSettings(null);
         try { await starDetection.DisposeAsync(); }
+        catch (Exception error) { Logger.Error(error); }
+        try { if (weather is not null) await weather.DisposeAsync(); }
         catch (Exception error) { Logger.Error(error); }
         ConnectionModel.Dispose();
         CollaborationModel.Dispose();

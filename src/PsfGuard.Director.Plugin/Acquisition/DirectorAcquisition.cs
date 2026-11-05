@@ -35,6 +35,7 @@ public sealed partial class DirectorAcquisition
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
     private readonly INighttimeCalculator nighttime;
+    private readonly DirectorWeatherService? weather;
     private static readonly Guid PluginId = new("03a1d13e-67eb-4e24-a407-82bce7e576a5");
     internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PSFGuardDirector", "acquisition");
     internal string LocalStateRoot { get; init; } = StateRoot;
@@ -46,12 +47,14 @@ public sealed partial class DirectorAcquisition
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging,
         IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome,
         INinaActionFactory? sequenceFactory = null, IGuiderMediator? guider = null,
-        IFocuserMediator? focuser = null, IRotatorMediator? rotator = null)
+        IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
+        [Import(AllowDefault = true)] DirectorWeatherService? weather = null)
     {
         this.profiles = profiles; this.camera = camera; this.telescope = telescope; this.filters = filters;
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
         this.dome = dome;
         this.sequenceFactory = sequenceFactory; this.guider = guider; this.focuser = focuser; this.rotator = rotator;
+        this.weather = weather;
     }
 
     internal static IReadOnlyList<string> PolicyIssues(DirectorSessionOptions options, bool requireEnabled = true)
@@ -197,6 +200,12 @@ public sealed partial class DirectorAcquisition
             readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""));
         var endpoint = connection.ResolvedEndpoint ?? throw new InvalidOperationException("Configure and pair a Director coordinator first.");
         var pairing = connection.ReadPairing() ?? throw new InvalidOperationException("Pairing credentials are unavailable. Re-pair before acquisition.");
+        var cloudHolds = options.UseReportedCloudCover || options.UseSiteCloudForecast;
+        if (cloudHolds && weather is null) throw new InvalidOperationException("Director weather service is unavailable.");
+        var cloudHolding = false;
+        CloudWeatherEvidence Clouds() => cloudHolds
+            ? weather!.Read(profile, endpoint, pairing.Binding, options.UseReportedCloudCover, options.UseSiteCloudForecast)
+            : new(true, "Cloud holds disabled");
         ValueTask<string?> Credential(CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -211,6 +220,11 @@ public sealed partial class DirectorAcquisition
         var launched = false;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
+        PlannerSafety RecoverySafety()
+        {
+            var physical = interlock.ReadCurrent().Safety;
+            return physical == PlannerSafety.Safe && cloudHolding && !Clouds().Clear ? PlannerSafety.Unsafe : physical;
+        }
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
         if (!weatherHolds)
         {
@@ -253,7 +267,7 @@ public sealed partial class DirectorAcquisition
             await runtime.StartAsync(rig, runtimeLifetime.Token);
         Action recoveryCheck = CheckIdleContext;
         NinaSessionRecovery? recovery = recoveryRequired
-            ? new(runtime, options, () => new(interlock.ReadCurrent().Safety, enclosure.ReadCurrent().Motion),
+            ? new(runtime, options, () => new(RecoverySafety(), enclosure.ReadCurrent().Motion),
                 () => recoveryCheck(), message => Report(message, null), TimeProvider.System) : null;
         var mountShutdown = new NinaMountShutdown();
         CoordinatorNightCheckpoint? nightCheckpoint = null;
@@ -399,11 +413,13 @@ public sealed partial class DirectorAcquisition
         {
             CheckIdleContext();
             if (window.Ended) return false;
-            var clear = interlock.ReadCurrent().Safety == PlannerSafety.Safe && enclosure.ReadCurrent().Motion == RecoveryMotion.Permitted;
+            var cloud = Clouds();
+            var clear = interlock.ReadCurrent().Safety == PlannerSafety.Safe && enclosure.ReadCurrent().Motion == RecoveryMotion.Permitted && cloud.Clear;
             if (clear && recovery!.Record!.Snapshot.Phase is RecoveryPhase.Acquiring
                 && !interlock.Interrupted.IsCancellationRequested && !enclosure.Interrupted.IsCancellationRequested)
             { interlock.Arm(); enclosure.Arm(); return true; }
-            Report("Weather/roof hold; stopping idle equipment", null);
+            cloudHolding = cloudHolds;
+            Report(cloud.Clear ? "Weather/roof hold; stopping idle equipment" : $"Weather hold: {cloud.Reason}", null);
             await StopIdleEquipmentAsync(lifetime.Token);
             await recovery!.InterruptWeatherAsync(enclosure.ReadCurrent().Motion != RecoveryMotion.Permitted, lifetime.Token);
             if (camera.GetInfo().IsExposing || !mountShutdown.CanResumeWeather)
@@ -432,11 +448,13 @@ public sealed partial class DirectorAcquisition
                     Operation = "",
                     WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used"
                 });
-                Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                cloud = Clouds();
+                Report(!cloud.Clear ? $"Weather hold: {cloud.Reason}" : held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
                 if (held.StableSinceMs is not null && remaining <= 0)
                 {
                     NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
                     await recovery.ResumeWeatherAsync(lifetime.Token, idle: true);
+                    cloudHolding = false;
                     interlock.Rearm(safetyRevision); enclosure.Rearm(enclosureRevision);
                     operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
                     container.UpdateDisplay(d => d with { WaitReason = "-" });
@@ -571,7 +589,7 @@ public sealed partial class DirectorAcquisition
             {
                 try
                 {
-                    if (WeatherInterrupted()) await HoldWeatherAsync();
+                    if (WeatherInterrupted() || !Clouds().Clear) await HoldWeatherAsync();
                     if (window.Ended) break;
                     Check();
                     if (window.Ended) break;
@@ -691,6 +709,13 @@ public sealed partial class DirectorAcquisition
                             filterCounts[program.Recipes.Single(r => r.Id == selected.RecipeId).FilterId] = 0;
                     }
                     if (reselect) continue;
+                    if (!Clouds().Clear)
+                    {
+                        // Preparation is settled; no exposure has been reserved.
+                        Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
+                        await HoldWeatherAsync();
+                        continue;
+                    }
                     if (Volatile.Read(ref priorityRefresh) != 0)
                     {
                         // Preparation is settled and no capture was reserved.
@@ -715,6 +740,7 @@ public sealed partial class DirectorAcquisition
                     var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
                     {
                         captureBlock.ValidateContext(); Check(); CheckPointing();
+                        if (!Clouds().Clear) throw new CloudHoldBoundaryException();
                         if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is already exposing.");
                         if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
                             throw new InvalidOperationException("Mount is not tracking and ready to expose.");
@@ -725,6 +751,13 @@ public sealed partial class DirectorAcquisition
                     captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
                         + TimeSpan.FromMilliseconds(binding.Recipe.ExposureMs)));
                     try { await RunItem(captureBlock, exposure, captureDeadline.Token); }
+                    catch when (exposure.ExecutionError is CloudHoldBoundaryException)
+                    {
+                        // The final guard refused before the camera call. Settle
+                        // the consumed reservation through the existing journal.
+                        await HoldWeatherAsync();
+                        continue;
+                    }
                     catch
                     {
                         // If the adapter did not report the failure, a native
@@ -832,8 +865,10 @@ public sealed partial class DirectorAcquisition
             async Task HoldWeatherAsync()
             {
                 if (recovery is null) throw new InvalidOperationException("Weather recovery is not admitted.");
+                cloudHolding = cloudHolds;
                 var roof = enclosure.Interrupted.IsCancellationRequested;
-                Report(roof ? "Roof hold; stopping motion" : "Weather hold; stopping acquisition", null);
+                var cloud = Clouds();
+                Report(roof ? "Roof hold; stopping motion" : !cloud.Clear ? $"Weather hold: {cloud.Reason}" : "Weather hold; stopping acquisition", null);
                 // Stop motion before journaling or waiting for the guider.
                 await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, equipmentBinding.TelescopeDeviceId!, lifetime.Token);
                 using (var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
@@ -894,12 +929,14 @@ public sealed partial class DirectorAcquisition
                     var remaining = held.StableSinceMs is { } since
                         ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
                     container.UpdateDisplay(d => d with { Operation = "" });
-                    Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open" : $"Weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                    cloud = Clouds();
+                    Report(!cloud.Clear ? $"Weather hold: {cloud.Reason}" : held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open" : $"Weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
                     container.UpdateDisplay(d => d with { WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used" });
                     if (held.StableSinceMs is not null && remaining <= 0)
                     {
                         NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
                         await recovery.ResumeWeatherAsync(lifetime.Token);
+                        cloudHolding = false;
                         interlock.Rearm(safetyRevision);
                         enclosure.Rearm(enclosureRevision);
                         operations.Renew(lifetime.Token, interlock.Interrupted, enclosure.Interrupted);
@@ -1260,4 +1297,5 @@ public sealed partial class DirectorAcquisition
     internal static bool CanReselect(PlannerDecision? decision, bool moonScheduling = false) => decision is { Action: PlannerAction.Wait }
         or { Action: PlannerAction.CheckIn, Reason: "preparation_goal_changed" }
         || moonScheduling && decision is { Action: PlannerAction.CheckIn, Reason: "no_authorized_feasible_work" };
+    private sealed class CloudHoldBoundaryException : InvalidOperationException;
 }
