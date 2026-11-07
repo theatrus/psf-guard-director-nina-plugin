@@ -274,9 +274,7 @@ public sealed partial class DirectorAcquisition
         }
     }
 
-    internal static bool HistoricalCheckInFailure(Exception error) => error is InvalidDataException
-        or CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound or CoordinatorIntakeFailure.NotReady }
-        or CoordinatorIntakeException { StatusCode: System.Net.HttpStatusCode.Conflict };
+    internal static bool HistoricalCheckInFailure(Exception error) => CoordinatorRunCheckIn.HistoricalFailure(error);
 
     internal static bool CanAutomaticallyRecover(Exception error) => error is AggregateException aggregate
         ? aggregate.Flatten().InnerExceptions.All(CanAutomaticallyRecover)

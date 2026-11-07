@@ -122,6 +122,51 @@ public sealed class CoordinatorRunArchiveTests
     }
 
     [Fact]
+    public async Task DamagedOlderRunDoesNotPreventCheckingInALaterRun()
+    {
+        using var f = new Fixture();
+        var profileRoot = Path.Combine(f.Root.FullName, Binding.ProfileId.ToString("N"));
+        var brokenRoot = Directory.CreateDirectory(Path.Combine(profileRoot, "00000000000000000000000000000001")).FullName;
+        var broken = new CoordinatorRunArchive(brokenRoot, Endpoint, Binding, f.Client);
+        broken.Store(f.Run);
+        var brokenFile = Directory.GetFiles(brokenRoot, "checkin-run-*.json").Single();
+        var before = await File.ReadAllTextAsync(brokenFile);
+        var laterRoot = Directory.CreateDirectory(Path.Combine(profileRoot, "00000000000000000000000000000002")).FullName;
+        var ledgerRoot = Directory.CreateDirectory(Path.Combine(laterRoot, "ledger")).FullName;
+        var run = f.Run with { AutomaticWorkload = false };
+        await using (var runtime = new RuntimeController(ProcessTests.BundleDirectory, ledgerRoot))
+        {
+            await runtime.StartAsync(Binding.RigId.ToString("D"), default);
+            var opened = await runtime.OpenGeometryAsync(run.Allocation.Snapshot.Program, run.Constraints, run.InitialState, default);
+            run = run with { Ledger = opened.Value ?? throw new InvalidDataException("Fixture could not initialize its ledger.") };
+        }
+        new CoordinatorRunArchive(laterRoot, Endpoint, Binding, f.Client).Store(run);
+        var progress = new List<CoordinatorRunCheckInProgress>();
+        await Assert.ThrowsAsync<InvalidDataException>(() => CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new InvalidOperationException("An empty ledger needs no network"), new InlineProgress(progress.Add)));
+        Assert.Contains(progress, update => update.Runs == 1 && update.RunId == Path.GetFileName(laterRoot));
+        Assert.Equal(before, await File.ReadAllTextAsync(brokenFile));
+        Assert.False(Directory.Exists(Path.Combine(brokenRoot, "ledger")));
+        Assert.False(AcquisitionLease.IsActive);
+    }
+
+    private sealed class InlineProgress(Action<CoordinatorRunCheckInProgress> report) : IProgress<CoordinatorRunCheckInProgress>
+    {
+        public void Report(CoordinatorRunCheckInProgress value) => report(value);
+    }
+
+    [Fact]
+    public void HistoricalBatchFailuresCannotHideAuthenticationOrCancellation()
+    {
+        Assert.True(CoordinatorRunCheckIn.HistoricalFailure(new AggregateException(new InvalidDataException(),
+            new CoordinatorIntakeException(CoordinatorIntakeFailure.UnexpectedStatus, System.Net.HttpStatusCode.Conflict))));
+        Assert.False(CoordinatorRunCheckIn.HistoricalFailure(new AggregateException(new InvalidDataException(), new OperationCanceledException())));
+        Assert.False(CoordinatorRunCheckIn.HistoricalFailure(new AggregateException(new InvalidDataException(),
+            new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired))));
+        Assert.False(CoordinatorRunCheckIn.HistoricalFailure(new AggregateException()));
+    }
+
+    [Fact]
     public async Task EmptyLedgerCannotBeInitializedByCheckIn()
     {
         using var f = new Fixture();
