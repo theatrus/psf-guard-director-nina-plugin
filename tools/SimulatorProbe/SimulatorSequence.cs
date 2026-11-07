@@ -355,6 +355,7 @@ public sealed class SimulatorSequence : SequenceItem
                     nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
+                await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer);
                 sessionContainer.Options.EnableAcquisition = true;
                 if (coordinator.Attended)
                 {

@@ -226,8 +226,16 @@ public sealed partial class DirectorAcquisition
         {
             using var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             fresh.CancelAfter(TimeSpan.FromSeconds(15));
-            while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
-                await Task.Delay(100, fresh.Token);
+            try
+            {
+                while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
+                    await Task.Delay(100, fresh.Token);
+            }
+            catch (OperationCanceledException error) when (!lifetime.IsCancellationRequested && fresh.IsCancellationRequested)
+            {
+                throw new InvalidOperationException($"Director startup timed out waiting for safety and enclosure clearance. " +
+                    $"{interlock.Read().Reason}. {enclosure.Read().Reason}.", error);
+            }
         }
         if (!weatherHolds) { interlock.Arm(); enclosure.Arm(); }
         void Interrupt() { if (!weatherHolds) lifetime.Cancel(); }

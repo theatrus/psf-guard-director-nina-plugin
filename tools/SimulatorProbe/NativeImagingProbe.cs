@@ -95,9 +95,10 @@ internal sealed class NativeImagingProbe
             });
         plates.Setup(f => f.GetCaptureSolver(It.IsAny<IPlateSolver>(), It.IsAny<IPlateSolver>(), imaging, wheel)).Returns(rotationSolver.Object);
         var factory = new Mock<INinaActionFactory>();
-        factory.Setup(f => f.GetItem<Center>()).Returns(() => new Center(profiles, telescope, imaging, wheel, guider, dome, follower, plates.Object, windows.Object));
+        var centeringWindows = new WindowServiceFactory();
+        factory.Setup(f => f.GetItem<Center>()).Returns(() => new Center(profiles, telescope, imaging, wheel, guider, dome, follower, plates.Object, centeringWindows));
         factory.Setup(f => f.GetItem<CenterAndRotate>()).Returns(() => new CenterAndRotate(profiles, telescope, imaging,
-            rotator ?? throw new InvalidOperationException("No simulator rotator"), wheel, guider, dome, follower, plates.Object, windows.Object));
+            rotator ?? throw new InvalidOperationException("No simulator rotator"), wheel, guider, dome, follower, plates.Object, centeringWindows));
         factory.Setup(f => f.GetItem<RunAutofocus>()).Returns(() => new RunAutofocus(profiles, history, camera, wheel, focuser, focusFactory.Object) { WindowServiceFactory = windows.Object });
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>());

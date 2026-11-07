@@ -60,6 +60,7 @@ public sealed class SettingsViewTests
         {
             var dictionary = new Options();
             var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
+            CheckCommandRefreshFromWorker();
             CheckCoordinatorPairButton(template);
             foreach (var width in new[] { 240, 280, 360, 640 })
                 foreach (var state in new[] { "Stopped", "Ready", "Runtime verification or protocol failed. Reinstall the matching Director bundle." })
@@ -150,6 +151,25 @@ public sealed class SettingsViewTests
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
         }
         Assert.Null(Application.Current);
+    }
+
+    private static void CheckCommandRefreshFromWorker()
+    {
+        var enabled = true;
+        var command = new AsyncCommand(() => Task.CompletedTask, () => enabled, error => throw error);
+        var button = new Button { Command = command };
+        Assert.True(button.IsEnabled);
+        var notifications = 0;
+        command.CanExecuteChanged += (_, _) =>
+        {
+            Assert.True(button.Dispatcher.CheckAccess());
+            notifications++;
+        };
+        enabled = false;
+        Task.Run(command.Refresh).GetAwaiter().GetResult();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.False(button.IsEnabled);
+        Assert.True(notifications > 0);
     }
 
     private static void CheckCoordinatorPairButton(DataTemplate template)
