@@ -157,8 +157,8 @@ public sealed partial class DirectorAcquisition
         do
         {
             token.ThrowIfCancellationRequested();
-            if (attended && !ReferenceEquals(profiles.ActiveProfile, profileAtStart))
-                throw new InvalidOperationException("The N.I.N.A. profile changed. Confirm a new attended run.");
+            if (!ReferenceEquals(profiles.ActiveProfile, profileAtStart))
+                throw new InvalidOperationException("The N.I.N.A. profile changed. Start a new Director run.");
             using var owner = new AcquisitionLease(LocalStateRoot);
             try
             {
@@ -210,10 +210,18 @@ public sealed partial class DirectorAcquisition
         NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, profiles.ActiveProfile.CameraSettings.Id);
         await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, profiles.ActiveProfile.TelescopeSettings.Id, deadline.Token);
         if (profiles.ActiveProfile.GuiderSettings.GuiderName != "No_Guider") await ConfirmGuiderStoppedAsync(deadline.Token);
+        while (focuser?.GetInfo() is { Connected: true, IsMoving: true }
+            || rotator?.GetInfo() is { Connected: true, IsMoving: true })
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            if (profiles.ActiveProfile.Id != profile) throw new InvalidOperationException("The N.I.N.A. profile changed during session recovery.");
+            await Task.Delay(250, deadline.Token);
+        }
         if (options.CheckInAtStart)
         {
             try { await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, null, deadline.Token); }
-            catch (InvalidDataException error) { Logger.Error(error); container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation"); }
+            catch (Exception error) when (HistoricalCheckInFailure(error))
+            { Logger.Error(error); container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation"); }
         }
         await ReportEquipmentCoreAsync(container, deadline.Token, owner);
         var settings = new PluginOptionsAccessor(profiles, PluginId);
@@ -257,10 +265,19 @@ public sealed partial class DirectorAcquisition
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
+            catch (Exception error) when (HistoricalCheckInFailure(error))
+            {
+                Logger.Error(error);
+                container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation; requesting fresh work from current image counts");
+            }
             catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
             { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
         }
     }
+
+    internal static bool HistoricalCheckInFailure(Exception error) => error is InvalidDataException
+        or CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound or CoordinatorIntakeFailure.NotReady }
+        or CoordinatorIntakeException { StatusCode: System.Net.HttpStatusCode.Conflict };
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
         string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, CancellationToken token)

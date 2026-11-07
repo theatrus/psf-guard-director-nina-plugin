@@ -400,7 +400,11 @@ public sealed class DirectorSessionContainer : SequentialContainer
     }
 
     [OnDeserialized]
-    private void RestoreParents(StreamingContext _) => AttachSlots();
+    private void RestoreParents(StreamingContext _)
+    {
+        ErrorBehavior = InstructionErrorBehavior.AbortOnError;
+        AttachSlots();
+    }
 
     private void AttachSlots()
     {

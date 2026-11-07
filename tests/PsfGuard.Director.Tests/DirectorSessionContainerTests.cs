@@ -37,12 +37,23 @@ public sealed class DirectorSessionContainerTests
         Assert.True(session.Options.LocalTargetScheduling);
         Assert.False(session.Options.EnableAcquisition);
         session.Options.AutomaticWorkloads = session.Options.LocalTargetScheduling = false;
+        session.ErrorBehavior = InstructionErrorBehavior.ContinueOnError;
         var json = JsonConvert.SerializeObject(session, Settings);
         var restored = JsonConvert.DeserializeObject<DirectorSessionContainer>(json, Settings)!;
         Assert.True(restored.Options.AutomaticWorkloads);
         Assert.True(restored.Options.LocalTargetScheduling);
         Assert.False(restored.Options.EnableAcquisition);
         Assert.False(restored.ConfirmAttendedRun);
+        Assert.Equal(InstructionErrorBehavior.AbortOnError, restored.ErrorBehavior);
+    }
+
+    [Fact]
+    public void HistoricalDeliveryFailuresRetainEvidenceWithoutBlockingNewWorkOrIgnoringAuthentication()
+    {
+        Assert.True(DirectorAcquisition.HistoricalCheckInFailure(new InvalidDataException()));
+        Assert.True(DirectorAcquisition.HistoricalCheckInFailure(new CoordinatorIntakeException(CoordinatorIntakeFailure.UnexpectedStatus, System.Net.HttpStatusCode.Conflict)));
+        Assert.False(DirectorAcquisition.HistoricalCheckInFailure(new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired)));
+        Assert.False(DirectorAcquisition.HistoricalCheckInFailure(new OperationCanceledException()));
     }
 
     [Fact]
