@@ -97,7 +97,8 @@ public sealed partial class DirectorAcquisition
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, pairing.Binding.RigId.ToString("D"), constraints);
         var reader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         var names = reader.ReadFilterNames(equipmentBinding, configuration);
-        var report = new DirectorEquipmentReport(endpoint, pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names,
+        var defaults = reader.ReadCameraDefaults(equipmentBinding, configuration);
+        var report = new DirectorEquipmentReport(endpoint, pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names, defaults,
             checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         container.UpdateDisplay(d => d with { Phase = "Reporting equipment", Operation = "Equipment report" });
         var ack = await report.SubmitAsync(Credential, connection.AllowInsecureHttp, token);

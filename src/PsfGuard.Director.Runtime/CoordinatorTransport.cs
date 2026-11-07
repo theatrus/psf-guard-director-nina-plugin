@@ -58,7 +58,7 @@ internal sealed class CoordinatorTransport : IDisposable
         try
         {
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.OK) throw new CoordinatorIntakeException(Classify(response.StatusCode));
+            if (response.StatusCode != HttpStatusCode.OK) throw new CoordinatorIntakeException(Classify(response.StatusCode), response.StatusCode);
             if (response.Content.Headers.ContentType?.MediaType != "application/json" || response.Content.Headers.ContentEncoding.Count != 0)
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
             if (response.Content.Headers.ContentLength > CoordinatorProgramContract.MaximumBytes)

@@ -83,7 +83,7 @@ internal sealed class NinaProgramCapture(NinaEquipmentSnapshot equipment, ICamer
             throw new InvalidOperationException("The current NINA equipment differs from the reserved configuration.");
     }
 
-    private static bool Supported(CameraControl control, int? value) => control switch
+    internal static bool Supported(CameraControl control, int? value) => control switch
     {
         CameraControl.Unsupported => value is null,
         CameraControl.Range range => value is >= 0 && value >= range.Minimum && value <= range.Maximum,
