@@ -1,10 +1,10 @@
 {
   "repository": "theatrus/psf-guard",
-  "commit": "8715824eee17479671363ca24a4dc3d783796c86",
-  "run_id": 37403862116,
-  "artifact_id": 11386502635,
+  "commit": "59a48799ab4c85829aaa4d884d1e2a993b8b3e68",
+  "run_id": 42318229769,
+  "artifact_id": 13552270923,
   "artifact_name": "director-runtime-windows-x64",
-  "executable_sha256": "f035e7d6bece2216ad1da2d7b219f9f5d072f173f75860c72dfa81ccb01faaf1",
+  "executable_sha256": "82998b535d74bbfa65087424f726d30631332dfeeec1276493061902ebe402f1",
   "notices_sha256": {
     "SOFARS-LICENSE.txt": "c128a1c26d4eda0097f7ca6794e868b709b7f5ae4845f4afba8ac1d7a7ef34e7",
     "THIRD_PARTY_NOTICES.md": "8621f7a1fe613bc0cf2496dea17f832c3f03531f4e57d98f247a885b28133d88"

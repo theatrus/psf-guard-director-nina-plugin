@@ -1,11 +1,14 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PsfGuard.Director.Plugin;
+using PsfGuard.Director.Runtime;
 using Xunit;
 
 namespace PsfGuard.Director.Tests;
@@ -57,6 +60,7 @@ public sealed class SettingsViewTests
         {
             var dictionary = new Options();
             var template = (DataTemplate)dictionary["PSF Guard Director_Options"];
+            CheckCoordinatorPairButton(template);
             foreach (var width in new[] { 240, 280, 360, 640 })
                 foreach (var state in new[] { "Stopped", "Ready", "Runtime verification or protocol failed. Reinstall the matching Director bundle." })
                 {
@@ -130,6 +134,61 @@ public sealed class SettingsViewTests
         Assert.Null(Application.Current);
     }
 
+    private static void CheckCoordinatorPairButton(DataTemplate template)
+    {
+        var profile = Guid.NewGuid();
+        var url = "";
+        var binding = new CoordinatorBinding(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), profile);
+        var exchanges = 0;
+        var code = "psfdpt_" + new string('a', 64);
+        using var connection = new DirectorConnection(() => profile, () => true, () => url, value => url = value,
+            (_, _) => null, (_, _) => { }, exchange: (endpoint, submittedCode, _, _, _) =>
+            {
+                exchanges++;
+                Assert.Equal("https://psf-guard.example/", endpoint.AbsoluteUri);
+                Assert.Equal(code, submittedCode);
+                return Task.FromResult(new CoordinatorPairing(binding, Guid.NewGuid(), "test-credential"));
+            });
+        var content = (FrameworkElement)template.LoadContent();
+        content.DataContext = new ViewModel("Stopped") { Connection = connection };
+        content.Measure(new Size(640, double.PositiveInfinity));
+        content.Arrange(new Rect(content.DesiredSize));
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        var inputs = Descendants(content).OfType<TextBox>().Where(input => ReferenceEquals(input.DataContext, connection)).ToArray();
+        Assert.Equal(2, inputs.Length);
+        var pair = Descendants(content).OfType<Button>().First(button => button.Content is TextBlock { Text: "Pair" });
+        Assert.Same(connection.PairCommand, pair.Command);
+        Assert.False(pair.IsEnabled);
+        var click = Assert.IsAssignableFrom<IInvokeProvider>(new ButtonAutomationPeer(pair).GetPattern(PatternInterface.Invoke));
+        var syncCode = "psfpt_" + new string('a', 64);
+        inputs[1].SetCurrentValue(TextBox.TextProperty, syncCode);
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.True(pair.IsEnabled);
+        click.Invoke();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.Contains("PSF Guard Sync code", connection.PairingStatus);
+        Assert.Equal(syncCode, inputs[1].Text);
+        Assert.Equal(0, exchanges);
+
+        inputs[1].SetCurrentValue(TextBox.TextProperty, code);
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        click.Invoke();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.Contains("valid PSF Guard server URL", connection.PairingStatus);
+        Assert.Equal(code, inputs[1].Text);
+        Assert.Equal(0, exchanges);
+
+        inputs[0].SetCurrentValue(TextBox.TextProperty, "https://psf-guard.example/");
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.True(pair.IsEnabled);
+        click.Invoke();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        Assert.Equal(1, exchanges);
+        Assert.StartsWith("Paired to rig", connection.PairingStatus);
+        Assert.Empty(inputs[1].Text);
+        Assert.False(pair.IsEnabled);
+    }
+
     private static void TextElementForeground(DependencyObject host) =>
         System.Windows.Documents.TextElement.SetForeground(host, Brushes.White);
 
@@ -152,7 +211,7 @@ public sealed class SettingsViewTests
 
     public sealed class ViewModel(string state)
     {
-        public object Connection { get; } = new ConnectionViewModel();
+        public object Connection { get; init; } = new ConnectionViewModel();
         public object Collaboration { get; } = new CollaborationViewModel();
         public string ProfileName => "Director simulator - long profile name";
         public string RuntimeStatus => state;

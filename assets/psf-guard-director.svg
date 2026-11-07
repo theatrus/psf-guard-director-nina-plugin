@@ -1,29 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="PSF Guard logo">
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="PSF Guard Director">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5eead4"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
+    <linearGradient id="rim" x1="20" y1="12" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c4b5fd"/>
+      <stop offset="1" stop-color="#6366f1"/>
     </linearGradient>
-    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.55" stop-color="#c7f9ef"/>
-      <stop offset="1" stop-color="#5eead4" stop-opacity="0"/>
-    </radialGradient>
   </defs>
-  <!-- Shield -->
-  <path d="M64 6 L114 24 V60 C114 92 92 112 64 122 C36 112 14 92 14 60 V24 Z"
-        fill="#0b1120" stroke="url(#g)" stroke-width="5" stroke-linejoin="round"/>
-  <!-- Airy rings (the PSF) -->
-  <circle cx="64" cy="62" r="30" fill="none" stroke="url(#g)" stroke-width="2" opacity="0.35"/>
-  <circle cx="64" cy="62" r="18" fill="none" stroke="url(#g)" stroke-width="2.5" opacity="0.6"/>
-  <!-- Diffraction spikes -->
-  <g fill="#e8fdf8">
-    <path d="M64 20 L66.5 54 L64 60 L61.5 54 Z" opacity="0.9"/>
-    <path d="M64 104 L66.5 70 L64 64 L61.5 70 Z" opacity="0.9"/>
-    <path d="M24 62 L56 59.5 L62 62 L56 64.5 Z" opacity="0.9"/>
-    <path d="M104 62 L72 59.5 L66 62 L72 64.5 Z" opacity="0.9"/>
-  </g>
-  <!-- Central peak -->
-  <circle cx="64" cy="62" r="12" fill="url(#core)"/>
-  <circle cx="64" cy="62" r="4.5" fill="#ffffff"/>
+  <path d="M64 6 114 24v36c0 32-22 52-50 62-28-10-50-30-50-62V24Z"
+        fill="#171536" stroke="url(#rim)" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M42 91V39h17c16 0 28 10 28 26S75 91 59 91Z"
+        fill="none" stroke="#a5b4fc" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M32 86c12-1 21-9 31-23l16-22" fill="none" stroke="#171536" stroke-width="12" stroke-linecap="round"/>
+  <path d="M32 86c12-1 21-9 31-23l16-22" fill="none" stroke="#fbbf24" stroke-width="5" stroke-linecap="round"/>
+  <path d="m86 23 4 12 12 4-12 4-4 12-4-12-12-4 12-4Z" fill="#fde68a"/>
+  <circle cx="32" cy="86" r="5" fill="#fef3c7"/>
 </svg>

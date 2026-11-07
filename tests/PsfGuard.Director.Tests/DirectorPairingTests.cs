@@ -143,10 +143,20 @@ public sealed class DirectorPairingTests
     {
         var idle = true;
         var url = "192.168.1.50:8080";
+        var exchanges = 0;
         using var model = new DirectorConnection(() => Binding.ProfileId, () => idle, () => url, value => url = value,
-            (_, _) => null, (_, _) => { }, (_, _) => { });
+            (_, _) => null, (_, _) => { }, (_, _) => { },
+            (_, _, _, _, _) =>
+            {
+                exchanges++;
+                return Task.FromResult(new CoordinatorPairing(Binding, Guid.NewGuid(), Secret));
+            });
         model.PairingCode = Code;
-        Assert.False(model.PairCommand.CanExecute(null));
+        Assert.True(model.PairCommand.CanExecute(null));
+        model.PairCommand.Execute(null);
+        Assert.Contains("Allow unencrypted HTTP", model.PairingStatus);
+        Assert.Equal(Code, model.PairingCode);
+        Assert.Equal(0, exchanges);
         model.AllowInsecureHttp = true;
         Assert.True(model.PairCommand.CanExecute(null));
         idle = false;
