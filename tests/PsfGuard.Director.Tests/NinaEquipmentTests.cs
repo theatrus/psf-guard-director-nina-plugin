@@ -27,6 +27,36 @@ public sealed class NinaEquipmentTests
     }
 
     [Fact]
+    public void CameraDefaultsAreExplicitAndFitTheReportedControls()
+    {
+        var f = new Fixture();
+        var reader = new NinaEquipmentSnapshot(f.Profiles.Object, f.CameraMediator.Object, f.WheelMediator.Object);
+        var configuration = reader.Read(f.Binding);
+
+        f.Camera.DefaultGain = 100;
+        f.Camera.DefaultOffset = 30;
+        // The fixture's camera sets no offset, so a default offset means nothing.
+        Assert.Equal(new CoordinatorCameraDefaults(100, null), reader.ReadCameraDefaults(f.Binding, configuration));
+
+        f.Camera.DefaultGain = 60;
+        Assert.Null(reader.ReadCameraDefaults(f.Binding, configuration).Gain);
+        f.Camera.DefaultGain = -1;
+        Assert.Null(reader.ReadCameraDefaults(f.Binding, configuration).Gain);
+
+        Assert.Throws<InvalidOperationException>(() => reader.ReadCameraDefaults(f.Binding, configuration with { Id = "old" }));
+    }
+
+    [Fact]
+    public void CameraDefaultsDoNotChangeTheConfigurationFingerprint()
+    {
+        var f = new Fixture();
+        var reader = new NinaEquipmentSnapshot(f.Profiles.Object, f.CameraMediator.Object, f.WheelMediator.Object);
+        var before = reader.Read(f.Binding).Id;
+        f.Camera.DefaultGain = 40;
+        Assert.Equal(before, reader.Read(f.Binding).Id);
+    }
+
+    [Fact]
     public void SnapshotCopiesCapabilitiesAndUsesExplicitStableMappings()
     {
         var f = new Fixture();

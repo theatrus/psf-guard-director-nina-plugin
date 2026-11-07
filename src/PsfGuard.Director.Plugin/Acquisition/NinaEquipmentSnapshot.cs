@@ -24,6 +24,20 @@ internal sealed class NinaEquipmentSnapshot(IProfileService profiles, ICameraMed
         return binding.Filters.ToImmutableDictionary(f => f.Id, f => f.ExpectedName ?? f.Id, StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// What NINA would use for a sequence left at -1. Recipes stay explicit: PSF
+    /// Guard fills a template's -1 with these once an operator accepts the report.
+    /// </summary>
+    internal CoordinatorCameraDefaults ReadCameraDefaults(NinaEquipmentBinding binding, DirectorConfiguration expected)
+    {
+        if (Read(binding).Id != expected.Id)
+            throw new InvalidOperationException("Equipment changed before exporting camera defaults.");
+        var info = camera.GetInfo();
+        return new(Usable(expected.Gain, info.DefaultGain), Usable(expected.Offset, info.DefaultOffset));
+    }
+
+    private static int? Usable(CameraControl control, int value) => NinaProgramCapture.Supported(control, value) ? value : null;
+
     internal DirectorConfiguration Read(NinaEquipmentBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);

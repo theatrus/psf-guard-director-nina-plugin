@@ -61,6 +61,64 @@ public sealed class CoordinatorEquipmentTests
         Assert.Null((await Send(client)).AcceptedRevision);
     }
 
+    private static readonly CoordinatorCameraDefaults Defaults = new(100, null);
+    private static Task<CoordinatorEquipmentAcknowledgement> SendDefaults(CoordinatorEquipmentClient client) => client.ReportAsync(Binding, ClientId, ReportId,
+        Configuration(), ImmutableDictionary<string, string>.Empty.Add("filter-0", "H-alpha"), 1000, Defaults);
+
+    [Fact]
+    public async Task ReportsCameraDefaultsBesideTheConfiguration()
+    {
+        using var client = Client(new Handler(async (request, token) =>
+        {
+            var input = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!;
+            Assert.Equal(100, input["camera_defaults"]!["gain"]!.GetValue<int>());
+            Assert.Null(input["camera_defaults"]!["offset"]);
+            Assert.Null(input["configuration"]!["camera_defaults"]);
+            return Response(Ack());
+        }));
+        await SendDefaults(client);
+    }
+
+    [Fact]
+    public async Task LeavesAbsentDefaultsOffTheWire()
+    {
+        using var client = Client(new Handler(async (request, token) =>
+        {
+            var input = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!.AsObject();
+            Assert.False(input.ContainsKey("camera_defaults"));
+            return Response(Ack());
+        }));
+        await Send(client);
+    }
+
+    [Fact]
+    public async Task AnOlderServerStillGetsTheReportWithoutDefaults()
+    {
+        var bodies = new List<JsonObject>();
+        using var client = Client(new Handler(async (request, token) =>
+        {
+            var input = JsonNode.Parse(await request.Content!.ReadAsStringAsync(token))!.AsObject();
+            bodies.Add(input);
+            return input.ContainsKey("camera_defaults") ? new HttpResponseMessage(HttpStatusCode.UnprocessableEntity) : Response(Ack());
+        }));
+        Assert.Null((await SendDefaults(client)).AcceptedRevision);
+        Assert.Equal(2, bodies.Count);
+        Assert.False(bodies[1].ContainsKey("camera_defaults"));
+    }
+
+    [Fact]
+    public async Task OtherRefusalsAreNotRetried()
+    {
+        var calls = 0;
+        using var client = Client(new Handler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict));
+        }));
+        await Assert.ThrowsAsync<CoordinatorIntakeException>(() => SendDefaults(client));
+        Assert.Equal(1, calls);
+    }
+
     [Theory]
     [InlineData("coordinator_instance_id")]
     [InlineData("catalog_id")]

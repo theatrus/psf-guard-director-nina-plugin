@@ -5,7 +5,8 @@ using PsfGuard.Director.Runtime;
 namespace PsfGuard.Director.Plugin;
 
 internal sealed record DirectorEquipmentReport(Uri Endpoint, CoordinatorBinding Binding, Guid ClientId, Guid Id,
-    DirectorConfiguration Configuration, ImmutableDictionary<string, string> FilterNames, ulong ObservedAtMs, ulong? AcceptedRevision = null)
+    DirectorConfiguration Configuration, ImmutableDictionary<string, string> FilterNames, CoordinatorCameraDefaults CameraDefaults,
+    ulong ObservedAtMs, ulong? AcceptedRevision = null)
 {
     private static readonly ConcurrentDictionary<Guid, DirectorEquipmentReport> Latest = new();
 
@@ -31,6 +32,6 @@ internal sealed record DirectorEquipmentReport(Uri Endpoint, CoordinatorBinding 
         bool allowHttp, CancellationToken token)
     {
         using var client = new CoordinatorEquipmentClient(Endpoint, credential, allowHttp);
-        return await client.ReportAsync(Binding, ClientId, Id, Configuration, FilterNames, ObservedAtMs, token);
+        return await client.ReportAsync(Binding, ClientId, Id, Configuration, FilterNames, ObservedAtMs, CameraDefaults, token);
     }
 }

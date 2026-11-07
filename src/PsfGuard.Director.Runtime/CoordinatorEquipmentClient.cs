@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 
 namespace PsfGuard.Director.Runtime;
@@ -6,38 +8,79 @@ namespace PsfGuard.Director.Runtime;
 public sealed record CoordinatorEquipmentAcknowledgement(Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
     Guid ProfileId, Guid ClientId, Guid ReportId, ulong ReceivedAtMs, ulong? AcceptedRevision);
 
+/// <summary>What NINA uses for a sequence that leaves gain or offset at -1. Null where the camera has no such control.</summary>
+public sealed record CoordinatorCameraDefaults(int? Gain, int? Offset);
+
 // Equipment evidence is pending operator review, never an acquisition permit.
 public sealed class CoordinatorEquipmentClient : IDisposable
 {
+    private sealed class StatusRecorder(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        internal HttpStatusCode? Status;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            var response = await base.SendAsync(request, token).ConfigureAwait(false);
+            Status = response.StatusCode;
+            return response;
+        }
+    }
     private readonly CoordinatorTransport transport;
+    private readonly StatusRecorder status;
     public CoordinatorEquipmentClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false)
         : this(endpoint, credential, CoordinatorTransport.Handler(), allowInsecureHttp) { }
     internal CoordinatorEquipmentClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential,
-        HttpMessageHandler handler, bool allowInsecureHttp = false) => transport = new(endpoint, credential, handler, allowInsecureHttp);
+        HttpMessageHandler handler, bool allowInsecureHttp = false)
+    {
+        status = new(handler);
+        transport = new(endpoint, credential, status, allowInsecureHttp);
+    }
 
     public async Task<CoordinatorEquipmentAcknowledgement> ReportAsync(CoordinatorBinding binding, Guid clientId, Guid reportId,
-        DirectorConfiguration configuration, ImmutableDictionary<string, string> filterNames, ulong observedAtMs, CancellationToken token = default)
+        DirectorConfiguration configuration, ImmutableDictionary<string, string> filterNames, ulong observedAtMs,
+        CoordinatorCameraDefaults? cameraDefaults = null, CancellationToken token = default)
     {
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty || reportId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")
             || observedAtMs == 0 || observedAtMs > 4102444800000UL || filterNames.Count == 0
             || filterNames.Count != configuration.Filters.Length || configuration.Filters.Any(f => !filterNames.ContainsKey(f.Id)))
             throw new ArgumentException("Equipment evidence requires the exact pairing, rig, filter mapping and observation time.");
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new
+        byte[] Body(bool withDefaults)
         {
-            coordinator_instance_id = binding.CoordinatorInstanceId,
-            catalog_id = binding.CatalogId,
-            report_id = reportId,
-            observed_at_ms = observedAtMs,
-            configuration,
-            filter_names = filterNames
-        }, CoordinatorProgramContract.Options);
-        if (bytes.Length > PlannerContract.MaxRequestBytes) throw new ArgumentException("Equipment report is too large.");
+            var bytes = withDefaults
+                ? JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    coordinator_instance_id = binding.CoordinatorInstanceId,
+                    catalog_id = binding.CatalogId,
+                    report_id = reportId,
+                    observed_at_ms = observedAtMs,
+                    configuration,
+                    filter_names = filterNames,
+                    camera_defaults = cameraDefaults
+                }, CoordinatorProgramContract.Options)
+                : JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    coordinator_instance_id = binding.CoordinatorInstanceId,
+                    catalog_id = binding.CatalogId,
+                    report_id = reportId,
+                    observed_at_ms = observedAtMs,
+                    configuration,
+                    filter_names = filterNames
+                }, CoordinatorProgramContract.Options);
+            if (bytes.Length > PlannerContract.MaxRequestBytes) throw new ArgumentException("Equipment report is too large.");
+            return bytes;
+        }
+        var route = $"api/director/v1/rigs/{binding.RigId:D}/equipment-reports";
+        var report = Body(cameraDefaults is not null);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         try
         {
-            var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/equipment-reports", bytes, deadline.Token, binding.ProfileId).ConfigureAwait(false);
+            (byte[] Bytes, string? ETag) response;
+            status.Status = null;
+            try { response = await transport.SendAsync(route, report, deadline.Token, binding.ProfileId).ConfigureAwait(false); }
+            // PSF Guard 0.13 refuses a field it does not know with 422. Its reports work as before without the defaults.
+            catch (CoordinatorIntakeException) when (cameraDefaults is not null && status.Status == HttpStatusCode.UnprocessableEntity)
+            { response = await transport.SendAsync(route, Body(false), deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             deadline.Token.ThrowIfCancellationRequested();
             using var body = JsonDocument.Parse(response.Bytes);
             var root = body.RootElement;
