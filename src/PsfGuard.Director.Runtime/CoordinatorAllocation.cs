@@ -84,6 +84,41 @@ public sealed class CoordinatorAllocationClient : IDisposable
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
     }
+
+    public Task<bool> ConfirmNoAllocationAsync(CoordinatorBinding binding, CancellationToken token = default) =>
+        ConfirmNoAllocationAsync(transport, binding, token);
+
+    internal static async Task<bool> ConfirmNoAllocationAsync(CoordinatorTransport transport, CoordinatorBinding binding, CancellationToken token)
+    {
+        CoordinatorCheckpointClient.ValidateBinding(binding);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            var response = await transport.ReadOptionalAsync(
+                $"api/director/v1/rigs/{binding.RigId:D}/allocation?coordinator_instance_id={binding.CoordinatorInstanceId:D}&catalog_id={binding.CatalogId:D}",
+                deadline.Token, binding.ProfileId).ConfigureAwait(false);
+            if (response.Status != System.Net.HttpStatusCode.NotFound) return false;
+            return MissingRecord(response.Bytes);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
+    }
+
+    internal static bool MissingRecord(byte[] bytes)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            CoordinatorProgramContract.CheckTree(root);
+            PipeProtocol.RequireFields(root, "success", "data", "error", "status");
+            return root.GetProperty("success").ValueKind == JsonValueKind.False && root.GetProperty("data").ValueKind == JsonValueKind.Null
+                && root.GetProperty("error").GetString() == "Director record not found" && root.GetProperty("status").ValueKind == JsonValueKind.Null;
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException or KeyNotFoundException)
+        { return false; }
+    }
     public void Dispose() => transport.Dispose();
 
     /// <summary>Consumes the allocation's one-shot launch. Never retry this call:

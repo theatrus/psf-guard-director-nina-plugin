@@ -39,7 +39,9 @@ public sealed class CoordinatorWorkloadClient : IDisposable
     public async Task<CoordinatorWorkloadResult> RequestAsync(CancellationToken token = default)
     {
         using var lease = file.Lock();
-        var pending = ReadPending();
+        var pending = ReadPending(allowChangedContext: true);
+        if (pending.Submitted && (pending.ConfigurationId != configuration.Id || !CompatibleMode(pending.ExecutionMode)))
+            pending = await ReconcileUnusedRequestAsync(pending, token).ConfigureAwait(false);
         file.Write(pending with { Submitted = true });
         var bytes = await Send("request", new
         {
@@ -76,6 +78,53 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         file.Write(pending with { Submitted = true, AllocationFingerprint = allocation.Fingerprint });
         return new(allocation, 0);
     }
+
+    /// <summary>Start a new session after the native owner has confirmed the
+    /// camera idle, mount stopped and guider stopped. This retires authority,
+    /// preserves old capture evidence, and requests no hardware action.</summary>
+    public async Task ReconcileSessionAsync(CancellationToken token = default)
+    {
+        using var lease = file.Lock();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            var response = await transport.ReadOptionalAsync(
+                $"api/director/v1/rigs/{binding.RigId:D}/allocation?coordinator_instance_id={binding.CoordinatorInstanceId:D}&catalog_id={binding.CatalogId:D}",
+                deadline.Token, binding.ProfileId).ConfigureAwait(false);
+            if (response.Status == System.Net.HttpStatusCode.NotFound)
+            {
+                if (!CoordinatorAllocationClient.MissingRecord(response.Bytes)) throw new InvalidDataException("PSF Guard did not confirm the previous assignment state.");
+            }
+            else
+            {
+                using var document = JsonDocument.Parse(response.Bytes);
+                var envelope = document.RootElement.GetProperty("data").Deserialize<CoordinatorAllocationEnvelope>(CoordinatorProgramContract.Options)
+                    ?? throw new InvalidDataException("Missing previous assignment.");
+                // Validate historical scope at issuance, never as a capture permit.
+                var previous = CoordinatorAllocation.Read(response.Bytes, transport.Endpoint.AbsoluteUri, binding, clientId,
+                    envelope.Snapshot.Program.Configuration, envelope.AdmittedAtMs);
+                var bytes = await Send($"{previous.Envelope.AllocationId:D}/reconcile", new
+                {
+                    coordinator_instance_id = binding.CoordinatorInstanceId,
+                    catalog_id = binding.CatalogId,
+                    camera_idle = true,
+                    mount_stopped = true,
+                    guider_stopped = true
+                }, deadline.Token).ConfigureAwait(false);
+                var retired = Read<ReconciliationAcknowledgement>(bytes);
+                if (!retired.Retired || retired.AllocationId != previous.Envelope.AllocationId)
+                    throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
+            }
+            deadline.Token.ThrowIfCancellationRequested();
+            if (File.Exists(file.Path)) File.Copy(file.Path, file.Path + $".reconciled-{Guid.NewGuid():N}");
+            file.Write(new Pending(1, transport.Endpoint.AbsoluteUri, binding, clientId, Guid.NewGuid(), configuration.Id, false, null, executionMode));
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
+    }
+
+    private sealed record ReconciliationAcknowledgement(Guid AllocationId, bool Retired);
 
     /// <summary>Call only after parking, stopping hooks/dispatch, verifying no
     /// unresolved capture/preparation, and delivering the complete capture feed.</summary>
@@ -116,7 +165,22 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
     }
 
-    private Pending ReadPending()
+    private async Task<Pending> ReconcileUnusedRequestAsync(Pending pending, CancellationToken token)
+    {
+        // A known allocation is never discarded. For a lost reply, an
+        // authenticated read must establish that the rig has no allocation at
+        // all before the same request ID may use the current equipment/mode.
+        if (pending.AllocationFingerprint is not null) throw ChangedRequest();
+        if (!await CoordinatorAllocationClient.ConfirmNoAllocationAsync(transport, binding, token).ConfigureAwait(false)) throw ChangedRequest();
+        token.ThrowIfCancellationRequested();
+        var updated = pending with { Submitted = false, ConfigurationId = configuration.Id, ExecutionMode = executionMode };
+        file.Write(updated);
+        return updated;
+    }
+
+    private static InvalidDataException ChangedRequest() => new("The saved work request uses different equipment or settings. PSF Guard must confirm that it has no issued allocation before Director can update the request.");
+
+    private Pending ReadPending(bool allowChangedContext = false)
     {
         var p = file.Read<Pending>();
         if (p is null)
@@ -126,7 +190,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         }
         if (p.SchemaVersion != 1 || p.Origin != transport.Endpoint.AbsoluteUri || p.Binding != binding || p.ClientId != clientId
             || p.RequestId == Guid.Empty || p.ExecutionMode is not ("prepared_target_v1" or "local_sequence_v1" or "prepared_target_v2" or "local_sequence_v2" or "prepared_target_v3" or "local_sequence_v3" or "native_imaging_v1" or "native_single_target_v1")
-            || p.Submitted && (p.ConfigurationId != configuration.Id || !CompatibleMode(p.ExecutionMode))
+            || !allowChangedContext && p.Submitted && (p.ConfigurationId != configuration.Id || !CompatibleMode(p.ExecutionMode))
             || p.AllocationFingerprint is not null && (p.AllocationFingerprint.Length != 64 || !p.AllocationFingerprint.All(char.IsAsciiHexDigitLower)))
             throw new InvalidDataException("Outstanding workload request does not match this equipment. Reconciliation is required.");
         if (!p.Submitted && (p.ConfigurationId != configuration.Id || p.ExecutionMode != executionMode))
@@ -171,6 +235,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
                 if (data.GetProperty("workload").ValueKind != JsonValueKind.Null)
                     PipeProtocol.RequireFields(data.GetProperty("workload"), "allocation", "released", "ledger_id", "terminal_sequence");
             }
+            else if (typeof(T) == typeof(ReconciliationAcknowledgement)) PipeProtocol.RequireFields(data, "allocation_id", "retired");
             else PipeProtocol.RequireFields(data, "allocation", "released", "ledger_id", "terminal_sequence");
             return data.Deserialize<T>(CoordinatorProgramContract.Options) ?? throw new InvalidDataException();
         }

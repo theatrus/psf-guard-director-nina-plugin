@@ -94,7 +94,7 @@
                     <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,8" />
                     <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
-                        ToolTip="Send connected equipment details to PSF Guard. Check acceptance in Director's plugin settings. Reporting does not start acquisition."
+                        ToolTip="Update connected equipment details in PSF Guard. Director also reports automatically at session start. Reporting does not start acquisition."
                         HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6" />
                     <DockPanel Margin="0,0,0,8">
                         <DockPanel.Style>
@@ -118,13 +118,8 @@
                             <StackPanel Margin="8" DataContext="{Binding Options}">
                                 <Grid Margin="8,0,8,10">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                     <TextBlock Text="Enable acquisition" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                     <CheckBox Grid.Column="1" IsChecked="{Binding EnableAcquisition}" AutomationProperties.Name="Enable acquisition" VerticalAlignment="Center" Margin="0,5" />
-                                    <TextBlock Grid.Row="1" Text="Automatic workloads" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                    <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding AutomaticWorkloads}" AutomationProperties.Name="Automatic workloads" VerticalAlignment="Center" Margin="0,5" />
-                                    <TextBlock Grid.Row="2" Text="Local target scheduling" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                    <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding LocalTargetScheduling}" AutomationProperties.Name="Local target scheduling" VerticalAlignment="Center" Margin="0,5" />
                                 </Grid>
                                 <Expander Header="Session" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
@@ -176,19 +171,6 @@
                                         <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumWeatherMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather hold time (minutes)" MaxWidth="280" Margin="0,3" />
                                         <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MaxWidth="280" Margin="0,3" />
-                                    </Grid>
-                                </Expander>
-                                <Expander Header="Restart admission" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-                                    <Grid Margin="8">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                                        <TextBlock Text="Record settled night boundaries" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Column="1" IsChecked="{Binding AllowSettledRestart}" AutomationProperties.Name="Record settled night boundaries" VerticalAlignment="Center"
-                                            ToolTip="Off by default. Automatic workloads only. Interrupted allocations, hooks and terminal stops cannot resume. Session or inherited triggers and conditions are not supported by this restart mode." />
-                                        <TextBlock Grid.Row="1" Text="Resume recorded night on next Run" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="1" Grid.Column="1" IsEnabled="{Binding AllowSettledRestart}" IsChecked="{Binding DataContext.ResumeRecordedNight, RelativeSource={RelativeSource AncestorType=TabControl}}"
-                                            AutomationProperties.Name="Resume recorded night on next Run" VerticalAlignment="Center"
-                                            ToolTip="One-use operator request, never saved with the sequence. Requires the same policy, parked mount, idle camera, connected stoppable guider, fresh Safe/Open conditions and fresh server work. Keeps the original night deadline and spent budgets." />
                                     </Grid>
                                 </Expander>
                                 <Expander Header="Image quality" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">

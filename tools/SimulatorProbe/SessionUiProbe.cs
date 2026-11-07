@@ -83,15 +83,16 @@ internal static class SessionUiProbe
                 var summary = Descendants(host).OfType<TextBlock>().Single(text =>
                     BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "Readiness");
                 var acquisition = Toggle("Enable acquisition");
-                var local = Toggle("Local target scheduling");
-                var automatic = Toggle("Automatic workloads");
+                if (Descendants(host).OfType<CheckBox>().Any(control =>
+                    System.Windows.Automation.AutomationProperties.GetName(control) is "Local target scheduling" or "Automatic workloads"))
+                    throw new InvalidOperationException("Obsolete workload mode controls are still visible.");
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Initial session status did not explain disabled acquisition.");
-                acquisition.IsChecked = local.IsChecked = automatic.IsChecked = true;
+                acquisition.IsChecked = true;
                 Layout();
                 if (!status.Text.Contains("when you start the sequence") || !summary.Text.Contains("Director selects targets")
                     || !summary.Text.Contains("requests work from PSF Guard automatically") || summary.Text.Contains("Before New Target"))
                     throw new InvalidOperationException("Session header did not follow the bound acquisition and workload settings.");
-                acquisition.IsChecked = local.IsChecked = automatic.IsChecked = false;
+                acquisition.IsChecked = false;
                 Layout();
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Session header did not follow acquisition being turned off.");
 
@@ -113,7 +114,7 @@ internal static class SessionUiProbe
                 if (tab == 0)
                 {
                     if (controls.OfType<ComboBox>().Count() != 14 || controls.OfType<TextBox>().Count() != 19
-                        || controls.OfType<CheckBox>().Count() != 12)
+                        || controls.OfType<CheckBox>().Count() != 8)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())
                         if (combo.SelectedItem is null) throw new InvalidOperationException("Director policy selection is empty.");

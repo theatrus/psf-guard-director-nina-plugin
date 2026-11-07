@@ -18,6 +18,34 @@ namespace PsfGuard.Director.Tests;
 public sealed class DirectorSessionContainerTests
 {
     [Fact]
+    public async Task StartupFailureIsVisibleInTheSessionAndActivity()
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.EnableAcquisition = true;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => session.Execute(Progress, default));
+        Assert.Contains(error.Message, session.SessionStatus);
+        Assert.Equal(error.Message, session.Display.WaitReason);
+        Assert.Empty(session.Display.Operation);
+        Assert.Contains(session.ActionHistory, item => item.Action == "Session" && item.Outcome.StartsWith("Failed."));
+    }
+
+    [Fact]
+    public void PublicSessionsUseCoordinatorWorkAndLocalTargetSelectionIncludingOldSequences()
+    {
+        var session = new DirectorSessionContainer();
+        Assert.True(session.Options.AutomaticWorkloads);
+        Assert.True(session.Options.LocalTargetScheduling);
+        Assert.False(session.Options.EnableAcquisition);
+        session.Options.AutomaticWorkloads = session.Options.LocalTargetScheduling = false;
+        var json = JsonConvert.SerializeObject(session, Settings);
+        var restored = JsonConvert.DeserializeObject<DirectorSessionContainer>(json, Settings)!;
+        Assert.True(restored.Options.AutomaticWorkloads);
+        Assert.True(restored.Options.LocalTargetScheduling);
+        Assert.False(restored.Options.EnableAcquisition);
+        Assert.False(restored.ConfirmAttendedRun);
+    }
+
+    [Fact]
     public void InitialStatusTracksAcquisitionSettingAndPreservesReportedProgress()
     {
         var session = new DirectorSessionContainer();

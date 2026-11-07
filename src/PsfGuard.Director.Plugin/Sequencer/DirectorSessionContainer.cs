@@ -9,6 +9,7 @@ using NINA.Core.Model;
 using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.Trigger;
+using NINA.Sequencer.Utility;
 using PsfGuard.Director.Plugin.Acquisition;
 using PsfGuard.Director.Runtime;
 
@@ -32,7 +33,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private readonly List<(DirectorActionEntry Entry, long Timestamp)> activeActions = [];
     private CancellationTokenSource? executionCancellation;
     private Task? execution;
-    private DirectorSessionOptions options = new();
+    private DirectorSessionOptions options = new() { AutomaticWorkloads = true, LocalTargetScheduling = true };
     private NinaInstructionSlots slots = new();
     private readonly AsyncCommand reportEquipmentCommand;
     private bool reportingEquipment;
@@ -96,6 +97,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public DirectorSessionContainer()
     {
         Name = "Director Session";
+        ErrorBehavior = InstructionErrorBehavior.AbortOnError;
         reportEquipmentCommand = new(ReportEquipmentAsync, CanReportEquipment, error =>
         {
             NINA.Core.Utility.Logger.Error(error);
@@ -121,6 +123,11 @@ public sealed class DirectorSessionContainer : SequentialContainer
         private set
         {
             ArgumentNullException.ThrowIfNull(value);
+            // Public sessions always request coordinator work and select targets
+            // locally. Keep old JSON fields readable without exposing old modes.
+            value.AutomaticWorkloads = true;
+            value.LocalTargetScheduling = true;
+            value.AllowSettledRestart = false;
             options.PropertyChanged -= SettingsChanged;
             options = value;
             options.PropertyChanged += SettingsChanged;
@@ -231,8 +238,14 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
     {
+        ErrorBehavior = InstructionErrorBehavior.AbortOnError;
         token.ThrowIfCancellationRequested();
-        if (!Validate()) throw new InvalidOperationException(string.Join(" ", Issues));
+        if (!Validate())
+        {
+            var error = new InvalidOperationException(string.Join(" ", Issues));
+            ReportExecutionFailure(error);
+            throw error;
+        }
         if (Options.AllowSettledRestart) NinaRestartAdmission.ValidateLifecycle(this);
         lock (executionLock)
         {
@@ -261,7 +274,14 @@ public sealed class DirectorSessionContainer : SequentialContainer
                     foreach (var condition in conditions) condition.SequenceBlockFinished();
                     foreach (var trigger in triggers) trigger.SequenceBlockFinished();
                 }
-                catch (Exception error) { executionError = error; throw; }
+                catch (Exception error)
+                {
+                    executionError = error;
+                    if (error is OperationCanceledException && token.IsCancellationRequested)
+                        UpdateDisplay(display => display with { Phase = "Session canceled", Operation = "", WaitReason = "Sequence canceled" });
+                    else ReportExecutionFailure(error);
+                    throw;
+                }
                 finally
                 {
                     var cleanupErrors = new List<Exception>();
@@ -276,12 +296,24 @@ public sealed class DirectorSessionContainer : SequentialContainer
                     if (cleanupErrors.Count != 0)
                     {
                         if (executionError is not null) cleanupErrors.Insert(0, executionError);
-                        throw new AggregateException("Director session teardown failed.", cleanupErrors);
+                        var error = new AggregateException("Director session teardown failed.", cleanupErrors);
+                        ReportExecutionFailure(error);
+                        throw error;
                     }
                 }
             }, CancellationToken.None);
             return execution;
         }
+    }
+
+    private void ReportExecutionFailure(Exception error)
+    {
+        var primary = error is AggregateException aggregate ? aggregate.Flatten().InnerExceptions[0] : error;
+        var detail = primary is CoordinatorIntakeException failure
+            ? $"PSF Guard could not authorize the work ({failure.Failure}). Check the rig's Director setup in PSF Guard."
+            : primary.Message;
+        UpdateDisplay(display => display with { Phase = $"Session stopped. {detail}", Operation = "", WaitReason = detail });
+        RecordAction("", "Session", $"Failed. {detail}");
     }
 
     public override async Task Interrupt()

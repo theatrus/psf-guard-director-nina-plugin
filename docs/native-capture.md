@@ -1,5 +1,31 @@
 # Native capture adapter
 
+## Automatic session recovery
+
+Director reports connected equipment when a session starts. PSF Guard applies
+authenticated reports automatically, preserves manual optics and limits, and
+keeps the operator's work permission and plan selection. Reporting does not
+start acquisition or retire an active assignment. An explicit **Turn off** in
+PSF Guard stays off.
+
+Before a new Run or recovery after an acquisition failure, Director confirms
+that the camera is idle, stops mount motion and guiding, and delivers saved
+receipts. The paired server retires the previous assignment, including work
+with uncertain operations. This does not mark those operations successful.
+Director archives the old recovery journal and requests a fresh assignment
+using current accepted and pending image counts. Images, receipts and historical
+assignments remain available. A lost retirement acknowledgement is safe to retry.
+
+Automatic retries wait ten seconds and retain the current Run's original
+maximum-duration deadline. Safety, enclosure clearance and native equipment
+checks still apply before dispatch. Authentication failures stop visibly.
+Director uses N.I.N.A.'s AbortOnError behavior for terminal errors, so a saved
+ContinueOnError setting cannot silently skip acquisition and run shutdown.
+
+This replaces the old opt-in settled-night restart workflow described in the
+historical contract sections below. The public session editor no longer offers
+that workflow or the separate automatic-work and local-selection switches.
+
 ## Central telemetry and batch replay
 
 Saved FITS and XISF files retain `PGCAPID` for correlation with Director's
@@ -43,7 +69,7 @@ cadence. Preparation receipts record elapsed time and success/failure locally.
 This adds no Target Scheduler dependency and does not change PSF Guard Sync.
 
 For automatic imaging, connect and cool equipment using the outer NINA sequence,
-review the resulting Director equipment report, and select Director ownership
+and select Director ownership
 for the desired operations. A configured focuser/guider must be connected when
 Director owns it; choose Sequence for manual focus or an unguided setup. Native
 focus runs on target entry and after filter changes, 30 minutes or 5 degrees of
@@ -149,7 +175,8 @@ The choice is saved in the sequence and applies to operator cancellation,
 unsafe conditions, operation timeout and acquisition errors after launch. Older
 sequences retain the park default. Normal completion still parks; **Park during
 waits** controls planned waits separately. Aborted workloads are not released
-as successful, and recovery never restarts the stopped owner automatically.
+as successful. Automatic recovery confirms idle equipment and obtains a new
+assignment instead of replaying an interrupted operation.
 
 Parking always requires independent enclosure clearance. If the enclosure is
 not clear, Director stops slewing and tracking without starting a park. A
@@ -181,11 +208,10 @@ park/unpark loop. The status and Activity log show the cooldown and spent budget
 
 The bundled Rust core persists the observing-night identity, immutable policy,
 retry budget and stop state in one recovery directory per rig. Target switches,
-new allocations, NINA restarts and turning the checkbox off cannot reset that
-budget. For this first increment, a new Run cannot replace a recorded session
-until its original **Maximum duration** window ends. Uncertain work still needs
-reconciliation; the new night does not make an old allocation reusable. There
-is no force-resume button. Recovery journal events are retained locally; capture
+new allocations retain that budget during normal execution. Session recovery
+retires interrupted work and starts a new journal, keeping the current Run's
+original **Maximum duration** deadline. The old allocation cannot be reused.
+Recovery journal events are retained locally; capture
 and preparation check-in do not yet upload that separate recovery journal.
 
 ![Native Director Session setup with bounded recovery](images/advanced-sequencer-session.png)
@@ -412,8 +438,8 @@ candidate scores and learned timing estimates remain backlog.
 
 ## Local target scheduling (experimental)
 
-Enable **Local target scheduling** in Director Session to run multiple targets
-within one admitted workload. The shared Rust core chooses the best eligible
+Director Session selects targets locally within each workload assigned by
+PSF Guard. There is no separate scheduling mode to enable. The shared Rust core chooses the best eligible
 goal using the allocation's legacy or weighted policy after each saved exposure,
 and rechecks feasibility during native preparation, using
 current NINA site, horizon, altitude, meridian limits and durable progress.
@@ -438,20 +464,22 @@ Target and periodic capture check-ins use a bounded background pump. An offline
 server does not block a local target switch. Final check-in/park/release still
 must finish before a new workload is authorized. First launch remains online;
 offline execution stays inside that workload's original expiry and budget.
-Use **Automatic workloads** independently to renew work after clean release.
+Director requests another workload automatically after clean release.
 Its capability request is `local_sequence_v1`, while existing single-target
 sessions keep `prepared_target_v1`. An outstanding request cannot change modes.
 
 This is not full TS operation-policy parity: automatic centering, focus,
 guiding, dithering, flips, learned duration estimates, feedback revisions and
 offline cold-start recovery remain unfinished. Target setup is sequence-owned.
-Acquisition and local scheduling stay off by default, preserving old sequences.
+Acquisition stays off by default. New and loaded Director sessions request work
+automatically and select targets locally; the older single-target mode switches
+are no longer part of the session editor.
 
-## Public prepared-target mode (experimental)
+## Request work from PSF Guard
 
 ### Automatic workload intake
 
-Enable **Automatic workloads** after the operator
+Director requests work automatically after the operator
 reviews equipment and commissions a workload policy on PSF Guard (meta schema
 18). This is an API-only commissioning step for now; see the server's Director
 management guide. It selects the exact pairing/profile/configuration and active
@@ -471,8 +499,10 @@ or preparation uncertainty, changed configuration and revoked credentials stop
 renewal. Keep the local state for reconciliation. There is no automatic restart
 recovery, rejected-image feedback or attempt-budget increase yet. Manual
 allocations cannot be switched into this release protocol retroactively.
-Without **Local target scheduling**, this mode still requires one prepared
-target. Both can now use the native imaging defaults described above.
+Director selects multiple targets from the assigned workload and uses the native
+imaging defaults described above. Older saved sessions are loaded into this
+workflow. The stored mode fields remain readable for compatibility; the session
+editor no longer offers separate target-selection or work-request modes.
 
 `Director Session` can opt in to prepared-target acquisition. It requires the
 server's one-shot allocation-start API, online first launch, a connected safe
