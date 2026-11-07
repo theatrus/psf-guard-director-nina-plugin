@@ -284,6 +284,8 @@ public sealed class NinaSessionRecoveryTests
         internal static async Task<Fixture> Create(bool weather = false, bool unsafeStartup = false, bool roof = false)
         {
             var f = new Fixture { Weather = weather };
+            // Weather tests advance from Start manually, so sidecar startup time must not move the clock ahead of their first tick.
+            if (weather) f.Clock.Now = f.Start;
             if (unsafeStartup) f.Conditions = roof ? new(PlannerSafety.Safe, RecoveryMotion.Prohibited) : new(PlannerSafety.Unsafe, RecoveryMotion.Permitted);
             Directory.CreateDirectory(Path.Combine(f.root, "ledger"));
             Directory.CreateDirectory(Path.Combine(f.root, "recovery"));

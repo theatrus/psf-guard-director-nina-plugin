@@ -145,8 +145,9 @@ image files.
 
 Director can register its own rig with an
 [AstroCollab server](https://github.com/theatrus/astrocollab-api) using a pairing
-code or browser sign-in in plugin settings. This connection is separate from
-PSF Guard pairing. Credentials stay in Windows Credential Manager; only remote
+code or browser sign-in. In plugin settings, expand **Standalone collaboration**
+to connect. This connection is separate from PSF Guard pairing.
+Credentials stay in Windows Credential Manager; only remote
 identity and connection state are stored in the NINA profile. Deleting a
 credential retains the original agent. **New connection** explicitly registers
 a different agent; it does not recover or relabel the old agent's work.
