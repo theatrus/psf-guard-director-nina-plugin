@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Net;
-using System.Net.Http;
 using System.Text.Json;
 
 namespace PsfGuard.Director.Runtime;
@@ -14,31 +13,22 @@ public sealed record CoordinatorCameraDefaults(int? Gain, int? Offset);
 // Equipment evidence is pending operator review, never an acquisition permit.
 public sealed class CoordinatorEquipmentClient : IDisposable
 {
-    private sealed class StatusRecorder(HttpMessageHandler inner) : DelegatingHandler(inner)
-    {
-        internal HttpStatusCode? Status;
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
-        {
-            var response = await base.SendAsync(request, token).ConfigureAwait(false);
-            Status = response.StatusCode;
-            return response;
-        }
-    }
     private readonly CoordinatorTransport transport;
-    private readonly StatusRecorder status;
     public CoordinatorEquipmentClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false)
         : this(endpoint, credential, CoordinatorTransport.Handler(), allowInsecureHttp) { }
     internal CoordinatorEquipmentClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential,
         HttpMessageHandler handler, bool allowInsecureHttp = false)
-    {
-        status = new(handler);
-        transport = new(endpoint, credential, status, allowInsecureHttp);
-    }
+        => transport = new(endpoint, credential, handler, allowInsecureHttp);
+
+    public Task<CoordinatorEquipmentAcknowledgement> ReportAsync(CoordinatorBinding binding, Guid clientId, Guid reportId,
+        DirectorConfiguration configuration, ImmutableDictionary<string, string> filterNames, ulong observedAtMs, CancellationToken token = default) =>
+        ReportAsync(binding, clientId, reportId, configuration, filterNames, null, observedAtMs, token);
 
     public async Task<CoordinatorEquipmentAcknowledgement> ReportAsync(CoordinatorBinding binding, Guid clientId, Guid reportId,
-        DirectorConfiguration configuration, ImmutableDictionary<string, string> filterNames, ulong observedAtMs,
-        CoordinatorCameraDefaults? cameraDefaults = null, CancellationToken token = default)
+        DirectorConfiguration configuration, ImmutableDictionary<string, string> filterNames, CoordinatorCameraDefaults? cameraDefaults,
+        ulong observedAtMs, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty || reportId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")
             || observedAtMs == 0 || observedAtMs > 4102444800000UL || filterNames.Count == 0
@@ -76,10 +66,9 @@ public sealed class CoordinatorEquipmentClient : IDisposable
         try
         {
             (byte[] Bytes, string? ETag) response;
-            status.Status = null;
             try { response = await transport.SendAsync(route, report, deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             // PSF Guard 0.13 refuses a field it does not know with 422. Its reports work as before without the defaults.
-            catch (CoordinatorIntakeException) when (cameraDefaults is not null && status.Status == HttpStatusCode.UnprocessableEntity)
+            catch (CoordinatorIntakeException error) when (cameraDefaults is not null && error.StatusCode == HttpStatusCode.UnprocessableEntity)
             { response = await transport.SendAsync(route, Body(false), deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             deadline.Token.ThrowIfCancellationRequested();
             using var body = JsonDocument.Parse(response.Bytes);

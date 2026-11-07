@@ -8,10 +8,19 @@ public enum CoordinatorIntakeFailure
     ReceiptConflict, InvalidAcknowledgement
 }
 
-public sealed class CoordinatorIntakeException(CoordinatorIntakeFailure failure)
-    : Exception($"Director program intake: {failure}.")
+public sealed class CoordinatorIntakeException : Exception
 {
-    public CoordinatorIntakeFailure Failure { get; } = failure;
+    public CoordinatorIntakeException(CoordinatorIntakeFailure failure) : this(failure, null) { }
+
+    internal CoordinatorIntakeException(CoordinatorIntakeFailure failure, System.Net.HttpStatusCode? statusCode)
+        : base($"Director program intake: {failure}.")
+    {
+        Failure = failure;
+        StatusCode = statusCode;
+    }
+
+    public CoordinatorIntakeFailure Failure { get; }
+    internal System.Net.HttpStatusCode? StatusCode { get; }
 }
 
 /// <summary>Read-only coordinator inspection. Does not persist credentials, cache authority, or open a runtime ledger.</summary>

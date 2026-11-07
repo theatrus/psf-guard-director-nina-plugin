@@ -32,6 +32,6 @@ internal sealed record DirectorEquipmentReport(Uri Endpoint, CoordinatorBinding 
         bool allowHttp, CancellationToken token)
     {
         using var client = new CoordinatorEquipmentClient(Endpoint, credential, allowHttp);
-        return await client.ReportAsync(Binding, ClientId, Id, Configuration, FilterNames, ObservedAtMs, CameraDefaults, token);
+        return await client.ReportAsync(Binding, ClientId, Id, Configuration, FilterNames, CameraDefaults, ObservedAtMs, token);
     }
 }

@@ -63,7 +63,56 @@ public sealed class CoordinatorEquipmentTests
 
     private static readonly CoordinatorCameraDefaults Defaults = new(100, null);
     private static Task<CoordinatorEquipmentAcknowledgement> SendDefaults(CoordinatorEquipmentClient client) => client.ReportAsync(Binding, ClientId, ReportId,
-        Configuration(), ImmutableDictionary<string, string>.Empty.Add("filter-0", "H-alpha"), 1000, Defaults);
+        Configuration(), ImmutableDictionary<string, string>.Empty.Add("filter-0", "H-alpha"), Defaults, 1000);
+
+    [Fact]
+    public async Task ExistingPositionalCancellationTokenStillCancelsTheReport()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        using var client = Client(new Handler((_, _) => throw new InvalidOperationException("Canceled reports must not send.")));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ReportAsync(Binding, ClientId, ReportId,
+            Configuration(), ImmutableDictionary<string, string>.Empty.Add("filter-0", "H-alpha"), 1000, cancellation.Token));
+    }
+
+    private sealed class RejectedContent(Action disposed) : StringContent("")
+    {
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) disposed();
+            base.Dispose(disposing);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentReportsKeepFallbackStatusWithTheirOwnRequest()
+    {
+        var rejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        using var client = Client(new Handler((_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+                {
+                    Content = new RejectedContent(() =>
+                    {
+                        rejected.TrySetResult();
+                        release.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                    })
+                });
+            return Task.FromResult(Response(Ack()));
+        }));
+        var first = Task.Run(() => SendDefaults(client));
+        try
+        {
+            await rejected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Send(client);
+        }
+        finally { release.TrySetResult(); }
+        await first;
+        Assert.Equal(3, calls);
+    }
 
     [Fact]
     public async Task ReportsCameraDefaultsBesideTheConfiguration()
