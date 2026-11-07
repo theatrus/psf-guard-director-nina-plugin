@@ -10,6 +10,62 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class CoordinatorWorkloadTests
 {
+    [Fact]
+    public async Task ArchivedCleanReleaseAcknowledgementCanIncludeRetirementHistory()
+    {
+        var root = Root();
+        var grant = Grant(Guid.NewGuid());
+        var allocation = CoordinatorAllocation.Read(CoordinatorAllocation.Wrap(grant), Endpoint.AbsoluteUri, Binding, Client, Configuration, Now);
+        var assignment = grant.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), assignment.Id, assignment.Revision, assignment.RigId, assignment.ConfigurationId);
+        using var client = Create(root, new(_ => Task.FromResult(Response(new
+        {
+            allocation = grant,
+            released = true,
+            ledger_id = Guid.Parse(ledger.LedgerId),
+            terminal_sequence = 6,
+            closed_at_ms = Now
+        }))));
+        try
+        {
+            await client.ConfirmArchivedReleaseAsync(allocation, ledger, 6);
+            Assert.Empty(Directory.GetFiles(root, "workload-request-*.json"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RetiredUnstartedWorkAdvancesTheRequestWithoutAuthorizingCapture()
+    {
+        var root = Root();
+        Guid retired = default;
+        using var client = Create(root, new(async request =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+            var id = body.GetProperty("request_id").GetGuid();
+            if (retired != Guid.Empty)
+            {
+                Assert.NotEqual(retired, id);
+                return Response(new { request_id = id, state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            }
+            retired = id;
+            return Response(new
+            {
+                request_id = id,
+                state = "released",
+                retry_after_seconds = 0,
+                workload = new { allocation = Grant(id), released = true, ledger_id = (Guid?)null, terminal_sequence = (int?)null, closed_at_ms = Now }
+            });
+        }));
+        try
+        {
+            var result = await client.RequestAsync();
+            Assert.Null(result.Allocation);
+            Assert.Equal(5, result.RetryAfterSeconds);
+            Assert.Null((await client.RequestAsync()).Allocation);
+        }
+        finally { Directory.Delete(root, true); }
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

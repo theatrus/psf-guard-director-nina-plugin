@@ -9,7 +9,7 @@ public sealed record CoordinatorWorkloadResult(CoordinatorAllocation? Allocation
 public sealed class CoordinatorWorkloadClient : IDisposable
 {
     private sealed record Pending(int SchemaVersion, string Origin, CoordinatorBinding Binding, Guid ClientId, Guid RequestId, string ConfigurationId, bool Submitted, string? AllocationFingerprint, string ExecutionMode = "prepared_target_v1");
-    private sealed record Workload(CoordinatorAllocationEnvelope Allocation, bool Released, Guid? LedgerId, ulong? TerminalSequence);
+    private sealed record Workload(CoordinatorAllocationEnvelope Allocation, bool Released, Guid? LedgerId, ulong? TerminalSequence, ulong? ClosedAtMs = null);
     private sealed record Reply(Guid RequestId, string State, Workload? Workload, int RetryAfterSeconds);
     private readonly CoordinatorTransport transport;
     private readonly CoordinatorStateFile file;
@@ -69,7 +69,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
         if (w.Released)
         {
-            if (w.LedgerId is null || w.LedgerId == Guid.Empty || w.TerminalSequence is null)
+            if (w.ClosedAtMs is null && (w.LedgerId is null || w.LedgerId == Guid.Empty || w.TerminalSequence is null))
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
             Advance(pending);
             return new(null, 5);
@@ -233,14 +233,24 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             {
                 PipeProtocol.RequireFields(data, "request_id", "state", "workload", "retry_after_seconds");
                 if (data.GetProperty("workload").ValueKind != JsonValueKind.Null)
-                    PipeProtocol.RequireFields(data.GetProperty("workload"), "allocation", "released", "ledger_id", "terminal_sequence");
+                    RequireWorkloadFields(data.GetProperty("workload"));
             }
             else if (typeof(T) == typeof(ReconciliationAcknowledgement)) PipeProtocol.RequireFields(data, "allocation_id", "retired");
-            else PipeProtocol.RequireFields(data, "allocation", "released", "ledger_id", "terminal_sequence");
+            else RequireWorkloadFields(data);
             return data.Deserialize<T>(CoordinatorProgramContract.Options) ?? throw new InvalidDataException();
         }
         catch (Exception e) when (e is JsonException or InvalidDataException or InvalidOperationException or ArgumentException or KeyNotFoundException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse); }
+    }
+    private static void RequireWorkloadFields(JsonElement data)
+    {
+        if (data.TryGetProperty("closed_at_ms", out var closed))
+        {
+            PipeProtocol.RequireFields(data, "allocation", "released", "ledger_id", "terminal_sequence", "closed_at_ms");
+            if (!closed.TryGetUInt64(out var at) || at == 0 || data.GetProperty("released").ValueKind != JsonValueKind.True)
+                throw new InvalidDataException("Invalid retired workload history.");
+        }
+        else PipeProtocol.RequireFields(data, "allocation", "released", "ledger_id", "terminal_sequence");
     }
     public void Dispose() => transport.Dispose();
 }
