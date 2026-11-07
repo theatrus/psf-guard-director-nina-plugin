@@ -70,14 +70,17 @@ public sealed partial class DirectorAcquisition
         return issues;
     }
 
-    internal async Task ReportEquipmentAsync(DirectorSessionContainer container, CancellationToken token)
+    internal Task ReportEquipmentAsync(DirectorSessionContainer container, CancellationToken token) => ReportEquipmentCoreAsync(container, token);
+
+    private async Task ReportEquipmentCoreAsync(DirectorSessionContainer container, CancellationToken token, AcquisitionLease? acquisitionOwner = null)
     {
         var options = container.Options.Clone();
         var issues = options.ValidateSettings().Concat(PolicyIssues(options, false)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         using var native = CreateNativeImaging(options);
         native?.CheckEquipment();
-        using var owner = new AcquisitionLease(LocalStateRoot);
+        using var owner = acquisitionOwner is null ? new AcquisitionLease(LocalStateRoot) : null;
+        acquisitionOwner?.RequireIdle(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var settings = new PluginOptionsAccessor(profiles, PluginId);
         using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
@@ -109,7 +112,7 @@ public sealed partial class DirectorAcquisition
         report.Remember(ack.AcceptedRevision);
         container.UpdateDisplay(d => d with
         {
-            Phase = ack.AcceptedRevision is null ? "Equipment reported; awaiting operator review" : "Equipment report already reviewed",
+            Phase = ack.AcceptedRevision is null ? "Equipment reported; waiting for server update" : "Equipment is up to date",
             Rig = pairing.Binding.RigId.ToString("D"),
             Operation = "",
             Connectivity = "Online"
@@ -147,26 +150,103 @@ public sealed partial class DirectorAcquisition
         var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
         var window = new NinaNightWindow(nightStart, nightEnd, TimeProvider.System);
-        using var owner = new AcquisitionLease(LocalStateRoot);
         RecoveryIdentity? restartedNight = null;
-        if (container.ConsumeRestartRequest())
-        {
-            var original = await ReviewRestartAsync(container, token);
-            restartedNight = original;
-            night = original.NightId;
-            window = new(original.StartsAtMs, original.EndsAtMs, TimeProvider.System);
-            container.RecordAction("", "Restart admission", "Settled boundary reviewed; fresh server work required");
-        }
+        var restartRequested = container.ConsumeRestartRequest();
+        var reconcile = true;
         var firstAllocation = true;
         do
         {
             token.ThrowIfCancellationRequested();
-            if (attended && !ReferenceEquals(profiles.ActiveProfile, profileAtStart))
-                throw new InvalidOperationException("The N.I.N.A. profile changed. Confirm a new attended run.");
-            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, token);
-            firstAllocation = false;
-            if (!more) break;
+            if (!ReferenceEquals(profiles.ActiveProfile, profileAtStart))
+                throw new InvalidOperationException("The N.I.N.A. profile changed. Start a new Director run.");
+            using var owner = new AcquisitionLease(LocalStateRoot);
+            try
+            {
+                if (restartRequested)
+                {
+                    var original = await ReviewRestartAsync(container, token);
+                    restartedNight = original;
+                    night = original.NightId;
+                    window = new(original.StartsAtMs, original.EndsAtMs, TimeProvider.System);
+                    restartRequested = false;
+                }
+                else if (reconcile) await PrepareFreshSessionAsync(container, owner, progress, token);
+                var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, token);
+                firstAllocation = false;
+                reconcile = false;
+                if (!more) break;
+            }
+            catch (Exception error) when (container.Options.AutomaticWorkloads && !restartRequested && !token.IsCancellationRequested
+                && !window.Ended && container.Options.EnableAcquisition && container.Options.ValidateSettings().Count == 0
+                && CanAutomaticallyRecover(error))
+            {
+                Logger.Error(error);
+                container.RecordAction("", "Session recovery", $"Retrying after failure. {error.Message}");
+                container.UpdateDisplay(display => display with { Phase = "Recovering session; retrying in 10 seconds", Operation = "", WaitReason = error.Message });
+                reconcile = true;
+                firstAllocation = true;
+                restartedNight = null;
+                night = Guid.NewGuid().ToString("D");
+                await window.WaitAsync(TimeSpan.FromSeconds(10), token);
+            }
         } while (container.Options.AutomaticWorkloads);
+    }
+
+    private async Task PrepareFreshSessionAsync(DirectorSessionContainer container, AcquisitionLease owner,
+        IProgress<ApplicationStatus> progress, CancellationToken token)
+    {
+        owner.RequireIdle(LocalStateRoot);
+        var profile = profiles.ActiveProfile.Id;
+        var options = container.Options.Clone();
+        container.UpdateDisplay(display => display with { Phase = "Recovering previous session", Operation = "Confirming idle equipment" });
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(options.SaveTimeoutSeconds));
+        while (camera.GetInfo().IsExposing)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            await Task.Delay(250, deadline.Token);
+        }
+        NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, profiles.ActiveProfile.CameraSettings.Id);
+        await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, profiles.ActiveProfile.TelescopeSettings.Id, deadline.Token);
+        if (profiles.ActiveProfile.GuiderSettings.GuiderName != "No_Guider") await ConfirmGuiderStoppedAsync(deadline.Token);
+        while (focuser?.GetInfo() is { Connected: true, IsMoving: true }
+            || rotator?.GetInfo() is { Connected: true, IsMoving: true })
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            if (profiles.ActiveProfile.Id != profile) throw new InvalidOperationException("The N.I.N.A. profile changed during session recovery.");
+            await Task.Delay(250, deadline.Token);
+        }
+        if (options.CheckInAtStart)
+        {
+            try { await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, null, deadline.Token); }
+            catch (Exception error) when (HistoricalCheckInFailure(error))
+            { Logger.Error(error); container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation"); }
+        }
+        await ReportEquipmentCoreAsync(container, deadline.Token, owner);
+        var settings = new PluginOptionsAccessor(profiles, PluginId);
+        using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
+            () => settings.GetValueString("CoordinatorUrl", ""), _ => { },
+            readHttpConsent: () => settings.GetValueString("HttpConsentOrigin", ""));
+        var endpoint = connection.ResolvedEndpoint ?? throw new InvalidOperationException("Pair a Director coordinator first.");
+        var pairing = connection.ReadPairing() ?? throw new InvalidOperationException("Pairing credentials are unavailable.");
+        ValueTask<string?> Credential(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var current = DirectorCredentialStore.Read(endpoint, profile);
+            if (profiles.ActiveProfile.Id != profile || current?.Binding != pairing.Binding || current.ClientId != pairing.ClientId)
+                throw new InvalidOperationException("Pairing or profile changed during session recovery.");
+            return ValueTask.FromResult<string?>(current.Token);
+        }
+        using var reader = new NinaConstraintSnapshot(profiles);
+        var (_, _, configuration) = ReadNativeEquipment(options, profile, pairing.Binding.RigId.ToString("D"), reader);
+        using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId,
+            configuration, Credential, connection.AllowInsecureHttp, options.LocalTargetScheduling, NinaNativeImaging.Required(options));
+        await workloads.ReconcileSessionAsync(deadline.Token);
+        await Credential(deadline.Token);
+        owner.RequireIdle(LocalStateRoot);
+        CoordinatorRecoveryHistory.Archive(LocalStateRoot, pairing.Binding.RigId);
+        container.RecordAction("", "Session recovery", "Previous assignment retired; saved captures retained; fresh work will use current image counts");
+        container.UpdateDisplay(display => display with { Phase = "Requesting fresh work from PSF Guard", Operation = "", WaitReason = "-" });
     }
 
     private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, AcquisitionLease owner, CancellationToken token)
@@ -184,9 +264,29 @@ public sealed partial class DirectorAcquisition
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
+            catch (Exception error) when (HistoricalCheckInFailure(error))
+            {
+                Logger.Error(error);
+                container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation; requesting fresh work from current image counts");
+            }
             catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
             { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
         }
+    }
+
+    internal static bool HistoricalCheckInFailure(Exception error) => CoordinatorRunCheckIn.HistoricalFailure(error);
+
+    internal static bool CanAutomaticallyRecover(Exception error) => error is AggregateException aggregate
+        ? aggregate.Flatten().InnerExceptions.All(CanAutomaticallyRecover)
+        : error is not OperationCanceledException
+            && error is not CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.AuthenticationRequired or CoordinatorIntakeFailure.Forbidden or CoordinatorIntakeFailure.CredentialUnavailable }
+            && !error.Data.Contains("DirectorPolicyStop");
+
+    private static InvalidOperationException PolicyStop(string message)
+    {
+        var error = new InvalidOperationException(message);
+        error.Data["DirectorPolicyStop"] = true;
+        return error;
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
@@ -276,12 +376,17 @@ public sealed partial class DirectorAcquisition
                 () => recoveryCheck(), message => Report(message, null), TimeProvider.System) : null;
         var mountShutdown = new NinaMountShutdown();
         CoordinatorNightCheckpoint? nightCheckpoint = null;
+        var deferRecoveryAdmission = false;
         if (recoveryRequired)
         {
             var prior = (await runtime.ReadRecoveryAsync(lifetime.Token)).Value
                 ?? throw new InvalidOperationException("Recovery history is unavailable.");
             if (prior.Record is { } recorded && recorded.Snapshot.Identity.NightId != night && Now() < recorded.Snapshot.Identity.EndsAtMs)
                 throw new InvalidOperationException("The previous observing session is recorded; its maximum-duration window has not ended. Reconciliation is required before a new night.");
+            // Before any work is available, ordinary setup failures must not
+            // create a stopped night. Weather holds still record their budgets
+            // immediately, and an existing night keeps every recorded latch.
+            deferRecoveryAdmission = prior.Record is null && !weatherHolds;
         }
         using var intake = new CoordinatorAllocationClient(endpoint, Credential, connection.AllowInsecureHttp);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
@@ -291,14 +396,7 @@ public sealed partial class DirectorAcquisition
         CoordinatorAllocation allocation;
         try
         {
-            if (recovery is not null) await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
-            if (options.AllowSettledRestart)
-            {
-                nightCheckpoint = new(recoveryDirectory, recovery!.Record!.Snapshot.Identity,
-                    RestartScope(pairing.Binding, pairing.ClientId, endpoint, configuration.Id, options));
-                if (recovery.NewlyAdmitted) nightCheckpoint.Begin();
-                else nightCheckpoint.RequireIdle();
-            }
+            if (!deferRecoveryAdmission) await AdmitRecoveryAsync();
             if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
             // Native interlocks own cancellation before any network wait. Batch
             // receipts are idempotent if weather interrupts this initial replay.
@@ -383,6 +481,19 @@ public sealed partial class DirectorAcquisition
             Report("Workload admission stopped; review required", null);
             if (errors.Count > 1) throw new AggregateException("Workload admission and shutdown failed.", errors);
             throw;
+        }
+
+        async Task AdmitRecoveryAsync()
+        {
+            if (recovery is null) return;
+            await recovery.AdmitAsync(rig, configuration.Id, night, window.Start, window.End, lifetime.Token);
+            if (options.AllowSettledRestart)
+            {
+                nightCheckpoint = new(recoveryDirectory, recovery.Record!.Snapshot.Identity,
+                    RestartScope(pairing.Binding, pairing.ClientId, endpoint, configuration.Id, options));
+                if (recovery.NewlyAdmitted) nightCheckpoint.Begin();
+                else nightCheckpoint.RequireIdle();
+            }
         }
 
         void CheckIdleContext()
@@ -544,6 +655,7 @@ public sealed partial class DirectorAcquisition
         try
         {
             Check();
+            if (deferRecoveryAdmission) await AdmitRecoveryAsync();
             if (recoveryRequired)
             {
                 recoveryCheck = () =>
@@ -837,7 +949,7 @@ public sealed partial class DirectorAcquisition
                     container.RecordAction(binding.Target.Name, "Quality probe", classified.Reason.ToString());
                     if (recovery.Record.Snapshot.Phase is RecoveryPhase.Acquiring) return;
                 }
-                throw new InvalidOperationException("Image quality recovery stopped; parking according to the abort policy.");
+                throw PolicyStop("Image quality recovery stopped; parking according to the abort policy.");
             }
 
             void ShowQuality(QualityObservation observation)
@@ -908,7 +1020,7 @@ public sealed partial class DirectorAcquisition
                     if (recovery.Record!.Snapshot.Phase is not RecoveryPhase.WeatherHolding held)
                     {
                         if (window.Ended) return;
-                        throw new InvalidOperationException("Weather hold stopped; recovery budget or night limit reached.");
+                        throw PolicyStop("Weather hold stopped; recovery budget or night limit reached.");
                     }
                     var remaining = held.StableSinceMs is { } since
                         ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;

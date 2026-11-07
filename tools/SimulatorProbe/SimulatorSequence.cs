@@ -129,6 +129,7 @@ public sealed class SimulatorSequence : SequenceItem
         var phd2 = Phd2Fixture.Read(root);
         float? rotatorFinalPosition = null;
         var nativeFailureVerified = false;
+        var startupAdmissionVerified = false;
         var nativeOptions = new DirectorSessionOptions();
         void ConfigureImaging(DirectorSessionOptions options)
         {
@@ -335,14 +336,45 @@ public sealed class SimulatorSequence : SequenceItem
                     if (!sessionContainer.ReportEquipmentCommand.CanExecute(null)) throw new InvalidDataException("Native report button was disabled.");
                     await sessionContainer.ReportEquipmentAsync();
                     if (sessionContainer.Options.EnableAcquisition || AcquisitionLease.IsActive
-                        || sessionContainer.Display.Phase != "Equipment reported; awaiting operator review")
+                        || sessionContainer.Display.Phase != "Equipment is up to date")
                         throw new InvalidDataException("Equipment report incorrectly enabled acquisition or retained ownership.");
+                    if (coordinator.AutomaticWorkloads && coordinator.LocalTargetScheduling && !coordinator.NativeImaging && !coordinator.Attended
+                        && coordinator.WeatherHoldScenario is null && coordinator.NightEndScenario is null && coordinator.QualityScenario is null
+                        && coordinator.RecoveryScenario is null && !coordinator.OfflineWorkloadRelease && !coordinator.PriorityRefresh)
+                    {
+                        var failedStartup = (DirectorSessionContainer)sessionContainer.Clone();
+                        failedStartup.Options.EnableAcquisition = true;
+                        failedStartup.Options.Enclosure = DirectorEnclosurePolicy.OpenAir;
+                        failedStartup.Options.AutomaticWorkloads = false;
+                        failedStartup.Options.RetryFocusAndGuiding = true;
+                        try
+                        {
+                            await failedStartup.Execute(progress, lifetime.Token);
+                            throw new InvalidDataException("Startup unexpectedly found an allocation before the first workload request.");
+                        }
+                        catch (CoordinatorIntakeException e) when (e.Failure is CoordinatorIntakeFailure.NotFound or CoordinatorIntakeFailure.AuthenticationRequired) { }
+                        await using (var audit = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!,
+                            Directory.CreateDirectory(Path.Combine(run, "startup-recovery-audit")).FullName, Path.Combine(publicService.LocalStateRoot, "recovery", rigId)))
+                        {
+                            await audit.StartAsync(rigId, lifetime.Token);
+                            var startupRecovery = (await audit.ReadRecoveryAsync(lifetime.Token)).Value
+                                ?? throw new InvalidDataException("Failed startup recovery history could not be read.");
+                            if (startupRecovery.Record is not null) throw new InvalidDataException("A failed workload request latched a night before acquisition.");
+                        }
+                        startupAdmissionVerified = true;
+                        Step("Failed startup left no recorded night; retrying with automatic coordinator work");
+                    }
                 }
                 Step("Activating and pulling the isolated server's simulator plan");
                 program = await coordinator.ActivateAndReadProgramAsync(Path.Combine(run, "program-preview"), equipment,
                     equipmentReader.ReadFilterNames(equipmentBinding, equipment), programTarget, lifetime.Token);
                 assignment = program.Assignment;
                 programTarget = program.Targets.First();
+                if (startupAdmissionVerified)
+                {
+                    await coordinator.PrepareInterruptedSessionAsync(publicService!.LocalStateRoot, equipment, sessionContainer!.Options, lifetime.Token);
+                    Step("Seeded an interrupted observing night with an issued server assignment");
+                }
                 await coordinator.ReportStatusAsync(programTarget, "simulator_outage_test", lifetime.Token);
                 if (!coordinator.PublicAcquisition) await coordinator.BeginOutageAsync(root, equipment, lifetime.Token);
             }
@@ -795,6 +827,14 @@ public sealed class SimulatorSequence : SequenceItem
                     }
                     await File.WriteAllTextAsync(Path.Combine(run, "weather-hold-verified.txt"), coordinator.WeatherHoldScenario, lifetime.Token);
                 }
+                if (coordinator.AutomaticWorkloads)
+                {
+                    program = coordinator.CurrentProgram;
+                    assignment = program.Assignment;
+                    programTarget = program.Targets.First();
+                }
+                if (startupAdmissionVerified && !Directory.GetFiles(Path.Combine(service.LocalStateRoot, "recovery-history", rigId), "recovery.sqlite", SearchOption.AllDirectories).Any())
+                    throw new InvalidDataException("Automatic recovery did not preserve the interrupted night journal.");
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
                 var journalRoots = coordinator.PriorityRefresh
                     ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
@@ -854,6 +894,9 @@ public sealed class SimulatorSequence : SequenceItem
                 await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
                 await coordinator.ReportStatusAsync(programTarget, "public_acquisition_complete", lifetime.Token);
                 var retry = new DirectorSessionContainer(service);
+                // Probe rejection of the already-used one-shot allocation, not
+                // the public default's request for a fresh automatic workload.
+                retry.Options.AutomaticWorkloads = false;
                 retry.Options.EnableAcquisition = true;
                 retry.Options.Enclosure = sessionContainer.Options.Enclosure;
                 retry.Options.MaximumAltitude = 89;
@@ -871,8 +914,11 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 try { await retry.Execute(progress, lifetime.Token); throw new InvalidDataException("Public allocation replay was accepted."); }
                 catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.UnexpectedStatus) { }
-                catch (InvalidOperationException e) when ((coordinator.RecoveryScenario is not null || coordinator.NightEndScenario is not null) && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
+                catch (InvalidOperationException e) when ((startupAdmissionVerified || coordinator.RecoveryScenario is not null || coordinator.NightEndScenario is not null) && e.Message.Contains("previous observing session", StringComparison.Ordinal)) { }
                 catch (InvalidOperationException e) when (coordinator.RestartAdmission && e.Message.Contains("recorded night is stopped", StringComparison.Ordinal)) { }
+                if (!retry.SessionStatus.StartsWith("Session stopped.", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(retry.Display.WaitReason)
+                    || !retry.ActionHistory.Any(entry => entry.Action == "Session" && entry.Outcome.StartsWith("Failed.", StringComparison.Ordinal)))
+                    throw new InvalidDataException("The refused second launch did not show its failure in session status and activity.");
                 Step(coordinator.RestartAdmission ? "Public acquisition saved three frames; explicit restart refused the terminal stopped night"
                     : "Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);

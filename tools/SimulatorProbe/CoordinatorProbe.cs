@@ -99,6 +99,21 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) }
     };
     internal string RigId => pairing.Binding.RigId.ToString("D");
+    internal async Task PrepareInterruptedSessionAsync(string root, DirectorConfiguration configuration,
+        PsfGuard.Director.Plugin.Sequencer.DirectorSessionOptions options, CancellationToken token)
+    {
+        var recovery = Directory.CreateDirectory(Path.Combine(root, "recovery", RigId)).FullName;
+        var ledger = Directory.CreateDirectory(Path.Combine(root, "interrupted-fixture")).FullName;
+        await using var runtime = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledger, recovery);
+        await runtime.StartAsync(RigId, token);
+        var host = new PsfGuard.Director.Plugin.Acquisition.NinaSessionRecovery(runtime, options,
+            () => new(PlannerSafety.Safe, RecoveryMotion.Permitted), () => { }, _ => { }, TimeProvider.System);
+        var start = NowMs();
+        await host.AdmitAsync(RigId, configuration.Id, Guid.NewGuid().ToString("D"), start,
+            start + checked((ulong)(options.MaximumHours * 3600000)), token);
+        await host.StopAsync(token);
+        await runtime.StopAsync();
+    }
     internal async Task PrepareRestartAsync(string root, DirectorConfiguration configuration,
         PsfGuard.Director.Plugin.Sequencer.DirectorSessionOptions options, CancellationToken token)
     {
@@ -198,19 +213,19 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             reportsResponse.EnsureSuccessStatusCode();
             using var reports = JsonDocument.Parse(await reportsResponse.Content.ReadAsByteArrayAsync(token));
             var report = reports.RootElement.GetProperty("data").EnumerateArray().Single();
-            if (report.GetProperty("client_id").GetGuid() != pairing.ClientId || !report.GetProperty("accepted_revision").ValueKind.Equals(JsonValueKind.Null)
+            if (report.GetProperty("client_id").GetGuid() != pairing.ClientId || report.GetProperty("accepted_revision").ValueKind != JsonValueKind.Number
                 || report.GetProperty("configuration").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id)
                 throw new InvalidDataException("Native equipment report did not match the paired simulator.");
             var submission = DirectorEquipmentReport.Find(endpoint, pairing)
                 ?? throw new InvalidDataException("Settings could not find the report for the active pairing.");
             if (submission.Id != report.GetProperty("report_id").GetGuid()
-                || await submission.CheckAcceptanceAsync(Credential, false, token) is not null)
-                throw new InvalidDataException("The pending equipment report was replaced or already accepted.");
+                || await submission.CheckAcceptanceAsync(Credential, false, token) != report.GetProperty("accepted_revision").GetUInt64())
+                throw new InvalidDataException("The automatic equipment update was not observed by settings.");
             using var beforeResponse = await operatorClient.GetAsync("api/director/v1/catalogs/director-simulator/rig/profile", token);
             beforeResponse.EnsureSuccessStatusCode();
             using var before = JsonDocument.Parse(await beforeResponse.Content.ReadAsByteArrayAsync(token));
-            if (before.RootElement.GetProperty("data").GetProperty("profile").GetProperty("configuration").ValueKind != JsonValueKind.Null)
-                throw new InvalidDataException("Reporting equipment silently changed the active rig setup.");
+            if (before.RootElement.GetProperty("data").GetProperty("profile").GetProperty("configuration").GetProperty("value").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id)
+                throw new InvalidDataException("Automatic reporting did not update equipment.");
             var manual = await OperatorAsync(HttpMethod.Put, "catalogs/director-simulator/rig/profile", new
             {
                 expected_revision = before.RootElement.GetProperty("data").GetProperty("profile").GetProperty("revision").GetUInt64(),
@@ -241,18 +256,12 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     source = new { kind = "manual" }
                 }
             }, token);
-            var accepted = await OperatorAsync(HttpMethod.Post, $"rigs/{RigId}/equipment-reports/{pairing.ClientId:D}/accept", new
-            {
-                binding.CoordinatorInstanceId,
-                binding.CatalogId,
-                report_id = report.GetProperty("report_id").GetGuid(),
-                expected_revision = manual.GetProperty("profile").GetProperty("revision").GetUInt64()
-            }, token);
+            var accepted = manual.GetProperty("profile");
             if (accepted.GetProperty("configuration").GetProperty("value").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id
                 || accepted.GetProperty("optics").GetRawText() != manual.GetProperty("profile").GetProperty("optics").GetRawText())
                 throw new InvalidDataException("Review changed manual optics or accepted the wrong native configuration.");
             var revision = await submission.CheckAcceptanceAsync(Credential, false, token);
-            if (revision != accepted.GetProperty("revision").GetUInt64()
+            if (revision != report.GetProperty("accepted_revision").GetUInt64()
                 || DirectorEquipmentReport.Find(endpoint, pairing)?.AcceptedRevision != revision)
                 throw new InvalidDataException("Settings did not observe acceptance of the original report.");
             EquipmentReviewVerified = true;
@@ -416,10 +425,15 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         };
         if (AutomaticWorkloads)
         {
+            using var policyResponse = await operatorClient.GetAsync($"api/director/v1/rigs/{RigId}/workload-policy", token);
+            policyResponse.EnsureSuccessStatusCode();
+            using var policyDocument = JsonDocument.Parse(await policyResponse.Content.ReadAsByteArrayAsync(token));
+            var currentPolicy = policyDocument.RootElement.GetProperty("data");
+            var policyRevision = currentPolicy.ValueKind == JsonValueKind.Null ? 0 : currentPolicy.GetProperty("revision").GetUInt64();
             await OperatorAsync(HttpMethod.Put, $"rigs/{RigId}/workload-policy", new
             {
                 coordinator_instance_id = binding.CoordinatorInstanceId,
-                expected_revision = 0,
+                expected_revision = policyRevision,
                 policy = new
                 {
                     rig_id = binding.RigId,
@@ -430,7 +444,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     configuration_id = configuration.Id,
                     project_ids = projectIds,
                     enabled = true,
-                    revision = 1
+                    revision = policyRevision + 1
                 }
             }, token);
             using var work = new CoordinatorWorkloadClient(Path.Combine(Path.GetDirectoryName(root)!, "public-state"), endpoint, binding, pairing.ClientId, configuration, Credential,
@@ -555,6 +569,13 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     }
     internal async Task VerifyAutomaticWorkloadAsync(string root, DirectorConfiguration configuration, CancellationToken token)
     {
+        // Startup recovery deliberately retires the fixture's pre-issued grant.
+        // Verify the actual replacement, never replay the retired authority.
+        using (var allocations = new CoordinatorAllocationClient(endpoint, Credential))
+            allocation = await allocations.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);
+        ProgramRevision = allocation.Envelope.Snapshot.Revision;
+        allocationRoot = Directory.CreateDirectory(Path.Combine(allocationRoot!, "replacement")).FullName;
+        new CoordinatorAllocationCache(allocationRoot!, endpoint, pairing.Binding, pairing.ClientId, configuration).Store(allocation, NowMs());
         using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             localTargetScheduling: LocalTargetScheduling, nativeImaging: NativeImaging);
         var waiting = await client.RequestAsync(token);
@@ -581,6 +602,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             throw new InvalidDataException("Automatic session did not seal its six capture events.");
         AutomaticWorkloadVerified = true;
     }
+
+    internal DirectorProgram CurrentProgram => allocation!.Envelope.Snapshot.Program;
     private void VerifyCachedAllocation(DirectorConfiguration configuration)
     {
         var cached = new CoordinatorAllocationCache(allocationRoot!, endpoint, pairing.Binding, pairing.ClientId, configuration).Read(NowMs());

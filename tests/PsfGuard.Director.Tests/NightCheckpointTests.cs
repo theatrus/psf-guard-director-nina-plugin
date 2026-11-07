@@ -23,6 +23,7 @@ public sealed class NightCheckpointTests
         Assert.True(session.ConsumeRestartRequest());
         Assert.False(session.ConsumeRestartRequest());
         session.Options.AllowSettledRestart = true;
+        session.Options.AutomaticWorkloads = false;
         Assert.NotEmpty(session.Options.ValidateSettings());
         session.Options.AutomaticWorkloads = true;
         Assert.Empty(session.Options.ValidateSettings());

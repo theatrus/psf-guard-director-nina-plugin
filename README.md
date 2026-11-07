@@ -32,8 +32,8 @@ here are configured for that test; retries are off by default.*
 - **Checks in live or in batches.** Send rig status while connected and deliver
   recorded capture and preparation results during the night or afterward.
 - **Keeps safety local.** Safety-monitor and roof status interrupt acquisition.
-  Failed slews and uncertain operations stop the session; the default abort
-  action parks the mount when enclosure clearance permits.
+  The default abort action parks the mount when enclosure clearance permits.
+  Recovery confirms idle equipment and obtains fresh work before imaging again.
 
 Target Scheduler is not required. Director is a separate plugin from
 [PSF Guard Sync](https://github.com/theatrus/psf-guard-nina-plugin): Sync transfers
@@ -57,12 +57,17 @@ with Director support. The planning runtime is bundled with the plugin.
 3. Connect your equipment, add **Director Session** to the Advanced Sequencer,
    and configure safety, enclosure clearance, horizon and operation ownership.
    Keep acquisition disabled while setting up.
-4. Use **Report equipment**, then review the rig configuration and commission
-   its project work in PSF Guard. Director's plugin settings show acceptance
-   for the report sent in the current N.I.N.A. session. Each rig is bound to
-   its project database.
-5. Enable **Local target scheduling**, **Automatic workloads**, and finally
-   **Enable acquisition**. Run the sequence to request work and start imaging.
+4. Activate the plans you want on the rig in PSF Guard. Director reports the
+   connected equipment automatically when the session starts. The server
+   applies the report without an approval step and preserves work permission.
+5. Turn on **Enable acquisition**. Run the sequence to request work from
+   PSF Guard, select targets and start imaging. Director always requests work
+   automatically and selects targets from the assigned workload.
+
+Before a run, Director Session shows whether acquisition is off or has not
+started. With **Enable acquisition** on, start the sequence to check equipment
+and permission to image. There is no separate arm button. The summary describes
+how Director gets work; it does not confirm server approval.
 
 Put connect/cool steps before Director and warm/disconnect steps after it in the
 outer NINA sequence. Pairing and equipment reporting alone never start acquisition.
@@ -102,9 +107,10 @@ location of any overlapping instruction or trigger before the session runs.
 
 ### Recovery is your choice
 
-Cloud screening, focus/guide retries, weather/roof recovery and settled-night
-restart are **off by default**. The default is to stop for the night and park
-when the enclosure permits it.
+Cloud screening, inline focus/guide retries and weather/roof holds are **off by
+default**. Unsafe conditions stop the night and park when the enclosure permits
+it. Automatic recovery of technical failures preserves the current Run's
+duration limit and does not override a stop-for-night policy.
 
 Optional recovery has time and attempt limits. Cloud screening can monitor,
 stop for the night, or hold and take unsaved probe exposures. Its initial
@@ -117,12 +123,12 @@ but Director stops on exhausted retries without needing a cloud diagnosis.
 *Native NINA status-view render from the simulator test, with controlled quality
 measurements. The unknown-reference warning remains visible after parking.*
 
-Explicit restart is limited to recorded, settled night boundaries. It preserves
-the original deadline and spent budgets, checks idle equipment and fresh safety
-evidence, and requests new work. It cannot clear terminal stops or resume
-uncertain captures or hooks. This mode currently excludes session-level and
-inherited triggers/conditions; ordinary sessions retain those editors.
-See [recovery and restart](docs/native-capture.md#native-quality-controls).
+On a new Run or an acquisition failure, Director confirms the camera is idle,
+stops mount motion and guiding, delivers saved receipts, and retires the previous
+assignment. It keeps images and history, then requests fresh work using current
+image counts. Old observing-night records no longer require manual removal.
+Automatic retries keep the current Run's original maximum-duration deadline.
+See [automatic session recovery](docs/native-capture.md#automatic-session-recovery).
 
 ## How it fits together
 

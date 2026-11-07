@@ -10,6 +10,134 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class CoordinatorWorkloadTests
 {
+    [Fact]
+    public async Task ArchivedCleanReleaseAcknowledgementCanIncludeRetirementHistory()
+    {
+        var root = Root();
+        var grant = Grant(Guid.NewGuid());
+        var allocation = CoordinatorAllocation.Read(CoordinatorAllocation.Wrap(grant), Endpoint.AbsoluteUri, Binding, Client, Configuration, Now);
+        var assignment = grant.Snapshot.Program.Assignment;
+        var ledger = new LedgerIdentity(Guid.NewGuid().ToString("D"), assignment.Id, assignment.Revision, assignment.RigId, assignment.ConfigurationId);
+        using var client = Create(root, new(_ => Task.FromResult(Response(new
+        {
+            allocation = grant,
+            released = true,
+            ledger_id = Guid.Parse(ledger.LedgerId),
+            terminal_sequence = 6,
+            closed_at_ms = Now
+        }))));
+        try
+        {
+            await client.ConfirmArchivedReleaseAsync(allocation, ledger, 6);
+            Assert.Empty(Directory.GetFiles(root, "workload-request-*.json"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RetiredUnstartedWorkAdvancesTheRequestWithoutAuthorizingCapture()
+    {
+        var root = Root();
+        Guid retired = default;
+        using var client = Create(root, new(async request =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+            var id = body.GetProperty("request_id").GetGuid();
+            if (retired != Guid.Empty)
+            {
+                Assert.NotEqual(retired, id);
+                return Response(new { request_id = id, state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            }
+            retired = id;
+            return Response(new
+            {
+                request_id = id,
+                state = "released",
+                retry_after_seconds = 0,
+                workload = new { allocation = Grant(id), released = true, ledger_id = (Guid?)null, terminal_sequence = (int?)null, closed_at_ms = Now }
+            });
+        }));
+        try
+        {
+            var result = await client.RequestAsync();
+            Assert.Null(result.Allocation);
+            Assert.Equal(5, result.RetryAfterSeconds);
+            Assert.Null((await client.RequestAsync()).Allocation);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NewSessionRetiresIssuedWorkAndPreservesTheOldRequest(bool lostAcknowledgement)
+    {
+        var root = Root();
+        var grant = Grant(Guid.NewGuid());
+        try
+        {
+            using (var first = Create(root, new(async request =>
+            {
+                var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+                grant = Grant(body.GetProperty("request_id").GetGuid());
+                return Response(new { request_id = grant.AllocationId, state = "issued", workload = new { allocation = grant, released = false, ledger_id = (Guid?)null, terminal_sequence = (int?)null }, retry_after_seconds = 0 });
+            }))) await first.RequestAsync();
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var before = await File.ReadAllTextAsync(path);
+            var retired = 0;
+            using var next = Create(root, new(async request =>
+            {
+                if (request.Method == HttpMethod.Get) return Response(grant);
+                var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+                if (request.RequestUri!.AbsolutePath.EndsWith("/reconcile"))
+                {
+                    Assert.EndsWith($"/{grant.AllocationId:D}/reconcile", request.RequestUri.AbsolutePath);
+                    Assert.True(body.GetProperty("camera_idle").GetBoolean());
+                    Assert.True(body.GetProperty("mount_stopped").GetBoolean());
+                    Assert.True(body.GetProperty("guider_stopped").GetBoolean());
+                    retired++;
+                    if (lostAcknowledgement && retired == 1) throw new HttpRequestException();
+                    return Response(new { allocation_id = grant.AllocationId, retired = true });
+                }
+                Assert.NotEqual(grant.AllocationId, body.GetProperty("request_id").GetGuid());
+                Assert.Equal("native_imaging_v1", body.GetProperty("execution_mode").GetString());
+                return Response(new { request_id = body.GetProperty("request_id").GetGuid(), state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            }), true, true);
+            if (lostAcknowledgement)
+            {
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => next.ReconcileSessionAsync());
+                Assert.Equal(before, await File.ReadAllTextAsync(path));
+            }
+            await next.ReconcileSessionAsync();
+            Assert.Equal(before, await File.ReadAllTextAsync(Directory.GetFiles(root, "*.reconciled-*").Single()));
+            await next.RequestAsync();
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReconciliationRejectsUnconfirmedRetirementWithoutChangingTheRequest(bool wrongIdentity)
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(_ => throw new HttpRequestException())))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var before = await File.ReadAllTextAsync(path);
+            var grant = Grant(Guid.NewGuid());
+            using var next = Create(root, new(request => Task.FromResult(request.Method == HttpMethod.Get
+                ? Response(grant)
+                : Response(new { allocation_id = wrongIdentity ? Guid.NewGuid() : grant.AllocationId, retired = wrongIdentity }))));
+            var error = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => next.ReconcileSessionAsync());
+            Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement, error.Failure);
+            Assert.Equal(before, await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.GetFiles(root, "*.reconciled-*"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Theory]
     [InlineData("not-released")]
     [InlineData("ledger")]
@@ -107,7 +235,11 @@ public sealed class CoordinatorWorkloadTests
                 throw new HttpRequestException();
             }), localTargets, true))
                 await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
-            using var changed = Create(root, new(_ => throw new Xunit.Sdk.XunitException("No HTTP after an ambiguous mode change.")), localTargets);
+            using var changed = Create(root, new(request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                return Task.FromResult(Response(new { allocation = "already issued" }));
+            }), localTargets);
             await Assert.ThrowsAsync<InvalidDataException>(() => changed.RequestAsync());
         }
         finally { Directory.Delete(root, true); }
@@ -121,8 +253,79 @@ public sealed class CoordinatorWorkloadTests
         {
             using (var first = Create(root, new(_ => throw new HttpRequestException())))
                 await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
-            using var changed = Create(root, new(_ => throw new Xunit.Sdk.XunitException("Changed mode must not send HTTP.")), true);
+            using var changed = Create(root, new(request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                return Task.FromResult(Response(new { allocation = "already issued" }));
+            }), true);
             await Assert.ThrowsAsync<InvalidDataException>(() => changed.RequestAsync());
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChangedContextCanReuseAnUnissuedRequestOnlyAfterConfirmedServerAbsence(bool changedConfiguration)
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(_ => throw new HttpRequestException())))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var pending = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+            if (changedConfiguration)
+            {
+                pending["configuration_id"] = "previous-equipment";
+                await File.WriteAllTextAsync(path, pending.ToJsonString());
+            }
+            var reads = 0; var posts = 0;
+            using var changed = Create(root, new(async request =>
+            {
+                if (request.Method == HttpMethod.Get)
+                {
+                    reads++;
+                    Assert.EndsWith("/allocation", request.RequestUri!.AbsolutePath);
+                    Assert.Null(request.Content);
+                    return new HttpResponseMessage(HttpStatusCode.NotFound)
+                    {
+                        Content = new StringContent("{\"success\":false,\"data\":null,\"error\":\"Director record not found\",\"status\":null}", Encoding.UTF8, "application/json")
+                    };
+                }
+                posts++;
+                Assert.Equal(1, reads);
+                var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync()).RootElement;
+                Assert.Equal(pending["request_id"]!.GetValue<string>(), body.GetProperty("request_id").GetString());
+                Assert.Equal(Configuration.Id, body.GetProperty("configuration_id").GetString());
+                Assert.Equal(changedConfiguration ? "prepared_target_v3" : "local_sequence_v3", body.GetProperty("execution_mode").GetString());
+                return Response(new { request_id = body.GetProperty("request_id").GetGuid(), state = "waiting", workload = (object?)null, retry_after_seconds = 30 });
+            }), !changedConfiguration);
+            Assert.Null((await changed.RequestAsync()).Allocation);
+            Assert.Equal(1, reads);
+            Assert.Equal(1, posts);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task Generic404CannotDiscardAnAmbiguousRequest()
+    {
+        var root = Root();
+        try
+        {
+            using (var first = Create(root, new(_ => throw new HttpRequestException())))
+                await Assert.ThrowsAsync<CoordinatorIntakeException>(() => first.RequestAsync());
+            var path = Directory.GetFiles(root, "workload-request-*.json").Single();
+            var before = await File.ReadAllTextAsync(path);
+            using var changed = Create(root, new(request =>
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+                { Content = new StringContent("{\"success\":false,\"data\":null,\"error\":\"Route not found\",\"status\":null}", Encoding.UTF8, "application/json") });
+            }), true);
+            await Assert.ThrowsAsync<InvalidDataException>(() => changed.RequestAsync());
+            Assert.Equal(before, await File.ReadAllTextAsync(path));
         }
         finally { Directory.Delete(root, true); }
     }

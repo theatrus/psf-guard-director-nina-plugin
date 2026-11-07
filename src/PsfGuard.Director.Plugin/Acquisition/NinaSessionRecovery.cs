@@ -29,21 +29,7 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
                 await ApplyAsync(new RecoveryEvent.StopNight(), token, new(PlannerSafety.Unknown, RecoveryMotion.Unknown));
         }
         var identity = new RecoveryIdentity(rig, configuration, night, start, end);
-        var qualityMode = options.Quality switch
-        {
-            DirectorQualityPolicy.Off => RecoveryQualityMode.Disabled,
-            DirectorQualityPolicy.Monitor => RecoveryQualityMode.MonitorOnly,
-            DirectorQualityPolicy.ParkAndStop => RecoveryQualityMode.ParkAndStop,
-            DirectorQualityPolicy.HoldAndProbe => RecoveryQualityMode.Pause,
-            _ => throw new InvalidOperationException("Invalid quality policy.")
-        };
-        var policy = new RecoveryPolicy(1, qualityMode, (uint)options.PoorQualityFrames, qualityMode == RecoveryQualityMode.Pause ? (uint)options.GoodQualityProbes : 1,
-            checked((ulong)options.RetryCooldownSeconds * 1000), checked((ulong)options.MaximumRecoveryMinutes * 60000),
-            checked((uint)options.MaximumRecoveryAttempts), checked((ulong)options.HookTimeoutSeconds * 1000),
-            30000, end, (uint)options.MaximumOperationFailures, (uint)options.MaximumOperationFailures, options.OnAbort == DirectorAbortPolicy.ParkMount,
-            options.Weather == DirectorWeatherPolicy.HoldAndResume
-                ? new(checked((ulong)options.StableSafeSeconds * 1000), checked((ulong)options.MaximumWeatherMinutes * 60000), checked((uint)options.MaximumWeatherInterruptions)) : null);
-        var opened = Require(await runtime.OpenRecoveryAsync(identity, policy, Now(), token));
+        var opened = Require(await runtime.OpenRecoveryAsync(identity, PolicyFor(options, end), Now(), token));
         NewlyAdmitted = opened.Created;
         record = opened.Record;
         if (record.Snapshot.Phase is not RecoveryPhase.Acquiring)
@@ -54,6 +40,24 @@ internal sealed class NinaSessionRecovery(RuntimeController runtime, DirectorSes
             if (record.Snapshot.Phase is RecoveryPhase.WeatherHolding) return;
         }
         else await RefreshAsync(token);
+    }
+
+    internal static RecoveryPolicy PolicyFor(DirectorSessionOptions options, ulong end)
+    {
+        var qualityMode = options.Quality switch
+        {
+            DirectorQualityPolicy.Off => RecoveryQualityMode.Disabled,
+            DirectorQualityPolicy.Monitor => RecoveryQualityMode.MonitorOnly,
+            DirectorQualityPolicy.ParkAndStop => RecoveryQualityMode.ParkAndStop,
+            DirectorQualityPolicy.HoldAndProbe => RecoveryQualityMode.Pause,
+            _ => throw new InvalidOperationException("Invalid quality policy.")
+        };
+        return new RecoveryPolicy(1, qualityMode, (uint)options.PoorQualityFrames, qualityMode == RecoveryQualityMode.Pause ? (uint)options.GoodQualityProbes : 1,
+            checked((ulong)options.RetryCooldownSeconds * 1000), checked((ulong)options.MaximumRecoveryMinutes * 60000),
+            checked((uint)options.MaximumRecoveryAttempts), checked((ulong)options.HookTimeoutSeconds * 1000),
+            30000, end, (uint)options.MaximumOperationFailures, (uint)options.MaximumOperationFailures, options.OnAbort == DirectorAbortPolicy.ParkMount,
+            options.Weather == DirectorWeatherPolicy.HoldAndResume
+                ? new(checked((ulong)options.StableSafeSeconds * 1000), checked((ulong)options.MaximumWeatherMinutes * 60000), checked((uint)options.MaximumWeatherInterruptions)) : null);
     }
 
     internal async Task<bool> RefreshAsync(CancellationToken token, bool allowNightEnd = false)

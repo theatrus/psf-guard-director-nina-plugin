@@ -10,7 +10,7 @@ public sealed record CoordinatorEquipmentAcknowledgement(Guid CoordinatorInstanc
 /// <summary>What NINA uses for a sequence that leaves gain or offset at -1. Null where the camera has no such control.</summary>
 public sealed record CoordinatorCameraDefaults(int? Gain, int? Offset);
 
-// Equipment evidence is pending operator review, never an acquisition permit.
+// Equipment reports update server setup, never grant acquisition authority.
 public sealed class CoordinatorEquipmentClient : IDisposable
 {
     private readonly CoordinatorTransport transport;

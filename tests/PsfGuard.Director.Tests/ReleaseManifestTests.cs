@@ -46,7 +46,10 @@ public sealed class ReleaseManifestTests
         var description = template["Descriptions"]!["LongDescription"]!.GetValue<string>();
         Assert.Equal(metadata["LongDescription"], description);
         Assert.Contains("native NINA centering", description);
-        Assert.Contains("Settled-night restart is opt-in; uncertain-work resume and real-sky full-night acceptance remain unavailable", description);
+        Assert.Contains("Recovers interrupted assignments using current image counts", description);
+        Assert.Contains("server with automatic session recovery support", description);
+        Assert.Contains("Real-sky full-night acceptance remains open", description);
+        Assert.DoesNotContain("Settled-night restart is opt-in", description);
         Assert.Contains("Do not use for unattended imaging", description);
         Assert.Null(template["Channel"]);
         Assert.Contains(template["Tags"]!.AsArray(), tag => tag!.GetValue<string>() == "beta");

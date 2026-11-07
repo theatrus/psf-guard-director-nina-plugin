@@ -55,8 +55,8 @@ public sealed partial class DirectorPlugin
                             var current = CurrentContext() ? ConnectionModel.ReadPairing() : null;
                             if (current is null || DirectorEquipmentReport.Find(endpoint!, current)?.Id != report.Id)
                                 continue;
-                            status = revision is { } value ? $"Equipment report accepted as rig configuration revision {value}."
-                                : "Equipment report received. Awaiting acceptance in PSF Guard.";
+                            status = revision is not null ? "Equipment is up to date in PSF Guard."
+                                : "Equipment report received. Update PSF Guard to apply equipment automatically.";
                         }
                     }
                     catch (CoordinatorIntakeException error)

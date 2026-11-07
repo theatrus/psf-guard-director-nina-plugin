@@ -18,6 +18,99 @@ namespace PsfGuard.Director.Tests;
 public sealed class DirectorSessionContainerTests
 {
     [Fact]
+    public async Task StartupFailureIsVisibleInTheSessionAndActivity()
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.EnableAcquisition = true;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => session.Execute(Progress, default));
+        Assert.Contains(error.Message, session.SessionStatus);
+        Assert.Equal(error.Message, session.Display.WaitReason);
+        Assert.Empty(session.Display.Operation);
+        Assert.Contains(session.ActionHistory, item => item.Action == "Session" && item.Outcome.StartsWith("Failed."));
+    }
+
+    [Fact]
+    public void PublicSessionsUseCoordinatorWorkAndLocalTargetSelectionIncludingOldSequences()
+    {
+        var session = new DirectorSessionContainer();
+        Assert.True(session.Options.AutomaticWorkloads);
+        Assert.True(session.Options.LocalTargetScheduling);
+        Assert.False(session.Options.EnableAcquisition);
+        session.Options.AutomaticWorkloads = session.Options.LocalTargetScheduling = false;
+        session.ErrorBehavior = InstructionErrorBehavior.ContinueOnError;
+        var json = JsonConvert.SerializeObject(session, Settings);
+        var restored = JsonConvert.DeserializeObject<DirectorSessionContainer>(json, Settings)!;
+        Assert.True(restored.Options.AutomaticWorkloads);
+        Assert.True(restored.Options.LocalTargetScheduling);
+        Assert.False(restored.Options.EnableAcquisition);
+        Assert.False(restored.ConfirmAttendedRun);
+        Assert.Equal(InstructionErrorBehavior.AbortOnError, restored.ErrorBehavior);
+    }
+
+    [Fact]
+    public void HistoricalDeliveryFailuresRetainEvidenceWithoutBlockingNewWorkOrIgnoringAuthentication()
+    {
+        Assert.True(DirectorAcquisition.HistoricalCheckInFailure(new InvalidDataException()));
+        Assert.True(DirectorAcquisition.HistoricalCheckInFailure(new CoordinatorIntakeException(CoordinatorIntakeFailure.UnexpectedStatus, System.Net.HttpStatusCode.Conflict)));
+        Assert.False(DirectorAcquisition.HistoricalCheckInFailure(new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired)));
+        Assert.False(DirectorAcquisition.HistoricalCheckInFailure(new OperationCanceledException()));
+    }
+
+    [Fact]
+    public void AutomaticRecoveryHonorsCancellationAuthenticationAndExplicitPolicyStops()
+    {
+        Assert.True(DirectorAcquisition.CanAutomaticallyRecover(new IOException("Interrupted camera transfer")));
+        var stop = new InvalidOperationException("Stop for night");
+        stop.Data["DirectorPolicyStop"] = true;
+        foreach (var terminal in new Exception[] { stop, new OperationCanceledException(), new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired) })
+        {
+            Assert.False(DirectorAcquisition.CanAutomaticallyRecover(terminal));
+            Assert.False(DirectorAcquisition.CanAutomaticallyRecover(new AggregateException(new IOException(), terminal)));
+        }
+    }
+
+    [Fact]
+    public void InitialStatusTracksAcquisitionSettingAndPreservesReportedProgress()
+    {
+        var session = new DirectorSessionContainer();
+        var changes = new List<string?>();
+        session.PropertyChanged += (_, args) => changes.Add(args.PropertyName);
+        Assert.Contains("Acquisition is off", session.SessionStatus);
+        session.Options.EnableAcquisition = true;
+        Assert.Contains("when you start the sequence", session.SessionStatus);
+        Assert.DoesNotContain("not armed", session.SessionStatus);
+        Assert.Contains(nameof(session.SessionStatus), changes);
+
+        session.Report(DirectorSessionDisplay.Empty with { Phase = "Equipment reported; awaiting operator review" });
+        session.Options.LocalTargetScheduling = true;
+        Assert.Equal("Equipment reported; awaiting operator review", session.SessionStatus);
+        session.ResetProgress();
+        Assert.Contains("when you start the sequence", session.SessionStatus);
+        session.Options.EnableAcquisition = false;
+        Assert.Contains("Acquisition is off", session.SessionStatus);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void SummaryExplainsTargetSelectionAndWorkRequestsWithoutClaimingPermission(bool local, bool automatic)
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.LocalTargetScheduling = local;
+        session.Options.AutomaticWorkloads = automatic;
+        var summary = session.Readiness;
+        Assert.Contains(local ? "Director selects targets" : "one prepared target", summary);
+        Assert.Contains(automatic ? "requests work from PSF Guard automatically" : "Assign a workload in PSF Guard", summary);
+        Assert.DoesNotContain("Before New Target", summary);
+        Assert.DoesNotContain("commissioned", summary);
+        session.Options.EnableAcquisition = true;
+        session.Options.SlewCenter = DirectorOperationOwner.Sequence;
+        Assert.Equal(summary, session.Readiness);
+    }
+
+    [Fact]
     public void TelemetryRestoresOuterActionAndClearsAtSessionEndWithoutCloningIt()
     {
         var session = new DirectorSessionContainer();

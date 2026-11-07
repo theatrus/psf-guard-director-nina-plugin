@@ -7,5 +7,5 @@ public sealed record DirectorSessionDisplay(
     string LastCheckIn, string WaitReason, string Quality = "Off")
 {
     public static DirectorSessionDisplay Empty { get; } = new(
-        "Configuration preview - acquisition not armed", "-", "-", "-", "-", "-", "-", "Not connected", "Not evaluated", "-", "-", "-");
+        "Not started", "-", "-", "-", "-", "-", "-", "Not connected", "Not evaluated", "-", "-", "-");
 }

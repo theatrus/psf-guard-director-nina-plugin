@@ -36,6 +36,16 @@ internal sealed class CoordinatorTransport : IDisposable
 
     internal async Task<(byte[] Bytes, string? ETag)> SendAsync(string route, byte[]? body, CancellationToken token, Guid? profileId = null)
     {
+        var result = await SendCoreAsync(route, body, token, profileId, false).ConfigureAwait(false);
+        return (result.Bytes, result.ETag);
+    }
+
+    internal Task<(byte[] Bytes, string? ETag, HttpStatusCode Status)> ReadOptionalAsync(string route, CancellationToken token, Guid profileId) =>
+        SendCoreAsync(route, null, token, profileId, true);
+
+    private async Task<(byte[] Bytes, string? ETag, HttpStatusCode Status)> SendCoreAsync(string route, byte[]? body, CancellationToken token,
+        Guid? profileId, bool allowMissing)
+    {
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(Endpoint, route));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
@@ -58,7 +68,8 @@ internal sealed class CoordinatorTransport : IDisposable
         try
         {
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.OK) throw new CoordinatorIntakeException(Classify(response.StatusCode), response.StatusCode);
+            if (response.StatusCode != HttpStatusCode.OK && !(allowMissing && response.StatusCode == HttpStatusCode.NotFound))
+                throw new CoordinatorIntakeException(Classify(response.StatusCode), response.StatusCode);
             if (response.Content.Headers.ContentType?.MediaType != "application/json" || response.Content.Headers.ContentEncoding.Count != 0)
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
             if (response.Content.Headers.ContentLength > CoordinatorProgramContract.MaximumBytes)
@@ -75,7 +86,7 @@ internal sealed class CoordinatorTransport : IDisposable
                 bytes.Write(buffer, 0, read);
             }
             token.ThrowIfCancellationRequested();
-            return (bytes.ToArray(), response.Headers.ETag is { IsWeak: false } etag ? etag.ToString() : null);
+            return (bytes.ToArray(), response.Headers.ETag is { IsWeak: false } etag ? etag.ToString() : null, response.StatusCode);
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Transport); }
