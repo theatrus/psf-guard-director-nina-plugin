@@ -3,6 +3,7 @@ using System.Reflection;
 using Newtonsoft.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -13,6 +14,37 @@ namespace PsfGuard.Director.SimulatorProbe;
 
 internal static class SessionUiProbe
 {
+    internal static async Task<IAsyncDisposable> ObserveLiveAsync(DirectorSessionContainer session)
+    {
+        return await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var chart = new NINA.WPF.Base.View.AltitudeChart { Height = 220 };
+            chart.SetBinding(FrameworkElement.DataContextProperty, new Binding(nameof(session.SkyTarget)) { Source = session });
+            chart.SetBinding(NINA.WPF.Base.View.AltitudeChart.NighttimeDataProperty, new Binding(nameof(session.SkyNighttime)) { Source = session });
+            var history = new DataGrid { Height = 220, IsReadOnly = true, AutoGenerateColumns = true };
+            history.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(session.ActionHistory)) { Source = session });
+            var content = new StackPanel();
+            content.Children.Add(new Button { Content = "Report equipment", Command = session.ReportEquipmentCommand });
+            content.Children.Add(chart);
+            content.Children.Add(history);
+            var window = new Window
+            {
+                Title = "Director simulator live view",
+                Width = 700,
+                Height = 500,
+                Owner = Application.Current.MainWindow,
+                Content = content
+            };
+            window.Show();
+            return (IAsyncDisposable)new LiveView(window);
+        });
+    }
+
+    private sealed class LiveView(Window window) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync() => await window.Dispatcher.InvokeAsync(window.Close);
+    }
+
     internal static Task RenderAsync(string directory, DirectorSessionDisplay? display = null, DirectorSessionContainer? source = null) => Application.Current.Dispatcher.InvokeAsync(() =>
     {
         RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;

@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Input;
 
 namespace PsfGuard.Director.Plugin;
@@ -16,5 +17,18 @@ internal sealed class AsyncCommand(Func<Task> execute, Func<bool> canExecute, Ac
         catch (Exception error) { reportError(error); }
         finally { running = false; Refresh(); }
     }
-    internal void Refresh() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    internal void Refresh()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null)
+        {
+            if (dispatcher.HasShutdownStarted) return;
+            if (!dispatcher.CheckAccess())
+            {
+                dispatcher.BeginInvoke(Refresh);
+                return;
+            }
+        }
+        CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    }
 }
