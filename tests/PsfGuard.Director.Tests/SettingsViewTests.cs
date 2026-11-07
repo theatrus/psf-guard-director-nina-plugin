@@ -81,8 +81,14 @@ public sealed class SettingsViewTests
                     Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
                     host.UpdateLayout();
                     Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                    var collaboration = Assert.Single(Descendants(host).OfType<Expander>());
+                    var header = Assert.IsType<TextBlock>(collaboration.Header);
+                    Assert.Equal("Standalone collaboration", header.Text);
+                    Assert.Same(resources["PrimaryBrush"], header.Foreground);
+                    Assert.True(header.ActualWidth > 0 && header.ActualHeight > 0);
+                    Assert.False(collaboration.IsExpanded);
                     var buttons = Descendants(host).OfType<Button>().ToArray();
-                    Assert.Equal(13, buttons.Length);
+                    Assert.Equal(6, buttons.Length);
                     Assert.Equal(state != "Ready", buttons[0].IsEnabled);
                     Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                     foreach (var button in buttons)
@@ -96,8 +102,7 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(3, options.Length);
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Allow loopback HTTP for isolated testing" },
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
                     foreach (var option in options)
                     {
@@ -122,6 +127,18 @@ public sealed class SettingsViewTests
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     using var file = File.Create(path);
                     encoder.Save(file);
+
+                    collaboration.IsExpanded = true;
+                    host.Measure(new Size(width, double.PositiveInfinity));
+                    host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                    var collaborationButtons = Descendants(collaboration).OfType<Button>().ToArray();
+                    Assert.Equal(7, collaborationButtons.Length);
+                    Assert.All(collaborationButtons, button => Assert.NotNull(button.Command));
+                    var collaborationInputs = Descendants(collaboration).OfType<TextBox>().ToArray();
+                    Assert.Equal(3, collaborationInputs.Length);
+                    Assert.Contains(Descendants(collaboration).OfType<CheckBox>(),
+                        option => Equals(option.Content, "Allow loopback HTTP for isolated testing"));
                 }
         }
         finally
@@ -197,6 +214,7 @@ public sealed class SettingsViewTests
         for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
         {
             var child = VisualTreeHelper.GetChild(root, index);
+            if (child is UIElement { Visibility: not Visibility.Visible }) continue;
             yield return child;
             foreach (var nested in Descendants(child)) yield return nested;
         }
