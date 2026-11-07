@@ -58,7 +58,9 @@ with Director support. The planning runtime is bundled with the plugin.
    and configure safety, enclosure clearance, horizon and operation ownership.
    Keep acquisition disabled while setting up.
 4. Use **Report equipment**, then review the rig configuration and commission
-   its project work in PSF Guard. Each rig is bound to its project database.
+   its project work in PSF Guard. Director's plugin settings show acceptance
+   for the report sent in the current N.I.N.A. session. Each rig is bound to
+   its project database.
 5. Enable **Local target scheduling**, **Automatic workloads**, and finally
    **Enable acquisition**. Run the sequence to request work and start imaging.
 
@@ -90,8 +92,11 @@ When the current authorization expires, Director needs fresh server approval.
 The seven slots are **Before Wait**, **After Wait**, **Before New Target**,
 **After Each Exposure**, **After New Target**, **After Each Target**, and
 **After Target Complete**. Use the native editors to add NINA instructions and
-compatible plugin actions. Choose Director or Sequence ownership per operation
-so autofocus, guiding and meridian flips have one owner.
+compatible plugin actions. Under **Session → Operation ownership**, choose
+**Sequence instructions / triggers** for each operation you want your own
+instructions or triggers to run. N.I.N.A. also evaluates triggers from
+enclosing instruction sets. When acquisition is enabled, Director shows the
+location of any overlapping instruction or trigger before the session runs.
 
 ![Director's instruction slots in the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
 

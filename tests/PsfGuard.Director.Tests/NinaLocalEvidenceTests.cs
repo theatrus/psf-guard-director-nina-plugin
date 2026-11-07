@@ -207,6 +207,32 @@ public sealed class NinaLocalEvidenceTests
     }
 
     [Fact]
+    public void AttendedRunWithoutMonitorStopsIfProfileOrMonitorChanges()
+    {
+        var profile = new Mock<IProfile> { DefaultValue = DefaultValue.Mock };
+        profile.SetupGet(p => p.Id).Returns(Guid.NewGuid());
+        profile.SetupGet(p => p.SafetyMonitorSettings.Id).Returns("No_Device");
+        var profiles = new Mock<IProfileService>();
+        profiles.SetupGet(p => p.ActiveProfile).Returns(profile.Object);
+        var monitor = new Mock<ISafetyMonitorMediator>();
+        var info = new SafetyMonitorInfo { Connected = false };
+        monitor.Setup(m => m.GetInfo()).Returns(info);
+        var clock = new TestClock();
+        Assert.Throws<InvalidOperationException>(() => new NinaSafetyInterlock(profiles.Object, monitor.Object, clock));
+        Assert.Throws<InvalidOperationException>(() => new NinaSafetyInterlock(profiles.Object, monitor.Object, clock, Mock.Of<IProfile>()));
+        using var guard = new NinaSafetyInterlock(profiles.Object, monitor.Object, clock, profile.Object);
+        Assert.False(guard.Monitored);
+        Assert.Contains("without a safety monitor", guard.Read().Reason);
+        guard.Arm();
+        info.Connected = true;
+        clock.Tick();
+        Assert.True(guard.Interrupted.IsCancellationRequested);
+        info.Connected = false;
+        Assert.NotEqual(PlannerSafety.Safe, guard.Read().Safety);
+        monitor.Verify(m => m.RegisterConsumer(It.IsAny<ISafetyMonitorConsumer>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CancellationCallbacksCanReenterEvidenceWithoutBlockingTheMonitorThread()
     {
         using var f = new SafetyFixture();

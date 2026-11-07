@@ -54,7 +54,7 @@ internal static class SessionUiProbe
             {
                 tabs.SelectedIndex = tab;
                 Layout();
-                var controls = Descendants(host).OfType<Control>()
+                var controls = Descendants(tabs).OfType<Control>()
                     .Where(control => !string.IsNullOrEmpty(System.Windows.Automation.AutomationProperties.GetName(control))).ToArray();
                 if (tab == 0)
                 {

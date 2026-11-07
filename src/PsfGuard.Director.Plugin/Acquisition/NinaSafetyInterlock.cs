@@ -8,8 +8,8 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 
 internal sealed record NinaSafetyEvidence(PlannerSafety Safety, string Reason, ulong ValidUntilMs);
 
-// A connected monitor is mandatory for this owner. Attended operation needs a
-// separate, fresh local consent flow; a serialized enum is never that consent.
+// Only a locally confirmed attended run can admit a profile without a monitor.
+// A configured monitor always supplies fresh native evidence.
 internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
 {
     private readonly object gate = new();
@@ -18,6 +18,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
     private readonly Guid profileId;
     private readonly ISafetyMonitorMediator monitor;
     private readonly string deviceId;
+    internal bool Monitored { get; }
     private readonly TimeProvider clock;
     private readonly TimeSpan maxAge;
     private CancellationTokenSource interrupted = new();
@@ -29,31 +30,35 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
     private bool safe, connected, armed, disposed, profileInvalidated;
     private string reason = "Waiting for a fresh safety-monitor update";
 
-    internal NinaSafetyInterlock(IProfileService profiles, ISafetyMonitorMediator monitor, TimeProvider clock)
+    internal NinaSafetyInterlock(IProfileService profiles, ISafetyMonitorMediator monitor, TimeProvider clock, IProfile? unmonitoredProfile = null)
     {
         this.profiles = profiles; this.monitor = monitor; this.clock = clock;
         profile = profiles.ActiveProfile;
         profileId = profile.Id;
         deviceId = profile.SafetyMonitorSettings.Id;
-        if (string.IsNullOrWhiteSpace(deviceId) || deviceId == "No_Device")
+        Monitored = !(ReferenceEquals(profile, unmonitoredProfile) && deviceId == "No_Device");
+        if (Monitored && (string.IsNullOrWhiteSpace(deviceId) || deviceId == "No_Device"))
             throw new InvalidOperationException("Director requires a configured safety monitor.");
-        var interval = profile.ApplicationSettings.DevicePollingInterval;
-        if (!double.IsFinite(interval) || interval <= 0 || interval > 10)
+        var interval = Monitored ? profile.ApplicationSettings.DevicePollingInterval : 0;
+        if (Monitored && (!double.IsFinite(interval) || interval <= 0 || interval > 10))
             throw new InvalidOperationException("Safety monitoring requires a NINA polling interval of at most 10 seconds.");
-        maxAge = TimeSpan.FromSeconds(Math.Max(5, interval * 3));
+        maxAge = Monitored ? TimeSpan.FromSeconds(Math.Max(5, interval * 3)) : TimeSpan.FromSeconds(1);
         profiles.BeforeProfileChanging += ProfileChanged;
         profiles.ProfileChanged += ProfileChanged;
-        monitor.IsSafeChanged += SafeChanged;
-        monitor.Disconnected += Disconnected;
         try
         {
-            monitor.RegisterConsumer(this);
+            if (Monitored)
+            {
+                monitor.IsSafeChanged += SafeChanged;
+                monitor.Disconnected += Disconnected;
+                monitor.RegisterConsumer(this);
+            }
             watchdog = clock.CreateTimer(_ => Read(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
         }
         catch
         {
             Unsubscribe();
-            try { monitor.RemoveConsumer(this); }
+            try { if (Monitored) monitor.RemoveConsumer(this); }
             catch (Exception error) { NINA.Core.Utility.Logger.Error(error); }
             interrupted.Dispose();
             throw;
@@ -98,10 +103,17 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
                 || profile.SafetyMonitorSettings.Id != deviceId)
                 return Refuse("NINA profile or safety monitor changed");
             var info = monitor.GetInfo();
+            var now = checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
+            if (!Monitored)
+            {
+                if (info.Connected) return Refuse("A safety monitor connected during attended operation. Start a new run.");
+                if (interrupted.IsCancellationRequested) return new(PlannerSafety.Unsafe, reason, 0);
+                reason = "Attended operation without a safety monitor";
+                return new(PlannerSafety.Safe, reason, checked(now + (ulong)maxAge.TotalMilliseconds));
+            }
             if (!info.Connected || info.DeviceId != deviceId) return Refuse("Required safety monitor disconnected or changed");
             if (!info.IsSafe) return Refuse("Safety monitor reports unsafe", PlannerSafety.Unsafe);
             var elapsed = observed is { } timestamp ? clock.GetElapsedTime(timestamp) : TimeSpan.MaxValue;
-            var now = checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
             if (!connected || !safe || observed is null || elapsed < TimeSpan.Zero || elapsed >= maxAge
                 || now < observedUtc || now - observedUtc >= (ulong)maxAge.TotalMilliseconds)
                 return Refuse("Safety-monitor evidence is missing or stale");
@@ -200,7 +212,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
         }
         watchdog.Dispose();
         Unsubscribe();
-        monitor.RemoveConsumer(this);
+        if (Monitored) monitor.RemoveConsumer(this);
         // Keep the canceled token source alive for native operations still
         // unwinding; disposal must not turn a safety stop into a token error.
     }

@@ -106,7 +106,10 @@ public sealed class AcquisitionLeaseTests
         options.SlewCenter = options.Focus = options.Guiding = options.Dither = options.MeridianFlip = DirectorOperationOwner.Sequence;
         Assert.Empty(DirectorAcquisition.PolicyIssues(options));
         options.Safety = DirectorSafetyPolicy.Attended;
-        Assert.Contains(DirectorAcquisition.PolicyIssues(options), x => x.Contains("safety monitor"));
+        Assert.Empty(DirectorAcquisition.PolicyIssues(options));
+        options.Weather = DirectorWeatherPolicy.HoldAndResume;
+        options.AllowSettledRestart = true;
+        Assert.Equal(2, DirectorAcquisition.PolicyIssues(options).Count);
         options.Safety = DirectorSafetyPolicy.RequireMonitor;
         options.Focus = DirectorOperationOwner.Director;
         Assert.Empty(DirectorAcquisition.PolicyIssues(options));

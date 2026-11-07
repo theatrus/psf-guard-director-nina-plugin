@@ -25,6 +25,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal string? ProgramRevision { get; private set; }
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
+    internal bool Attended { get; private set; }
     internal bool PublicUnsafe { get; private init; }
     internal bool AbortWithoutPark { get; private init; }
     internal bool DeferredCheckIn { get; private init; }
@@ -162,6 +163,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             var probe = new CoordinatorProbe(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
             using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
             probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
+            probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
             return probe;
         }
         catch
@@ -199,6 +201,11 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             if (report.GetProperty("client_id").GetGuid() != pairing.ClientId || !report.GetProperty("accepted_revision").ValueKind.Equals(JsonValueKind.Null)
                 || report.GetProperty("configuration").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id)
                 throw new InvalidDataException("Native equipment report did not match the paired simulator.");
+            var submission = DirectorEquipmentReport.Find(endpoint, pairing)
+                ?? throw new InvalidDataException("Settings could not find the report for the active pairing.");
+            if (submission.Id != report.GetProperty("report_id").GetGuid()
+                || await submission.CheckAcceptanceAsync(Credential, false, token) is not null)
+                throw new InvalidDataException("The pending equipment report was replaced or already accepted.");
             using var beforeResponse = await operatorClient.GetAsync("api/director/v1/catalogs/director-simulator/rig/profile", token);
             beforeResponse.EnsureSuccessStatusCode();
             using var before = JsonDocument.Parse(await beforeResponse.Content.ReadAsByteArrayAsync(token));
@@ -244,6 +251,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             if (accepted.GetProperty("configuration").GetProperty("value").Deserialize<DirectorConfiguration>(Wire)?.Id != configuration.Id
                 || accepted.GetProperty("optics").GetRawText() != manual.GetProperty("profile").GetProperty("optics").GetRawText())
                 throw new InvalidDataException("Review changed manual optics or accepted the wrong native configuration.");
+            var revision = await submission.CheckAcceptanceAsync(Credential, false, token);
+            if (revision != accepted.GetProperty("revision").GetUInt64()
+                || DirectorEquipmentReport.Find(endpoint, pairing)?.AcceptedRevision != revision)
+                throw new InvalidDataException("Settings did not observe acceptance of the original report.");
             EquipmentReviewVerified = true;
         }
         else

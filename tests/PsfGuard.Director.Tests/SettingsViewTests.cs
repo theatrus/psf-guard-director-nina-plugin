@@ -82,6 +82,7 @@ public sealed class SettingsViewTests
                     host.UpdateLayout();
                     Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
                     var collaboration = Assert.Single(Descendants(host).OfType<Expander>());
+                    Assert.Contains(Descendants(host).OfType<TextBlock>(), text => text.Text == model.EquipmentReportStatus);
                     var header = Assert.IsType<TextBlock>(collaboration.Header);
                     Assert.Equal("Standalone collaboration", header.Text);
                     Assert.Same(resources["PrimaryBrush"], header.Foreground);
@@ -229,6 +230,7 @@ public sealed class SettingsViewTests
 
     public sealed class ViewModel(string state)
     {
+        public string EquipmentReportStatus => "Equipment report accepted as rig configuration revision 2.";
         public object Connection { get; init; } = new ConnectionViewModel();
         public object Collaboration { get; } = new CollaborationViewModel();
         public string ProfileName => "Director simulator - long profile name";

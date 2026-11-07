@@ -60,7 +60,11 @@ public sealed partial class DirectorAcquisition
         if (requireEnabled && !options.EnableAcquisition) issues.Add("Enable acquisition to run this session.");
         if (requireEnabled && options.Enclosure == DirectorEnclosurePolicy.Unconfigured)
             issues.Add("Select an enclosure clearance policy before acquisition.");
-        if (options.Safety != DirectorSafetyPolicy.RequireMonitor) issues.Add("Public acquisition requires a connected safety monitor.");
+        if (requireEnabled && options.Safety == DirectorSafetyPolicy.Attended)
+        {
+            if (options.AllowSettledRestart) issues.Add("Settled-night restart requires the Require connected safety monitor policy.");
+            if (options.Weather == DirectorWeatherPolicy.HoldAndResume) issues.Add("Weather and roof hold with automatic resume requires the Require connected safety monitor policy.");
+        }
         if (options.Startup != DirectorOperationOwner.Director || options.Shutdown != DirectorOperationOwner.Director)
             issues.Add("Acquisition requires Director startup and shutdown (unpark/park).");
         return issues;
@@ -73,7 +77,6 @@ public sealed partial class DirectorAcquisition
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         using var native = CreateNativeImaging(options);
         native?.CheckEquipment();
-        NinaNativeImaging.ValidateOwnership(container, options);
         using var owner = new AcquisitionLease(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var settings = new PluginOptionsAccessor(profiles, PluginId);
@@ -94,14 +97,15 @@ public sealed partial class DirectorAcquisition
         var (constraintBinding, equipmentBinding, configuration) = ReadNativeEquipment(options, profile, pairing.Binding.RigId.ToString("D"), constraints);
         var reader = new NinaEquipmentSnapshot(profiles, camera, filters, telescope);
         var names = reader.ReadFilterNames(equipmentBinding, configuration);
-        using var client = new CoordinatorEquipmentClient(endpoint, Credential, connection.AllowInsecureHttp);
+        var report = new DirectorEquipmentReport(endpoint, pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names,
+            checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         container.UpdateDisplay(d => d with { Phase = "Reporting equipment", Operation = "Equipment report" });
-        var ack = await client.ReportAsync(pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names,
-            checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), token);
+        var ack = await report.SubmitAsync(Credential, connection.AllowInsecureHttp, token);
         await Credential(token);
         if (constraints.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision || reader.Read(equipmentBinding).Id != configuration.Id
             || !System.Text.Json.JsonSerializer.Serialize(container.Options).Equals(System.Text.Json.JsonSerializer.Serialize(options), StringComparison.Ordinal))
             throw new InvalidOperationException("Equipment report was received, but local settings changed. Report the current setup again.");
+        report.Remember(ack.AcceptedRevision);
         container.UpdateDisplay(d => d with
         {
             Phase = ack.AcceptedRevision is null ? "Equipment reported; awaiting operator review" : "Equipment report already reviewed",
@@ -132,10 +136,12 @@ public sealed partial class DirectorAcquisition
         return (constraints, equipment, new NinaEquipmentSnapshot(profiles, camera, filters, telescope).Read(equipment));
     }
 
-    internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, CancellationToken token)
+    internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, bool attended, CancellationToken token)
     {
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
+        var profileAtStart = profiles.ActiveProfile;
+        var unmonitoredProfile = attended && profileAtStart.SafetyMonitorSettings.Id == "No_Device" ? profileAtStart : null;
         var night = Guid.NewGuid().ToString("D");
         var nightStart = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var nightEnd = checked(nightStart + (ulong)(container.Options.MaximumHours * 3600000));
@@ -154,7 +160,9 @@ public sealed partial class DirectorAcquisition
         do
         {
             token.ThrowIfCancellationRequested();
-            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, token);
+            if (attended && !ReferenceEquals(profiles.ActiveProfile, profileAtStart))
+                throw new InvalidOperationException("The N.I.N.A. profile changed. Confirm a new attended run.");
+            var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, token);
             firstAllocation = false;
             if (!more) break;
         } while (container.Options.AutomaticWorkloads);
@@ -181,9 +189,11 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, CancellationToken token)
     {
         var options = container.Options.Clone();
+        if (attended != (options.Safety == DirectorSafetyPolicy.Attended))
+            throw new InvalidOperationException("The safety policy changed. Start a new Director run.");
         var weatherHolds = options.Weather == DirectorWeatherPolicy.HoldAndResume;
         var issues = options.ValidateSettings().Concat(PolicyIssues(options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
@@ -210,7 +220,7 @@ public sealed partial class DirectorAcquisition
         string? lastLoggedPhase = null;
         var launched = false;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
-        using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System);
+        using var interlock = new NinaSafetyInterlock(profiles, safety, TimeProvider.System, unmonitoredProfile);
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
         if (!weatherHolds)
         {
@@ -1122,7 +1132,8 @@ public sealed partial class DirectorAcquisition
         {
             lifetime.Token.ThrowIfCancellationRequested(); owner.CheckClock();
             native?.CheckEquipment();
-            if (profiles.ActiveProfile.Id != profile || !ignoreWeather && (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
+            if (profiles.ActiveProfile.Id != profile || container.Options.Safety != options.Safety
+                || !ignoreWeather && (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
                 || runtime.Status.State != RuntimeState.Ready || Now() >= assignment.ExpiresAtMs)
                 throw new InvalidOperationException("Director context, safety, runtime or allocation validity changed.");
         }
@@ -1223,7 +1234,7 @@ public sealed partial class DirectorAcquisition
             }
             catch (Exception error) { Logger.Warning($"Director pointing unavailable: {error.GetType().Name}"); }
             var phase = camera.GetInfo() is { Connected: true, IsExposing: true } ? "exposing" : display.Phase;
-            return new(phase, display.Target, interlock.Read().Safety.ToString(), snapshot.Operation,
+            return new(phase, display.Target, interlock.Monitored ? interlock.Read().Safety.ToString() : PlannerSafety.Unknown.ToString(), snapshot.Operation,
                 snapshot.StartedMs, snapshot.ElapsedMs, display.Goal == "-" ? null : display.Goal,
                 display.WaitReason == "-" ? null : display.WaitReason, display.QueueDepth,
                 int.TryParse(display.QueueDepth, out var depth) && depth >= 0 ? depth : null, pointing,
@@ -1231,7 +1242,14 @@ public sealed partial class DirectorAcquisition
         }
         void Report(string phase, string? connectivity)
         {
-            container.UpdateDisplay(d => d with { Phase = phase, Rig = rig, Connectivity = connectivity ?? d.Connectivity, Safety = interlock.Read().Safety.ToString() });
+            var safetyEvidence = interlock.Read();
+            container.UpdateDisplay(d => d with
+            {
+                Phase = phase,
+                Rig = rig,
+                Connectivity = connectivity ?? d.Connectivity,
+                Safety = interlock.Monitored ? safetyEvidence.Safety.ToString() : safetyEvidence.Reason
+            });
             if (lastLoggedPhase != phase)
             {
                 container.RecordAction(target?.Name ?? "", "Planner", phase.Replace('_', ' '));

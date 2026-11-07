@@ -102,6 +102,23 @@ public sealed class DirectorSessionContainerTests
     }
 
     [Fact]
+    public void AttendedConfirmationIsLocalToOneSessionInstance()
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.Safety = DirectorSafetyPolicy.Attended;
+        session.Options.EnableAcquisition = true;
+        Assert.Contains(session.ConfigurationIssues, issue => issue.Contains("supervise"));
+        session.ConfirmAttendedRun = true;
+        Assert.DoesNotContain(session.ConfigurationIssues, issue => issue.Contains("supervise"));
+        var json = JsonConvert.SerializeObject(session, Settings);
+        Assert.DoesNotContain(nameof(session.ConfirmAttendedRun), json);
+        Assert.False(JsonConvert.DeserializeObject<DirectorSessionContainer>(json, Settings)!.ConfirmAttendedRun);
+        Assert.False(((DirectorSessionContainer)session.Clone()).ConfirmAttendedRun);
+        session.Options.EnableAcquisition = false;
+        Assert.False(session.ConfirmAttendedRun);
+    }
+
+    [Fact]
     public void SessionIsExportedAsANativeContainerAndItem()
     {
         var exports = typeof(DirectorSessionContainer).GetCustomAttributes(typeof(ExportAttribute), false).Cast<ExportAttribute>();
