@@ -64,6 +64,11 @@ with Director support. The planning runtime is bundled with the plugin.
 5. Enable **Local target scheduling**, **Automatic workloads**, and finally
    **Enable acquisition**. Run the sequence to request work and start imaging.
 
+Before a run, Director Session shows whether acquisition is off or has not
+started. With **Enable acquisition** on, start the sequence to check equipment
+and permission to image. There is no separate arm button. The summary describes
+your target-selection and workload settings; it does not confirm server approval.
+
 Put connect/cool steps before Director and warm/disconnect steps after it in the
 outer NINA sequence. Pairing and equipment reporting alone never start acquisition.
 See the [setup and operation guide](docs/native-capture.md) for policy details.

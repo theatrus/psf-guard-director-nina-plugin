@@ -18,6 +18,47 @@ namespace PsfGuard.Director.Tests;
 public sealed class DirectorSessionContainerTests
 {
     [Fact]
+    public void InitialStatusTracksAcquisitionSettingAndPreservesReportedProgress()
+    {
+        var session = new DirectorSessionContainer();
+        var changes = new List<string?>();
+        session.PropertyChanged += (_, args) => changes.Add(args.PropertyName);
+        Assert.Contains("Acquisition is off", session.SessionStatus);
+        session.Options.EnableAcquisition = true;
+        Assert.Contains("when you start the sequence", session.SessionStatus);
+        Assert.DoesNotContain("not armed", session.SessionStatus);
+        Assert.Contains(nameof(session.SessionStatus), changes);
+
+        session.Report(DirectorSessionDisplay.Empty with { Phase = "Equipment reported; awaiting operator review" });
+        session.Options.LocalTargetScheduling = true;
+        Assert.Equal("Equipment reported; awaiting operator review", session.SessionStatus);
+        session.ResetProgress();
+        Assert.Contains("when you start the sequence", session.SessionStatus);
+        session.Options.EnableAcquisition = false;
+        Assert.Contains("Acquisition is off", session.SessionStatus);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void SummaryExplainsTargetSelectionAndWorkRequestsWithoutClaimingPermission(bool local, bool automatic)
+    {
+        var session = new DirectorSessionContainer();
+        session.Options.LocalTargetScheduling = local;
+        session.Options.AutomaticWorkloads = automatic;
+        var summary = session.Readiness;
+        Assert.Contains(local ? "Director selects targets" : "one prepared target", summary);
+        Assert.Contains(automatic ? "requests work from PSF Guard automatically" : "Assign a workload in PSF Guard", summary);
+        Assert.DoesNotContain("Before New Target", summary);
+        Assert.DoesNotContain("commissioned", summary);
+        session.Options.EnableAcquisition = true;
+        session.Options.SlewCenter = DirectorOperationOwner.Sequence;
+        Assert.Equal(summary, session.Readiness);
+    }
+
+    [Fact]
     public void TelemetryRestoresOuterActionAndClearsAtSessionEndWithoutCloningIt()
     {
         var session = new DirectorSessionContainer();

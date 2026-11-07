@@ -76,6 +76,28 @@ internal static class SessionUiProbe
             var host = new Border { Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
             System.Windows.Documents.TextElement.SetForeground(host, (Brush)Application.Current.FindResource("PrimaryBrush"));
             Layout();
+            if (display is null)
+            {
+                var status = Descendants(host).OfType<TextBlock>().Single(text =>
+                    BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "SessionStatus");
+                var summary = Descendants(host).OfType<TextBlock>().Single(text =>
+                    BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "Readiness");
+                var acquisition = Toggle("Enable acquisition");
+                var local = Toggle("Local target scheduling");
+                var automatic = Toggle("Automatic workloads");
+                if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Initial session status did not explain disabled acquisition.");
+                acquisition.IsChecked = local.IsChecked = automatic.IsChecked = true;
+                Layout();
+                if (!status.Text.Contains("when you start the sequence") || !summary.Text.Contains("Director selects targets")
+                    || !summary.Text.Contains("requests work from PSF Guard automatically") || summary.Text.Contains("Before New Target"))
+                    throw new InvalidOperationException("Session header did not follow the bound acquisition and workload settings.");
+                acquisition.IsChecked = local.IsChecked = automatic.IsChecked = false;
+                Layout();
+                if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Session header did not follow acquisition being turned off.");
+
+                CheckBox Toggle(string name) => Descendants(host).OfType<CheckBox>().Single(control =>
+                    System.Windows.Automation.AutomationProperties.GetName(control) == name);
+            }
             var reportButton = Descendants(host).OfType<Button>().SingleOrDefault(button => Equals(button.Content, "Report equipment"))
                 ?? throw new InvalidOperationException("Director equipment report button was not rendered.");
             if (reportButton.Command is null || reportButton.IsEnabled || reportButton.Style != Application.Current.FindResource("StandardButton")

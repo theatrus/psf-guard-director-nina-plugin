@@ -91,10 +91,11 @@
                     </DockPanel>
                 </Expander.Header>
                 <StackPanel Margin="12">
+                    <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,8" />
                     <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
+                        ToolTip="Send connected equipment details to PSF Guard. Check acceptance in Director's plugin settings. Reporting does not start acquisition."
                         HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6" />
-                    <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <DockPanel Margin="0,0,0,8">
                         <DockPanel.Style>
                             <Style TargetType="DockPanel">

@@ -183,10 +183,14 @@ public sealed class DirectorSessionContainer : SequentialContainer
                 (ulong)System.Diagnostics.Stopwatch.GetElapsedTime(active.Timestamp).TotalMilliseconds);
         }
     }
-    public string SessionStatus => Display.Phase;
-    public string Readiness => !Options.EnableAcquisition ? AcquisitionGate :
-        $"{(Options.LocalTargetScheduling ? "Local target scheduling; target setup in Before New Target" : "Prepared target")}; " +
-        (Options.AutomaticWorkloads ? "commissioned automatic workloads" : "online one-shot allocation admission required");
+    public string SessionStatus => Display.Phase != DirectorSessionDisplay.Empty.Phase ? Display.Phase :
+        Options.EnableAcquisition
+            ? "Not started. Equipment and permission to image are checked when you start the sequence."
+            : "Acquisition is off. Turn on Enable acquisition in the Session tab to allow imaging.";
+    public string Readiness =>
+        (Options.LocalTargetScheduling ? "Director selects targets from the workload." : "Each workload uses one prepared target.") + " " +
+        (Options.AutomaticWorkloads ? "Director requests work from PSF Guard automatically when the sequence runs." :
+            "Assign a workload in PSF Guard before starting the sequence.");
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
     private bool CanReportEquipment()
@@ -318,6 +322,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
         RaisePropertyChanged(nameof(Issues));
         RaisePropertyChanged(nameof(ConfigurationIssues));
         RaisePropertyChanged(nameof(Readiness));
+        RaisePropertyChanged(nameof(SessionStatus));
         return issues.Count == 0;
     }
 
