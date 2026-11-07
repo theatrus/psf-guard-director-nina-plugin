@@ -57,6 +57,19 @@ public sealed class DirectorSessionContainerTests
     }
 
     [Fact]
+    public void AutomaticRecoveryHonorsCancellationAuthenticationAndExplicitPolicyStops()
+    {
+        Assert.True(DirectorAcquisition.CanAutomaticallyRecover(new IOException("Interrupted camera transfer")));
+        var stop = new InvalidOperationException("Stop for night");
+        stop.Data["DirectorPolicyStop"] = true;
+        foreach (var terminal in new Exception[] { stop, new OperationCanceledException(), new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired) })
+        {
+            Assert.False(DirectorAcquisition.CanAutomaticallyRecover(terminal));
+            Assert.False(DirectorAcquisition.CanAutomaticallyRecover(new AggregateException(new IOException(), terminal)));
+        }
+    }
+
+    [Fact]
     public void InitialStatusTracksAcquisitionSettingAndPreservesReportedProgress()
     {
         var session = new DirectorSessionContainer();

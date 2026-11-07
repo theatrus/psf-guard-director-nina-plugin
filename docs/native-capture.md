@@ -254,10 +254,11 @@ hook runs only after stable Safe/Open readmission.
 
 Every weather readmission also requires the bound camera driver to report Idle.
 NINA's cleared exposure flag alone is not confirmation. Drivers that report an
-unknown state cannot automatically resume; they require operator reconciliation.
+unknown state cannot resume until idle can be confirmed.
 
 Missing files, a restarted process, uncertain preparation, and interrupted user
-hooks or native triggers remain reconciliation-required, not automatic retries.
+hooks or native triggers cannot resume their old operation. Automatic session
+recovery retires that assignment and requests fresh work instead.
 Startup and between-allocation waits use the same persisted weather budget.
 They stop native motion/guiding, remain bounded by the original night deadline,
 and request work only after continuous Safe/Open clearance. Runtime 0.12.1
@@ -479,11 +480,11 @@ are no longer part of the session editor.
 
 ### Automatic workload intake
 
-Director requests work automatically after the operator
-reviews equipment and commissions a workload policy on PSF Guard (meta schema
-18). This is an API-only commissioning step for now; see the server's Director
-management guide. It selects the exact pairing/profile/configuration and active
-projects, not a second rig database.
+Director reports equipment automatically and requests work from the paired
+PSF Guard rig. The server applies native reports and initially allows the plans
+activated on that rig. Equipment updates preserve work permission and selected
+plans. An explicit off setting remains off. See the server's Director management
+guide for pairing and plan activation.
 
 Director persists a request UUID before contacting the coordinator and retries
 the same request after lost replies. It executes the shared Rust core's choices
@@ -495,16 +496,17 @@ must not be retried.
 
 Offline acquisition can continue within an already running grant, but offline
 completion leaves it outstanding with local receipts. Failed shutdown, capture
-or preparation uncertainty, changed configuration and revoked credentials stop
-renewal. Keep the local state for reconciliation. There is no automatic restart
-recovery, rejected-image feedback or attempt-budget increase yet. Manual
-allocations cannot be switched into this release protocol retroactively.
+or preparation uncertainty and changed configuration trigger automatic session
+recovery after equipment is idle. Revoked credentials stop acquisition visibly.
+Keep the local state: recovery preserves captures and archives old journals.
+Intentional stop-for-night policies and operator cancellation remain terminal
+for the current Run.
 Director selects multiple targets from the assigned workload and uses the native
 imaging defaults described above. Older saved sessions are loaded into this
 workflow. The stored mode fields remain readable for compatibility; the session
 editor no longer offers separate target-selection or work-request modes.
 
-`Director Session` can opt in to prepared-target acquisition. It requires the
+The internal prepared-target compatibility path requires the
 server's one-shot allocation-start API, online first launch, a connected safe
 monitor, matching commissioned equipment/site/horizon, and dated NINA IERS
 data. Sequence files cannot store launch authority. Lost launch responses and

@@ -574,6 +574,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using (var allocations = new CoordinatorAllocationClient(endpoint, Credential))
             allocation = await allocations.ReadAsync(pairing.Binding, pairing.ClientId, configuration, token);
         ProgramRevision = allocation.Envelope.Snapshot.Revision;
+        allocationRoot = Directory.CreateDirectory(Path.Combine(allocationRoot!, "replacement")).FullName;
         new CoordinatorAllocationCache(allocationRoot!, endpoint, pairing.Binding, pairing.ClientId, configuration).Store(allocation, NowMs());
         using var client = new CoordinatorWorkloadClient(root, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             localTargetScheduling: LocalTargetScheduling, nativeImaging: NativeImaging);

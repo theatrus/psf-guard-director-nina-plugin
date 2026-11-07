@@ -178,8 +178,7 @@ public sealed partial class DirectorAcquisition
             }
             catch (Exception error) when (container.Options.AutomaticWorkloads && !restartRequested && !token.IsCancellationRequested
                 && !window.Ended && container.Options.EnableAcquisition && container.Options.ValidateSettings().Count == 0
-                && error is not OperationCanceledException
-                && error is not CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.AuthenticationRequired or CoordinatorIntakeFailure.Forbidden or CoordinatorIntakeFailure.CredentialUnavailable })
+                && CanAutomaticallyRecover(error))
             {
                 Logger.Error(error);
                 container.RecordAction("", "Session recovery", $"Retrying after failure. {error.Message}");
@@ -278,6 +277,19 @@ public sealed partial class DirectorAcquisition
     internal static bool HistoricalCheckInFailure(Exception error) => error is InvalidDataException
         or CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.NotFound or CoordinatorIntakeFailure.NotReady }
         or CoordinatorIntakeException { StatusCode: System.Net.HttpStatusCode.Conflict };
+
+    internal static bool CanAutomaticallyRecover(Exception error) => error is AggregateException aggregate
+        ? aggregate.Flatten().InnerExceptions.All(CanAutomaticallyRecover)
+        : error is not OperationCanceledException
+            && error is not CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.AuthenticationRequired or CoordinatorIntakeFailure.Forbidden or CoordinatorIntakeFailure.CredentialUnavailable }
+            && !error.Data.Contains("DirectorPolicyStop");
+
+    private static InvalidOperationException PolicyStop(string message)
+    {
+        var error = new InvalidOperationException(message);
+        error.Data["DirectorPolicyStop"] = true;
+        return error;
+    }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
         string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, CancellationToken token)
@@ -939,7 +951,7 @@ public sealed partial class DirectorAcquisition
                     container.RecordAction(binding.Target.Name, "Quality probe", classified.Reason.ToString());
                     if (recovery.Record.Snapshot.Phase is RecoveryPhase.Acquiring) return;
                 }
-                throw new InvalidOperationException("Image quality recovery stopped; parking according to the abort policy.");
+                throw PolicyStop("Image quality recovery stopped; parking according to the abort policy.");
             }
 
             void ShowQuality(QualityObservation observation)
@@ -1010,7 +1022,7 @@ public sealed partial class DirectorAcquisition
                     if (recovery.Record!.Snapshot.Phase is not RecoveryPhase.WeatherHolding held)
                     {
                         if (window.Ended) return;
-                        throw new InvalidOperationException("Weather hold stopped; recovery budget or night limit reached.");
+                        throw PolicyStop("Weather hold stopped; recovery budget or night limit reached.");
                     }
                     var remaining = held.StableSinceMs is { } since
                         ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
