@@ -32,8 +32,8 @@ here are configured for that test; retries are off by default.*
 - **Checks in live or in batches.** Send rig status while connected and deliver
   recorded capture and preparation results during the night or afterward.
 - **Keeps safety local.** Safety-monitor and roof status interrupt acquisition.
-  Failed slews and uncertain operations stop the session; the default abort
-  action parks the mount when enclosure clearance permits.
+  The default abort action parks the mount when enclosure clearance permits.
+  Recovery confirms idle equipment and obtains fresh work before imaging again.
 
 Target Scheduler is not required. Director is a separate plugin from
 [PSF Guard Sync](https://github.com/theatrus/psf-guard-nina-plugin): Sync transfers
@@ -107,9 +107,10 @@ location of any overlapping instruction or trigger before the session runs.
 
 ### Recovery is your choice
 
-Cloud screening, focus/guide retries, weather/roof recovery and settled-night
-restart are **off by default**. The default is to stop for the night and park
-when the enclosure permits it.
+Cloud screening, inline focus/guide retries and weather/roof holds are **off by
+default**. Unsafe conditions stop the night and park when the enclosure permits
+it. Automatic recovery of technical failures preserves the current Run's
+duration limit and does not override a stop-for-night policy.
 
 Optional recovery has time and attempt limits. Cloud screening can monitor,
 stop for the night, or hold and take unsaved probe exposures. Its initial
