@@ -91,10 +91,24 @@
                     </DockPanel>
                 </Expander.Header>
                 <StackPanel Margin="12">
-                    <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,6" />
                     <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
-                        HorizontalAlignment="Left" Margin="0,0,0,12" Padding="12,6" />
+                        HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6" />
+                    <TextBlock Text="{Binding SessionStatus}" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <DockPanel Margin="0,0,0,8">
+                        <DockPanel.Style>
+                            <Style TargetType="DockPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Options.Safety}" Value="{x:Static local:DirectorSafetyPolicy.Attended}">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DockPanel.Style>
+                        <CheckBox DockPanel.Dock="Right" IsChecked="{Binding ConfirmAttendedRun}" AutomationProperties.Name="I will supervise this attended run" Margin="8,0,0,0" />
+                        <TextBlock Text="I will supervise this attended run" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
+                    </DockPanel>
                     <ItemsControl ItemsSource="{Binding ConfigurationIssues}" Margin="0,0,0,8">
                         <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -248,7 +262,7 @@
                                         <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="7" Text="Capture delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Capture delivery" MaxWidth="320" Margin="0,3"
-                                            ToolTip="Deferred skips target and periodic capture delivery. Session-end delivery follows its checkbox; automatic workloads always check in before requesting a successor. Live status is independent." />
+                                            ToolTip="Sends capture records. Image files stay on disk. Deferred skips target and periodic check-ins. Session-end delivery follows its checkbox. Automatic workloads always check in before requesting more work." />
                                     </Grid>
                                 </Expander>
                             </StackPanel>

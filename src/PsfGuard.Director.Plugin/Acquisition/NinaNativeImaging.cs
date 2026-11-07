@@ -233,35 +233,52 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     internal static void ValidateOwnership(DirectorSessionContainer session, DirectorSessionOptions options)
     {
         var visited = new HashSet<ISequenceItem>(ReferenceEqualityComparer.Instance);
-        foreach (var block in session.InstructionBlocks) Visit(block);
-        for (ISequenceContainer? parent = session; parent is not null; parent = parent.Parent) Triggers(parent);
+        foreach (var block in session.InstructionBlocks) Visit(block, Label(session));
+        for (ISequenceContainer? parent = session; parent is not null; parent = parent.Parent)
+            Triggers(parent, ReferenceEquals(parent, session) ? Label(parent) : $"Inherited from {Label(parent)}");
 
-        void Check(Type type)
+        static string Label(ISequenceEntity entity) => string.IsNullOrWhiteSpace(entity.Name) ? entity.GetType().Name : entity.Name;
+
+        void Check(ISequenceEntity entity, string location)
         {
-            var name = type.Namespace ?? "";
-            var conflict = options.SlewCenter == DirectorOperationOwner.Director && (typeof(Center).IsAssignableFrom(type)
-                    || type.Name == "SlewScopeToRaDec" || type.Name == "CenterAfterDriftTrigger")
-                || options.Focus == DirectorOperationOwner.Director && (typeof(RunAutofocus).IsAssignableFrom(type) || name.Contains(".Autofocus", StringComparison.Ordinal))
-                || options.Guiding == DirectorOperationOwner.Director && (typeof(StartGuiding).IsAssignableFrom(type) || typeof(StopGuiding).IsAssignableFrom(type) || type.Name == "RestoreGuiding")
-                || options.Dither == DirectorOperationOwner.Director && (typeof(Dither).IsAssignableFrom(type) || type.Name == "DitherAfterExposures")
-                || options.MeridianFlip == DirectorOperationOwner.Director && (typeof(MeridianFlipTrigger).IsAssignableFrom(type)
-                    || typeof(NinaMeridianFlipTrigger).IsAssignableFrom(type));
-            if (conflict) throw new InvalidOperationException($"{type.Name} conflicts with Director defaults. Select Sequence ownership for that operation.");
+            var type = entity.GetType();
+            var setting = entity switch
+            {
+                _ when options.SlewCenter == DirectorOperationOwner.Director &&
+                    (entity is Center || type.Name is "SlewScopeToRaDec" or "CenterAfterDriftTrigger") => "Slew and center",
+                _ when options.Focus == DirectorOperationOwner.Director &&
+                    (entity is RunAutofocus || type.Namespace?.Contains(".Autofocus", StringComparison.Ordinal) == true) => "Autofocus",
+                _ when options.Guiding == DirectorOperationOwner.Director &&
+                    (entity is StartGuiding or StopGuiding || type.Name == "RestoreGuiding") => "Guiding",
+                _ when options.Dither == DirectorOperationOwner.Director &&
+                    (entity is Dither || type.Name == "DitherAfterExposures") => "Dither",
+                _ when options.MeridianFlip == DirectorOperationOwner.Director &&
+                    entity is MeridianFlipTrigger or NinaMeridianFlipTrigger => "Meridian flip",
+                _ => null
+            };
+            if (setting is not null)
+                throw new InvalidOperationException($"{location} conflicts with Director ownership of {setting}. " +
+                    $"Set {setting} to Sequence instructions / triggers under Session → Operation ownership, or disable the overlapping instruction or trigger.");
         }
-        void Visit(ISequenceItem item)
+        void Visit(ISequenceItem item, string parentPath)
         {
             if (!visited.Add(item) || item.Status == SequenceEntityStatus.DISABLED) return;
-            Check(item.GetType());
-            if (item is ISequenceContainer block) { foreach (var child in block.GetItemsSnapshot()) Visit(child); Triggers(block); }
+            var location = $"{parentPath} → {Label(item)}";
+            Check(item, location);
+            if (item is not ISequenceContainer block) return;
+            foreach (var child in block.GetItemsSnapshot()) Visit(child, location);
+            Triggers(block, location);
         }
-        void Triggers(ISequenceContainer block)
+        void Triggers(ISequenceContainer block, string location)
         {
             if (block is not ITriggerable triggerable) return;
-            foreach (var trigger in triggerable.GetTriggersSnapshot())
+            var triggers = block is DirectorSessionContainer director ? director.ConfiguredTriggersSnapshot() : triggerable.GetTriggersSnapshot();
+            foreach (var trigger in triggers)
             {
                 if (trigger.Status == SequenceEntityStatus.DISABLED) continue;
-                Check(trigger.GetType());
-                if (trigger is SequenceTrigger native) Visit(native.TriggerRunner);
+                var triggerPath = $"{location} → trigger {Label(trigger)}";
+                Check(trigger, triggerPath);
+                if (trigger is SequenceTrigger native) Visit(native.TriggerRunner, triggerPath);
             }
         }
     }

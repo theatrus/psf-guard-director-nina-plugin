@@ -1,11 +1,17 @@
 using Moq;
+using NINA.Astrometry.Interfaces;
 using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Core.Model.Equipment;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Profile.Interfaces;
 using NINA.Sequencer;
+using NINA.Sequencer.Container;
+using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.SequenceItem.Guider;
+using NINA.Sequencer.Trigger;
+using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.ViewModel;
 using PsfGuard.Director.Plugin.Acquisition;
 using PsfGuard.Director.Plugin.Sequencer;
 using PsfGuard.Director.Runtime;
@@ -13,6 +19,10 @@ using Xunit;
 
 namespace PsfGuard.Director.Tests;
 
+[CollectionDefinition("Director equipment reporting", DisableParallelization = true)]
+public sealed class DirectorEquipmentReportingCollection;
+
+[Collection("Director equipment reporting")]
 public sealed class NinaNativeImagingTests
 {
     [Fact]
@@ -53,6 +63,67 @@ public sealed class NinaNativeImagingTests
         native.Dispose();
     }
     private sealed class CustomDither(IGuiderMediator guider) : Dither(guider, Mock.Of<IProfileService>());
+
+    [Fact]
+    public void EquipmentReportShowsItsOwnFailureEvenWithAnInheritedOwnershipConflict()
+    {
+        var f = new Fixture();
+        f.Profile.SetupGet(p => p.PluginSettings).Returns(new NINA.Profile.PluginSettings());
+        var root = Directory.CreateTempSubdirectory("director-equipment-report-");
+        try
+        {
+            var acquisition = new DirectorAcquisition(f.Profiles.Object, Mock.Of<ICameraMediator>(), Mock.Of<ITelescopeMediator>(),
+                Mock.Of<IFilterWheelMediator>(), Mock.Of<ISafetyMonitorMediator>(), Mock.Of<IImagingMediator>(),
+                Mock.Of<IImageSaveMediator>(), Mock.Of<IImageHistoryVM>(),
+                Mock.Of<INighttimeCalculator>(), Mock.Of<IDomeMediator>(),
+                f.Factory.Object, f.Guider.Object, f.Focuser.Object, f.Rotator.Object)
+            { LocalStateRoot = root.FullName };
+            var session = new DirectorSessionContainer(acquisition);
+            session.Options.Enclosure = DirectorEnclosurePolicy.OpenAir;
+            var parent = new SequentialContainer { Name = "Imaging plan" };
+            var sibling = new SequentialContainer { Name = "Other target" };
+            parent.Add(sibling);
+            parent.Add(session);
+            var trigger = new DitherHook(f.Guider.Object);
+            sibling.Add(trigger);
+            NinaNativeImaging.ValidateOwnership(session, session.Options);
+
+            sibling.Remove(trigger);
+            parent.Add(trigger);
+            session.Options.EnableAcquisition = true;
+            Assert.False(session.Validate());
+            var issue = Assert.Single(session.ConfigurationIssues, value => value.Contains("Director ownership of Dither"));
+            Assert.Contains("Inherited from Imaging plan → trigger Custom cadence", issue);
+            Assert.Contains("Set Dither to Sequence instructions / triggers", issue);
+
+            Assert.True(session.ReportEquipmentCommand.CanExecute(null));
+            session.ReportEquipmentCommand.Execute(null);
+            Assert.Equal("Equipment report failed. Configure and pair a Director coordinator first.", session.SessionStatus);
+            Assert.True(session.ReportEquipmentCommand.CanExecute(null));
+
+            session.Options.Dither = DirectorOperationOwner.Sequence;
+            NinaNativeImaging.ValidateOwnership(session, session.Options);
+            Assert.Same(trigger, Assert.Single(parent.GetTriggersSnapshot()));
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    private sealed class DitherHook : SequenceTrigger
+    {
+        private readonly IGuiderMediator guider;
+
+        internal DitherHook(IGuiderMediator guider)
+        {
+            this.guider = guider;
+            Name = "Custom cadence";
+            TriggerRunner.Add(new CustomDither(guider) { Name = "Dither after a group" });
+        }
+
+        public override object Clone() => new DitherHook(guider);
+        public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => true;
+        public override Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) =>
+            throw new InvalidOperationException("Ownership validation must not execute the trigger.");
+    }
 
     [Theory]
     [InlineData(false)]

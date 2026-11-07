@@ -153,7 +153,7 @@ public sealed class SimulatorSequence : SequenceItem
         void CheckProfile()
         {
             lifetime.Token.ThrowIfCancellationRequested();
-            ValidateEnvironment();
+            ValidateEnvironment(coordinator?.Attended == true);
             if (profiles.ActiveProfile.Id != profileId) throw new InvalidOperationException("Test profile changed.");
         }
         Task Revalidate(CancellationToken cancellation)
@@ -321,6 +321,16 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
                     ConfigureImaging(sessionContainer.Options);
+                    if (coordinator.Attended)
+                    {
+                        safetyCancellation.Dispose();
+                        interlock.Dispose();
+                        await safety.Disconnect();
+                        profiles.ActiveProfile.SafetyMonitorSettings.Id = "No_Device";
+                        CheckProfile();
+                        if (safety.GetInfo().Connected) throw new InvalidDataException("Attended fixture must have no connected monitor.");
+                        sessionContainer.Options.Safety = DirectorSafetyPolicy.Attended;
+                    }
                     Step("Reporting native equipment with acquisition disabled");
                     if (!sessionContainer.ReportEquipmentCommand.CanExecute(null)) throw new InvalidDataException("Native report button was disabled.");
                     await sessionContainer.ReportEquipmentAsync();
@@ -346,6 +356,12 @@ public sealed class SimulatorSequence : SequenceItem
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 sessionContainer.Options.EnableAcquisition = true;
+                if (coordinator.Attended)
+                {
+                    if (sessionContainer.Validate() || !sessionContainer.ConfigurationIssues.Any(issue => issue.Contains("supervise", StringComparison.Ordinal)))
+                        throw new InvalidDataException("Attended acquisition was available before confirmation.");
+                    sessionContainer.ConfirmAttendedRun = true;
+                }
                 sessionContainer.Options.Enclosure = coordinator.UsesEnclosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
                 sessionContainer.Options.OnAbort = coordinator.AbortWithoutPark ? DirectorAbortPolicy.StopMount : DirectorAbortPolicy.ParkMount;
                 if (coordinator.DeferredCheckIn)
@@ -417,6 +433,8 @@ public sealed class SimulatorSequence : SequenceItem
                     else safetySimulator.IsSafe = false;
                 }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
+                if (coordinator.Attended && sessionContainer.ConfirmAttendedRun)
+                    throw new InvalidDataException("Attended confirmation was not consumed.");
                 try
                 {
                     if (coordinator.QualityScenario is not null)
@@ -840,6 +858,11 @@ public sealed class SimulatorSequence : SequenceItem
                 retry.Options.MaximumAltitude = 89;
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 ConfigureImaging(retry.Options);
+                if (coordinator.Attended)
+                {
+                    retry.Options.Safety = DirectorSafetyPolicy.Attended;
+                    retry.ConfirmAttendedRun = true;
+                }
                 if (coordinator.RestartAdmission)
                 {
                     retry = (DirectorSessionContainer)sessionContainer.Clone();
@@ -1285,13 +1308,13 @@ public sealed class SimulatorSequence : SequenceItem
         }
     }
 
-    private string ValidateEnvironment() => ValidateEnvironment(
+    private string ValidateEnvironment(bool allowNoSafetyMonitor = false) => ValidateEnvironment(
         Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_ROOT"),
-        Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_TOKEN"), CoreUtil.APPLICATIONTEMPPATH, profiles.ActiveProfile);
+        Environment.GetEnvironmentVariable("DIRECTOR_NINA_TEST_TOKEN"), CoreUtil.APPLICATIONTEMPPATH, profiles.ActiveProfile, allowNoSafetyMonitor);
 
     private const string SafetySimulatorId = "613EC0FF-87D7-4475-9352-F6F6EB1CDE75";
 
-    internal static string ValidateEnvironment(string? root, string? token, string applicationRoot, IProfile profile)
+    internal static string ValidateEnvironment(string? root, string? token, string applicationRoot, IProfile profile, bool allowNoSafetyMonitor = false)
     {
         if (root is null || !Path.IsPathFullyQualified(root) || !Guid.TryParseExact(token, "N", out _)
             || !Path.GetFileName(root).StartsWith("nina-smoke-", StringComparison.Ordinal)
@@ -1310,7 +1333,8 @@ public sealed class SimulatorSequence : SequenceItem
             || (profile.GuiderSettings.GuiderName is not ("No_Guider" or "Direct_Guider")
                 && Phd2Fixture.Read(root)?.Matches(profile.GuiderSettings) != true)
             || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
-            || profile.FlatDeviceSettings.Id != "No_Device" || profile.SafetyMonitorSettings.Id != SafetySimulatorId
+            || profile.FlatDeviceSettings.Id != "No_Device"
+            || (profile.SafetyMonitorSettings.Id != SafetySimulatorId && !(allowNoSafetyMonitor && profile.SafetyMonitorSettings.Id == "No_Device"))
             || profile.WeatherDataSettings.Id != "No_Device")
             throw new InvalidOperationException("The probe requires its simulator-only test profile.");
         return root;

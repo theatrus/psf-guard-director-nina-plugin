@@ -13,7 +13,7 @@ using PsfGuard.Director.Runtime;
 namespace PsfGuard.Director.Plugin;
 
 [Export(typeof(IPluginManifest))]
-public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
+public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
 {
     private static readonly Guid PluginId = new("03a1d13e-67eb-4e24-a407-82bce7e576a5");
     private readonly IProfileService profiles;
@@ -134,6 +134,7 @@ public sealed class DirectorPlugin : PluginBase, INotifyPropertyChanged
     public override async Task Teardown()
     {
         initialized = false;
+        SetEquipmentSettingsVisible(false);
         checkInCancellation?.Cancel();
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
         WatchStarDetectionSettings(null);

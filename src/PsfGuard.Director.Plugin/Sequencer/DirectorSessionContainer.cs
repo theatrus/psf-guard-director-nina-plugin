@@ -10,6 +10,7 @@ using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.Trigger;
 using PsfGuard.Director.Plugin.Acquisition;
+using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.Plugin.Sequencer;
 
@@ -35,7 +36,24 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private NinaInstructionSlots slots = new();
     private readonly AsyncCommand reportEquipmentCommand;
     private bool reportingEquipment;
+    private bool confirmAttendedRun;
     private bool resumeRecordedNight;
+    private const string AttendedGate = "Confirm that you will supervise this attended run before starting the sequence.";
+
+    public bool ConfirmAttendedRun
+    {
+        get { lock (executionLock) return confirmAttendedRun; }
+        set
+        {
+            lock (executionLock)
+            {
+                if (execution is { IsCompleted: false } || Options.Safety != DirectorSafetyPolicy.Attended) return;
+                confirmAttendedRun = value;
+            }
+            RaisePropertyChanged();
+            Validate();
+        }
+    }
     // Operator intent is one-use and deliberately absent from saved sequences.
     public bool ResumeRecordedNight
     {
@@ -56,8 +74,13 @@ public sealed class DirectorSessionContainer : SequentialContainer
     [JsonProperty]
     public new IList<ISequenceTrigger> Triggers
     {
-        get { lock (runtimeTriggers) return runtimeTriggers.Count == 0 ? base.Triggers : base.GetTriggersSnapshot().Where(t => !runtimeTriggers.Contains(t)).ToArray(); }
+        get { lock (runtimeTriggers) return runtimeTriggers.Count == 0 ? base.Triggers : ConfiguredTriggersSnapshot(); }
         private set => base.Triggers = value;
+    }
+
+    internal ISequenceTrigger[] ConfiguredTriggersSnapshot()
+    {
+        lock (runtimeTriggers) return base.GetTriggersSnapshot().Where(trigger => !runtimeTriggers.Contains(trigger)).ToArray();
     }
 
     internal void AddRuntimeTrigger(ISequenceTrigger trigger)
@@ -76,7 +99,13 @@ public sealed class DirectorSessionContainer : SequentialContainer
         reportEquipmentCommand = new(ReportEquipmentAsync, CanReportEquipment, error =>
         {
             NINA.Core.Utility.Logger.Error(error);
-            Report(Display with { Phase = "Equipment report failed; check pairing, connected devices and session settings", Operation = "" });
+            var detail = error switch
+            {
+                InvalidOperationException validation when !string.IsNullOrWhiteSpace(validation.Message) => validation.Message,
+                CoordinatorIntakeException failure => $"Could not confirm the report with PSF Guard ({failure.Failure}). Check the coordinator connection and pairing.",
+                _ => "See the N.I.N.A. log for details."
+            };
+            UpdateDisplay(display => display with { Phase = $"Equipment report failed. {detail}", Operation = "" });
         });
         options.PropertyChanged += SettingsChanged;
         AttachSlots();
@@ -205,6 +234,13 @@ public sealed class DirectorSessionContainer : SequentialContainer
         {
             if (reportingEquipment) throw new InvalidOperationException("Wait for the equipment report before starting acquisition.");
             if (execution is { IsCompleted: false }) throw new InvalidOperationException("Director session is already running.");
+            var attended = Options.Safety == DirectorSafetyPolicy.Attended;
+            if (attended)
+            {
+                if (!confirmAttendedRun) throw new InvalidOperationException(AttendedGate);
+                confirmAttendedRun = false;
+                RaisePropertyChanged(nameof(ConfirmAttendedRun));
+            }
             executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
             var cancellation = executionCancellation;
             execution = Task.Run(async () =>
@@ -217,7 +253,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
                     Iterations = 0;
                     foreach (var condition in conditions) { condition.SequenceBlockInitialize(); condition.SequenceBlockStarted(); }
                     foreach (var trigger in triggers) { trigger.SequenceBlockInitialize(); trigger.SequenceBlockStarted(); }
-                    await (acquisition ?? throw new InvalidOperationException("Director acquisition services unavailable.")).ExecuteAsync(this, progress, cancellation.Token);
+                    await (acquisition ?? throw new InvalidOperationException("Director acquisition services unavailable.")).ExecuteAsync(this, progress, attended, cancellation.Token);
                     foreach (var condition in conditions) condition.SequenceBlockFinished();
                     foreach (var trigger in triggers) trigger.SequenceBlockFinished();
                 }
@@ -267,6 +303,13 @@ public sealed class DirectorSessionContainer : SequentialContainer
             if (!block.Validate()) issues.Add($"{block.Name} contains invalid instructions.");
         try { NinaHookAdmission.Validate(InstructionBlocks, this); }
         catch (InvalidOperationException error) { issues.Add(error.Message); }
+        if (Options.EnableAcquisition)
+        {
+            if (Options.Safety == DirectorSafetyPolicy.Attended && !ConfirmAttendedRun && execution is not { IsCompleted: false })
+                issues.Add(AttendedGate);
+            try { NinaNativeImaging.ValidateOwnership(this, Options); }
+            catch (InvalidOperationException error) { issues.Add(error.Message); }
+        }
         issues.AddRange(DirectorAcquisition.PolicyIssues(Options));
         if (Options.EnableAcquisition && acquisition is null) issues.Add("Director acquisition services unavailable.");
         if (Options.EnableAcquisition && Attempts != 1) issues.Add("Director acquisition requires one attempt; allocation launches cannot be retried.");
@@ -327,5 +370,14 @@ public sealed class DirectorSessionContainer : SequentialContainer
         foreach (var block in InstructionBlocks) block.AttachNewParent(this);
     }
 
-    private void SettingsChanged(object? sender, PropertyChangedEventArgs args) { Validate(); reportEquipmentCommand.Refresh(); }
+    private void SettingsChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(DirectorSessionOptions.Safety) || !Options.EnableAcquisition)
+        {
+            lock (executionLock) confirmAttendedRun = false;
+            RaisePropertyChanged(nameof(ConfirmAttendedRun));
+        }
+        Validate();
+        reportEquipmentCommand.Refresh();
+    }
 }

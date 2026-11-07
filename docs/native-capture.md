@@ -1247,8 +1247,14 @@ The editor saves versioned local requests in four groups:
 - Offline continuation, start/end/target check-ins, batch interval, and live
   status with its independent interval.
 
-Both acquisition modes bind these requests to their session owner. They refuse
-attended mode and automatic centering/focus/guiding/dither/flip ownership.
+Both acquisition modes bind these requests to their session owner. For an
+attended run with no safety monitor configured in the active N.I.N.A. profile,
+choose **Attended operation**, enable acquisition, and select **I will
+supervise this attended run** before clicking **Run**. Confirm again for
+each new run. If the profile has a safety monitor configured, Director
+requires it connected and reporting fresh Safe readings. Attended runs
+still require enclosure clearance and mount checks. **Hold and resume**
+and settled-night restart require **Require connected safety monitor**.
 Sequence-owned dithering uses native trigger configuration, not the Director
 dither interval. Sequence ownership means explicit native instructions/triggers,
 not silently disabling an operation. Planner priority/filter policy stays in
