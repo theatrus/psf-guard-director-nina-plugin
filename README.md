@@ -49,9 +49,11 @@ with Director support. The planning runtime is bundled with the plugin.
    and install **PSF Guard Director**. See [releases](https://github.com/theatrus/psf-guard-director-nina-plugin/releases)
    for package versions. This README describes `main`; packaged features follow
    the release notes.
-2. In Director's plugin settings, enter your PSF Guard server address and pair
-   using a Director pairing code. Credentials stay in Windows Credential Manager;
-   no API key is displayed.
+2. In Director's plugin settings, open **Coordinator**. Enter your PSF Guard
+   server address and the Director pairing code that begins with `psfdpt_`,
+   then click **Pair**. Issue the code for your rig using the
+   [PSF Guard Director pairing API](https://github.com/theatrus/psf-guard/blob/main/docs/DIRECTOR.md#pair-a-director-client).
+   Credentials stay in Windows Credential Manager.
 3. Connect your equipment, add **Director Session** to the Advanced Sequencer,
    and configure safety, enclosure clearance, horizon and operation ownership.
    Keep acquisition disabled while setting up.

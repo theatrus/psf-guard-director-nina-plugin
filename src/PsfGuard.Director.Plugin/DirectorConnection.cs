@@ -39,7 +39,7 @@ internal sealed class DirectorConnection : INotifyPropertyChanged, IDisposable
         this.store = store ?? DirectorCredentialStore.Store;
         this.forget = forget ?? DirectorCredentialStore.Forget;
         this.exchange = exchange ?? ExchangeAsync;
-        pair = new(PairAsync, () => IsEditable && Endpoint() is not null && CoordinatorPairingClient.ValidCode(code.Trim()), ReportError);
+        pair = new(PairAsync, () => IsEditable && !string.IsNullOrWhiteSpace(code), ReportError);
         reset = new(ResetAsync, () => IsEditable && Endpoint() is not null, ReportError);
     }
 
@@ -115,10 +115,26 @@ internal sealed class DirectorConnection : INotifyPropertyChanged, IDisposable
 
     private async Task PairAsync()
     {
-        var endpoint = Endpoint() ?? throw new InvalidOperationException();
+        var selectedCode = code.Trim();
+        if (!CoordinatorPairingClient.ValidCode(selectedCode))
+        {
+            status = selectedCode.StartsWith("psfpt_", StringComparison.Ordinal)
+                ? "This is a PSF Guard Sync code. Enter a Director pairing code beginning with psfdpt_."
+                : "Enter the full Director pairing code beginning with psfdpt_.";
+            Changed();
+            return;
+        }
+        var endpoint = Endpoint();
+        if (endpoint is null)
+        {
+            status = ParseEndpoint(true) is { Scheme: "http" }
+                ? "Select Allow unencrypted HTTP if you trust this server, or enter its HTTPS address."
+                : "Enter a valid PSF Guard server URL.";
+            Changed();
+            return;
+        }
         var selectedProfile = profile();
         var selectedGeneration = generation;
-        var selectedCode = code.Trim();
         var token = lifetime.Token;
         code = "";
         busy = true;
