@@ -38,7 +38,7 @@ public sealed record DirectorUploadSummary(int Queued, int Refused, DirectorUplo
 /// <remarks>
 /// <para>
 /// The worker asks the server whether it takes uploads before an upload, at
-/// most once a minute for each destination. An older server (403, 404, 405,
+/// most once a minute for each destination. An older server (404, 405,
 /// or no <c>data.enabled</c>) gets no upload and no new jobs until
 /// <see cref="RequestRecheck"/> or a restart; its queued jobs stay on disk.
 /// A refused frame moves to the <c>refused</c> folder with the reason. A file
@@ -72,6 +72,7 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
     private DirectorUploadDestination? enabledDestination;
     private CancellationTokenSource transferLifetime = new();
     private readonly Dictionary<DirectorUploadDestination, (DirectorUploadState State, DateTimeOffset At)> states = [];
+    private readonly Dictionary<DirectorUploadDestination, DateTimeOffset> retryAfter = [];
     private readonly HashSet<string> logged = [];
     private Task? worker;
     private int disposed;
@@ -326,6 +327,9 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
     {
         var soonest = IdleWait;
         var wait = job.NextAttemptAt - time.GetUtcNow();
+        lock (stateGate)
+            if (retryAfter.TryGetValue(job.Destination, out var until) && until - time.GetUtcNow() > wait)
+                wait = until - time.GetUtcNow();
         if (wait > TimeSpan.Zero) { soonest = Min(soonest, wait); return soonest; }
         var destination = job.Destination;
         var state = await StateAsync(destination, token).ConfigureAwait(false);
@@ -387,6 +391,7 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
                 job.LastError = answer.Detail;
                 var delay = DirectorUploadPolicy.RetryDelay(job.Attempts, answer.RetryAfter);
                 job.NextAttemptAt = time.GetUtcNow() + delay;
+                lock (stateGate) retryAfter[destination] = job.NextAttemptAt;
                 await gate.WaitAsync(token).ConfigureAwait(false);
                 try { await WriteAsync(job, file, token).ConfigureAwait(false); }
                 finally { gate.Release(); }

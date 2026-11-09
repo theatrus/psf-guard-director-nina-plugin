@@ -10,7 +10,7 @@
                     <Setter Property="ContentTemplate">
                         <Setter.Value>
                             <DataTemplate>
-                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryBrush}" />
                             </DataTemplate>
                         </Setter.Value>
                     </Setter>

@@ -117,6 +117,7 @@ public sealed class SettingsViewTests
                         var label = Assert.Single(Descendants(option).OfType<TextBlock>(), text => text.Text == (string)option.Content);
                         Assert.True(label.Visibility == Visibility.Visible && label.ActualWidth > 0 && label.ActualHeight > 0,
                             $"The NINA theme must not hide '{option.Content}'.");
+                        Assert.Same(resources["PrimaryBrush"], label.Foreground);
                         var bounds = label.TransformToAncestor(host).TransformBounds(new Rect(label.RenderSize));
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }

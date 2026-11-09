@@ -559,6 +559,24 @@ public sealed class DirectorUploadQueueTests : IDisposable
     }
 
     [Fact]
+    public async Task ABusyServersRetryAfterAlsoPausesOtherQueuedFiles()
+    {
+        server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "busy", RetryAfter: TimeSpan.FromSeconds(20)));
+        await using var queue = Queue();
+        await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
+        await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default);
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(server.Uploads);
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(server.Uploads);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(3, server.Uploads.Count);
+        Assert.Equal(0, Jobs());
+    }
+
+    [Fact]
     public async Task AFrameGoneFromDiskDropsItsJob()
     {
         await using var queue = Queue();

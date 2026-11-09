@@ -60,7 +60,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool SequenceActivity { get; private set; }
     internal string? ImageUploads { get; private set; }
     internal string? UploadDirectory { get; private set; }
-    internal DirectorUploadDestination UploadDestination => new(endpoint, pairing.Binding, true);
+    internal DirectorUploadDestination UploadDestination => new(endpoint, pairing.Binding);
     internal async Task<JsonElement> ReadRigStatusAsync(CancellationToken token)
     {
         var rows = await OperatorAsync(HttpMethod.Get, "rigs/status", null, token);
