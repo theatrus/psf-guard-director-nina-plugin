@@ -37,25 +37,8 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private NinaInstructionSlots slots = new();
     private readonly AsyncCommand reportEquipmentCommand;
     private bool reportingEquipment;
-    private bool confirmAttendedRun;
     private bool resumeRecordedNight;
     private INotifyPropertyChanged? sequenceRootNotifications;
-    private const string AttendedGate = "Confirm that you will supervise this attended run before starting the sequence.";
-
-    public bool ConfirmAttendedRun
-    {
-        get { lock (executionLock) return confirmAttendedRun; }
-        set
-        {
-            lock (executionLock)
-            {
-                if (execution is { IsCompleted: false } || Options.Safety != DirectorSafetyPolicy.Attended) return;
-                confirmAttendedRun = value;
-            }
-            RaisePropertyChanged();
-            Validate();
-        }
-    }
     // Operator intent is one-use and deliberately absent from saved sequences.
     public bool ResumeRecordedNight
     {
@@ -262,12 +245,6 @@ public sealed class DirectorSessionContainer : SequentialContainer
             if (reportingEquipment) throw new InvalidOperationException("Wait for the equipment report before starting acquisition.");
             if (execution is { IsCompleted: false }) throw new InvalidOperationException("Director session is already running.");
             var attended = Options.Safety == DirectorSafetyPolicy.Attended;
-            if (attended)
-            {
-                if (!confirmAttendedRun) throw new InvalidOperationException(AttendedGate);
-                confirmAttendedRun = false;
-                RaisePropertyChanged(nameof(ConfirmAttendedRun));
-            }
             executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
             var cancellation = executionCancellation;
             execution = Task.Run(async () =>
@@ -358,8 +335,6 @@ public sealed class DirectorSessionContainer : SequentialContainer
         catch (InvalidOperationException error) { issues.Add(error.Message); }
         if (Options.EnableAcquisition)
         {
-            if (Options.Safety == DirectorSafetyPolicy.Attended && !ConfirmAttendedRun && execution is not { IsCompleted: false })
-                issues.Add(AttendedGate);
             try { NinaNativeImaging.ValidateOwnership(this, Options); }
             catch (InvalidOperationException error) { issues.Add(error.Message); }
         }
@@ -438,11 +413,6 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     private void SettingsChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(DirectorSessionOptions.Safety) || !Options.EnableAcquisition)
-        {
-            lock (executionLock) confirmAttendedRun = false;
-            RaisePropertyChanged(nameof(ConfirmAttendedRun));
-        }
         Validate();
         reportEquipmentCommand.Refresh();
     }

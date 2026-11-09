@@ -1281,9 +1281,8 @@ The editor saves versioned local requests in four groups:
 
 Both acquisition modes bind these requests to their session owner. For an
 attended run with no safety monitor configured in the active N.I.N.A. profile,
-choose **Attended operation**, enable acquisition, and select **I will
-supervise this attended run** before clicking **Run**. Confirm again for
-each new run. If the profile has a safety monitor configured, Director
+choose **Attended operation**, turn on **Enable acquisition**, and click
+**Run**. If the profile has a safety monitor configured, Director
 requires it connected and reporting fresh Safe readings. Attended runs
 still require enclosure clearance and mount checks. **Hold and resume**
 and settled-night restart require **Require connected safety monitor**.

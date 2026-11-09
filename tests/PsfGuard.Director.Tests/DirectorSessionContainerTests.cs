@@ -77,7 +77,7 @@ public sealed class DirectorSessionContainerTests
         Assert.True(restored.Options.AutomaticWorkloads);
         Assert.True(restored.Options.LocalTargetScheduling);
         Assert.False(restored.Options.EnableAcquisition);
-        Assert.False(restored.ConfirmAttendedRun);
+        Assert.Equal(DirectorSafetyPolicy.RequireMonitor, restored.Options.Safety);
         Assert.Equal(InstructionErrorBehavior.AbortOnError, restored.ErrorBehavior);
     }
 
@@ -232,20 +232,17 @@ public sealed class DirectorSessionContainerTests
     }
 
     [Fact]
-    public void AttendedConfirmationIsLocalToOneSessionInstance()
+    public void SavedAttendedPolicyNeedsNoPerRunConfirmation()
     {
         var session = new DirectorSessionContainer();
         session.Options.Safety = DirectorSafetyPolicy.Attended;
+        session.Options.Enclosure = DirectorEnclosurePolicy.OpenAir;
         session.Options.EnableAcquisition = true;
-        Assert.Contains(session.ConfigurationIssues, issue => issue.Contains("supervise"));
-        session.ConfirmAttendedRun = true;
-        Assert.DoesNotContain(session.ConfigurationIssues, issue => issue.Contains("supervise"));
-        var json = JsonConvert.SerializeObject(session, Settings);
-        Assert.DoesNotContain(nameof(session.ConfirmAttendedRun), json);
-        Assert.False(JsonConvert.DeserializeObject<DirectorSessionContainer>(json, Settings)!.ConfirmAttendedRun);
-        Assert.False(((DirectorSessionContainer)session.Clone()).ConfirmAttendedRun);
-        session.Options.EnableAcquisition = false;
-        Assert.False(session.ConfirmAttendedRun);
+        var restored = JsonConvert.DeserializeObject<DirectorSessionContainer>(JsonConvert.SerializeObject(session, Settings), Settings)!;
+
+        Assert.Equal(DirectorSafetyPolicy.Attended, restored.Options.Safety);
+        Assert.False(restored.Validate());
+        Assert.Equal("Director acquisition services unavailable.", Assert.Single(restored.ConfigurationIssues));
     }
 
     [Fact]
