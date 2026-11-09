@@ -904,37 +904,48 @@ this for the current NINA profile. It is on by default. When it is off, Director
 queues no new frames; frames already queued still upload.
 
 Each saved frame becomes a small job file below
-`%LOCALAPPDATA%\PSFGuardDirector\uploads`. The job names the saved file and
-holds no copy of it, so the queue survives a restart. One background worker
-uploads one frame at a time to
-`POST /api/director/v1/rigs/{rig}/images` with the pairing's credentials and
-`X-Content-SHA256`. It never runs on NINA's UI thread and never delays a
-capture, a check-in, the program pull or the sequence.
+`%LOCALAPPDATA%\PSFGuardDirector\uploads`, whatever Director last heard from
+the server. The job names the saved file and holds no copy of it, so the queue
+survives a restart, and a frame saved while the plugin is stopping still waits
+for the next start. Director reads the job files when it starts and keeps track
+of them in memory after that. One background worker uploads one frame at a
+time to `POST /api/director/v1/rigs/{rig}/images` with the pairing's
+credentials and `X-Content-SHA256`, keeping one connection for each paired
+server. It never runs on NINA's UI thread and never delays a capture, a
+check-in, the program pull or the sequence.
 
 Before uploading, Director asks `GET /api/director/v1/rigs/{rig}/uploads`
 whether the database takes uploads, at most once a minute. It also asks when
-NINA starts and after pairing. The settings page shows the answer, the number of
-queued frames and the number PSF Guard refused.
+NINA starts, after pairing and after a server or profile change. The settings
+page shows the answer and counts the frames that are queued, the frames for an
+earlier pairing and the frames PSF Guard refused. Director logs each change of
+answer once.
 
-- Uploads are off: queued frames wait. Director also skips new frames while
-  its latest answer, at most a minute old, says uploads are off.
-- An older PSF Guard (HTTP 403, 404 or 405, or an answer without
-  `data.enabled`): Director uploads nothing and queues nothing. It logs this
-  once and asks again only after pairing, a server or profile change, or a
-  NINA restart. Frames already queued stay on disk.
+- Uploads are off: queued frames wait until they are on.
+- HTTP 403, 404 or 405, or an answer that is not an upload state: an older PSF
+  Guard, Director turned off on the server, or a proxy's page. Queued frames
+  wait, and Director asks again every 10 minutes.
 - PSF Guard refuses a frame (HTTP 400, 409, 410 or 413, a file name it would
-  refuse, or a file larger than `max_bytes`): Director moves the job to the `refused`
-  folder with the reason and does not retry it. **Retry refused uploads**
-  queues those frames again; **Forget refused uploads** removes the jobs. The
-  image files stay on disk.
-- HTTP 403 or 401 on an upload: Director keeps the frame and stops sending
-  until it reads the upload state again a minute later.
+  refuse, or a request larger than `max_bytes`): Director moves the job to the
+  `refused` folder with the reason and does not retry it. The request counts
+  the file, its part headers and 64 KiB to spare. A frame that cannot fit a
+  known `max_bytes` goes there as soon as it is saved.
+- HTTP 403 or 401 on an upload: Director keeps the frames and sends nothing to
+  that server for a minute, then reads the upload state again.
 - A timeout, a lost connection, HTTP 429 or a server error: Director keeps the
-  frame and retries. It waits as long as the server's `Retry-After` asks, kept
-  between 1 second and 10 minutes, or else 5 seconds, doubling up to 10
-  minutes. PSF Guard answers 503 with `Retry-After` while another upload
-  imports into the same database. Director logs the first such failure.
+  frames and sends nothing to that server until it retries. It waits as long as
+  the server's `Retry-After` asks, kept between 1 second and 10 minutes, or
+  else 5 seconds, doubling up to 10 minutes. PSF Guard answers 503 with
+  `Retry-After` while another upload imports into the same database. Director
+  logs the first such failure.
 - A file gone from disk: Director drops its job and logs it.
+- A frame for an earlier pairing, such as one for a rig or server this profile
+  is no longer paired with: Director keeps the job in case that pairing comes
+  back, but does not count it as queued.
+
+**Retry refused uploads** queues refused frames again. **Forget held uploads**
+removes the refused frames and the frames for an earlier pairing from the queue.
+The image files stay on disk.
 
 The upload sends the whole saved file, headers included, and its file name
 without folders.

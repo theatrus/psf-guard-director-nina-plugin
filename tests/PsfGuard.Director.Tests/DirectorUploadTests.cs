@@ -64,6 +64,15 @@ public sealed class DirectorUploadClientTests : IDisposable
         Assert.Equal(expected, (await client.GetStateAsync(default)).Kind);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, "", "PSF Guard answered HTTP 404.")]
+    [InlineData(HttpStatusCode.OK, "<html>proxy</html>", "PSF Guard's answer was not an upload state.")]
+    public async Task AnUnsupportedStateSaysWhy(HttpStatusCode status, string body, string reason)
+    {
+        using var client = Client(_ => Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "text/html") }));
+        Assert.Equal(new DirectorUploadState(DirectorUploadStateKind.Unsupported, reason), await client.GetStateAsync(default));
+    }
+
     [Fact]
     public async Task AConnectionFailureLeavesTheStateUnavailable()
     {
@@ -214,17 +223,18 @@ public sealed class DirectorUploadQueueTests : IDisposable
 {
     private static readonly DirectorUploadDestination Destination = new(new Uri("https://psf.example/"),
         Guid.Parse("11111111-2222-4333-8444-555555555555"), Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"));
+    private static readonly DirectorUploadDestination OtherRig = Destination with { RigId = Guid.Parse("bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee") };
     private readonly string root = Directory.CreateTempSubdirectory("director-upload-queue-").FullName;
     private readonly FakeClock clock = new();
-    private readonly FakeServer server = new();
+    private readonly FakeConnector connector = new();
     private readonly List<string> log = [];
 
     public void Dispose() => Directory.Delete(root, recursive: true);
 
     private string QueueRoot => Path.Combine(root, "queue");
+    private FakeServer Server => connector.Server;
 
-    private DirectorUploadQueue Queue(Func<DirectorUploadDestination, IDirectorUploadServer?>? connect = null) =>
-        new(QueueRoot, connect ?? (_ => server), log.Add, clock);
+    private DirectorUploadQueue Queue() => new(QueueRoot, connector, log.Add, clock);
 
     private string Frame(string name = "frame.fits", int bytes = 10)
     {
@@ -246,9 +256,58 @@ public sealed class DirectorUploadQueueTests : IDisposable
 
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Equal([frame], server.Uploads);
+        Assert.Equal([frame], Server.Uploads);
         Assert.Equal(0, Jobs());
         Assert.True(File.Exists(frame));
+    }
+
+    public static TheoryData<string> KnownStates() => ["disabled", "unsupported", "paused", "unavailable", "unknown"];
+
+    [Theory]
+    [MemberData(nameof(KnownStates))]
+    public async Task EveryOfferedFrameIsWrittenWhateverTheServerSaid(string known)
+    {
+        await using var queue = Queue();
+        switch (known)
+        {
+            case "disabled": Server.States.Enqueue(new(DirectorUploadStateKind.Disabled, "off")); break;
+            case "unsupported": Server.States.Enqueue(new(DirectorUploadStateKind.Unsupported, "PSF Guard answered HTTP 404.")); break;
+            case "unavailable": Server.States.Enqueue(new(DirectorUploadStateKind.Unavailable, "timeout")); break;
+            case "paused": Server.Answers.Enqueue(new(DirectorUploadOutcome.Paused, "PSF Guard answered HTTP 403.")); break;
+        }
+        if (known != "unknown")
+        {
+            await queue.EnqueueAsync(Destination, Frame("first.fits"), null, default);
+            await queue.ProcessDueJobsAsync(default);
+        }
+
+        Assert.True(await queue.EnqueueAsync(Destination, Frame("next.fits"), null, default));
+
+        Assert.Equal(known == "unknown" ? 1 : 2, Jobs());
+        Assert.Equal(0, Jobs(DirectorUploadQueue.RefusedFolderName));
+    }
+
+    [Fact]
+    public async Task OfferWritesTheJobOnAPoolThreadEvenWhileTheWorkerIsStopped()
+    {
+        await using var queue = Queue();
+        queue.Start();
+        await queue.StopAsync();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Changed += (_, _) => changed.TrySetResult();
+        queue.Offer(Destination, Frame(), "capture-1");
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, Jobs());
+        queue.Offer(Destination, "\0bad", null);
+
+        // The next start uploads it.
+        queue.Start();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (Server.Uploads.Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.Single(Server.Uploads);
+        await queue.StopAsync();
+        Assert.Equal(0, Jobs());
+        Assert.True(connector.Disposed > 0);
     }
 
     [Fact]
@@ -258,85 +317,74 @@ public sealed class DirectorUploadQueueTests : IDisposable
         await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
         await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default);
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(1, server.StateCalls);
-        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(1, Server.StateCalls);
+        Assert.Equal(2, Server.Uploads.Count);
 
         clock.Advance(TimeSpan.FromSeconds(30));
         await queue.EnqueueAsync(Destination, Frame("c.fits"), null, default);
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(1, server.StateCalls);
+        Assert.Equal(1, Server.StateCalls);
 
         clock.Advance(TimeSpan.FromSeconds(31));
         await queue.EnqueueAsync(Destination, Frame("d.fits"), null, default);
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.StateCalls);
+        Assert.Equal(2, Server.StateCalls);
+        Assert.Equal(1, connector.Connects);
     }
 
     [Fact]
-    public async Task AnOlderServerGetsNoUploadAndNoNewJobsUntilARecheck()
+    public async Task AServerWithoutUploadsIsAskedAgainEveryTenMinutesAndOnRecheck()
     {
-        server.States.Enqueue(new(DirectorUploadStateKind.Unsupported));
+        Server.States.Enqueue(new(DirectorUploadStateKind.Unsupported, "PSF Guard answered HTTP 404."));
+        Server.States.Enqueue(new(DirectorUploadStateKind.Unsupported, "PSF Guard answered HTTP 404."));
         await using var queue = Queue();
-        Assert.True(await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default));
+        await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
 
+        // The worker still wakes every minute; the cached answer decides when to ask.
+        Assert.Equal(TimeSpan.FromMinutes(1), await queue.ProcessDueJobsAsync(default));
+        clock.Advance(TimeSpan.FromMinutes(9));
         await queue.ProcessDueJobsAsync(default);
-        clock.Advance(TimeSpan.FromHours(2));
-        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(1, Server.StateCalls);
+        Assert.Empty(Server.Uploads);
 
-        Assert.Empty(server.Uploads);
-        Assert.Equal(1, server.StateCalls);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(2, Server.StateCalls);
+        Assert.Empty(Server.Uploads);
         Assert.Equal(1, Jobs());
-        Assert.False(await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default));
-        Assert.Equal(1, Jobs());
-        Assert.Single(log, line => line.Contains("does not take uploads from Director"));
+        // The same answer twice is one change, logged once.
+        Assert.Single(log, line => line.Contains("does not take uploads from Director now"));
 
         queue.RequestRecheck();
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.StateCalls);
-        Assert.Single(server.Uploads);
+        Assert.Equal(3, Server.StateCalls);
+        Assert.Single(Server.Uploads);
+        Assert.Single(log, line => line.Contains("takes uploads from this rig again"));
     }
 
     [Fact]
-    public async Task UploadsOffKeepsQueuedFramesAndQueuesNoNewOnes()
+    public async Task UploadsOffKeepFramesUntilTheyAreOn()
     {
-        server.States.Enqueue(new(DirectorUploadStateKind.Disabled, "Image uploads are off for this database."));
+        Server.States.Enqueue(new(DirectorUploadStateKind.Disabled, "Image uploads are off for this database."));
         await using var queue = Queue();
         await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
 
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Empty(server.Uploads);
+        Assert.Empty(Server.Uploads);
         Assert.Equal(1, Jobs());
-        Assert.False(await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default));
         Assert.Equal("Image uploads are off for this database.", queue.Summarize(Destination).State!.Reason);
 
         clock.Advance(TimeSpan.FromSeconds(61));
         await queue.ProcessDueJobsAsync(default);
-        Assert.Single(server.Uploads);
+        Assert.Single(Server.Uploads);
         Assert.Equal(0, Jobs());
-    }
-
-    [Fact]
-    public async Task AnUnreachableServerKeepsFramesAndQueuesNewOnes()
-    {
-        server.States.Enqueue(new(DirectorUploadStateKind.Unavailable, "timeout"));
-        await using var queue = Queue();
-        await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
-
-        await queue.ProcessDueJobsAsync(default);
-        Assert.True(await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default));
-        Assert.Equal(2, Jobs());
-        Assert.Empty(server.Uploads);
-
-        clock.Advance(TimeSpan.FromSeconds(61));
-        await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.Uploads.Count);
     }
 
     [Fact]
     public async Task ARefusedFrameIsHeldWithItsReasonAndCanBeRetriedOrForgotten()
     {
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "PSF Guard answered HTTP 410: removed on purpose"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "PSF Guard answered HTTP 410: removed on purpose"));
         await using var queue = Queue();
         var frame = Frame();
         await queue.EnqueueAsync(Destination, frame, null, default);
@@ -344,61 +392,85 @@ public sealed class DirectorUploadQueueTests : IDisposable
         await queue.ProcessDueJobsAsync(default);
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Single(server.Uploads);
+        Assert.Single(Server.Uploads);
         Assert.Equal(0, Jobs());
         Assert.Equal(1, Jobs(DirectorUploadQueue.RefusedFolderName));
         Assert.Contains("removed on purpose", File.ReadAllText(Directory.GetFiles(Path.Combine(QueueRoot, "refused"))[0]));
-        Assert.Equal(new DirectorUploadSummary(0, 1, new(DirectorUploadStateKind.Enabled, null, null)), queue.Summarize(Destination));
+        Assert.Equal(new DirectorUploadSummary(0, 0, 1, new(DirectorUploadStateKind.Enabled, null, null)), queue.Summarize(Destination));
         Assert.Contains(log, line => line.Contains("refused frame.fits"));
 
         Assert.Equal(1, await queue.RetryRefusedAsync(default));
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(2, Server.Uploads.Count);
         Assert.Equal(0, Jobs());
 
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "bad name"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "bad name"));
         await queue.EnqueueAsync(Destination, frame, null, default);
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(1, await queue.ForgetRefusedAsync(default));
+        Assert.Equal(1, await queue.ForgetHeldAsync(default));
         Assert.Equal(0, Jobs(DirectorUploadQueue.RefusedFolderName));
         Assert.True(File.Exists(frame));
     }
 
     [Fact]
-    public async Task APausedServerKeepsTheJobAndStopsSendingForAMinute()
+    public async Task APausedServerStopsSendingForAMinuteWhileFramesStillQueue()
     {
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Paused, "PSF Guard answered HTTP 403"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Paused, "PSF Guard answered HTTP 403."));
         await using var queue = Queue();
         await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
         await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default);
 
         await queue.ProcessDueJobsAsync(default);
-        Assert.Single(server.Uploads);
-        Assert.Equal(2, Jobs());
+        Assert.Single(Server.Uploads);
+        Assert.True(await queue.EnqueueAsync(Destination, Frame("c.fits"), null, default));
+        Assert.Equal(3, Jobs());
 
-        clock.Advance(TimeSpan.FromSeconds(30));
+        clock.Advance(TimeSpan.FromSeconds(59));
         await queue.ProcessDueJobsAsync(default);
-        Assert.Single(server.Uploads);
+        Assert.Single(Server.Uploads);
 
-        clock.Advance(TimeSpan.FromSeconds(31));
+        clock.Advance(TimeSpan.FromSeconds(1));
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(3, server.Uploads.Count);
+        Assert.Equal(4, Server.Uploads.Count);
+        Assert.Equal(0, Jobs());
+    }
+
+    [Fact]
+    public async Task ARetryAfterHoldsEveryFrameForThatDestination()
+    {
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 503", RetryAfter: TimeSpan.FromSeconds(20)));
+        await using var queue = Queue();
+        await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default);
+
+        Assert.Equal(TimeSpan.FromSeconds(20), await queue.ProcessDueJobsAsync(default));
+        Assert.Single(Server.Uploads);
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(Server.Uploads);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(3, Server.Uploads.Count);
         Assert.Equal(0, Jobs());
     }
 
     [Fact]
     public async Task ARouteAnOlderServerLacksStopsUploadsAndKeepsTheQueue()
     {
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Unsupported, "PSF Guard answered HTTP 404"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Unsupported, "PSF Guard answered HTTP 404"));
+        Server.States.Enqueue(new(DirectorUploadStateKind.Enabled));
+        Server.States.Enqueue(new(DirectorUploadStateKind.Unsupported, "PSF Guard answered HTTP 404."));
         await using var queue = Queue();
         await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
         await queue.EnqueueAsync(Destination, Frame("b.fits"), null, default);
 
         await queue.ProcessDueJobsAsync(default);
-        clock.Advance(TimeSpan.FromHours(1));
+        clock.Advance(TimeSpan.FromMinutes(9));
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Single(server.Uploads);
+        Assert.Single(Server.Uploads);
         Assert.Equal(2, Jobs());
         Assert.Equal(DirectorUploadStateKind.Unsupported, queue.Summarize(Destination).State!.Kind);
     }
@@ -406,49 +478,29 @@ public sealed class DirectorUploadQueueTests : IDisposable
     [Fact]
     public async Task APassingFailureBacksOffAndSurvivesARestart()
     {
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 503"));
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 503"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 500"));
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 500"));
         var frame = Frame();
         await using (var first = Queue())
         {
             await first.EnqueueAsync(Destination, frame, null, default);
             await first.ProcessDueJobsAsync(default);
-            Assert.Single(server.Uploads);
+            Assert.Single(Server.Uploads);
             clock.Advance(TimeSpan.FromSeconds(4));
             Assert.True(await first.ProcessDueJobsAsync(default) <= TimeSpan.FromSeconds(1));
-            Assert.Single(server.Uploads);
+            Assert.Single(Server.Uploads);
         }
 
         await using var restarted = Queue();
         clock.Advance(TimeSpan.FromSeconds(1));
         await restarted.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(2, Server.Uploads.Count);
         clock.Advance(TimeSpan.FromSeconds(9));
         await restarted.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(2, Server.Uploads.Count);
         clock.Advance(TimeSpan.FromSeconds(1));
         await restarted.ProcessDueJobsAsync(default);
-        Assert.Equal(3, server.Uploads.Count);
-        Assert.Equal(0, Jobs());
-        // Once for each queue instance, that is once per N.I.N.A. session.
-        Assert.Equal(2, log.Count(line => line.Contains("tries again")));
-    }
-
-    [Fact]
-    public async Task ABusyServerIsAskedAgainWhenItsRetryAfterEnds()
-    {
-        server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 503", RetryAfter: TimeSpan.FromSeconds(20)));
-        await using var queue = Queue();
-        await queue.EnqueueAsync(Destination, Frame(), null, default);
-
-        await queue.ProcessDueJobsAsync(default);
-        clock.Advance(TimeSpan.FromSeconds(19));
-        await queue.ProcessDueJobsAsync(default);
-        Assert.Single(server.Uploads);
-
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(3, Server.Uploads.Count);
         Assert.Equal(0, Jobs());
     }
 
@@ -462,38 +514,107 @@ public sealed class DirectorUploadQueueTests : IDisposable
 
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Empty(server.Uploads);
+        Assert.Empty(Server.Uploads);
         Assert.Equal(0, Jobs());
         Assert.Single(log, line => line.Contains("no longer on disk"));
     }
 
     [Fact]
-    public async Task AFrameLargerThanTheServerTakesIsRefusedOrNotQueued()
+    public async Task TheRequestNotJustTheFileMustFitMaxBytes()
     {
-        server.States.Enqueue(new(DirectorUploadStateKind.Enabled, null, 100));
+        var limit = 200 + DirectorUploadPolicy.RequestOverheadBytes;
+        Server.States.Enqueue(new(DirectorUploadStateKind.Enabled, null, limit));
         await using var queue = Queue();
-        await queue.EnqueueAsync(Destination, Frame("big.fits", 200), null, default);
+        // 190 bytes fits on its own, but not with the request's part headers.
+        await queue.EnqueueAsync(Destination, Frame("tight.fits", 190), null, default);
 
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Empty(server.Uploads);
+        Assert.Empty(Server.Uploads);
         Assert.Equal(1, Jobs(DirectorUploadQueue.RefusedFolderName));
-        Assert.False(await queue.EnqueueAsync(Destination, Frame("big2.fits", 200), null, default));
-        Assert.True(await queue.EnqueueAsync(Destination, Frame("small.fits", 50), null, default));
+        // Once max_bytes is known, a frame that cannot fit goes straight to refused.
+        Assert.False(await queue.EnqueueAsync(Destination, Frame("tight2.fits", 190), null, default));
+        Assert.Equal(2, Jobs(DirectorUploadQueue.RefusedFolderName));
+        Assert.Equal(0, Jobs());
+        Assert.True(await queue.EnqueueAsync(Destination, Frame("small.fits", 100), null, default));
+        Assert.True(DirectorUploadPolicy.RequestBytes(190, "tight.fits") > limit);
+        Assert.True(DirectorUploadPolicy.RequestBytes(100, "small.fits") <= limit);
     }
 
     [Fact]
-    public async Task AnUnpairedOrFailingConnectionLeavesJobsWaiting()
+    public async Task FramesForAnEarlierPairingAreCountedApartAndForgotten()
     {
-        await using (var unpaired = Queue(_ => null))
+        connector.Covers = destination => destination == Destination;
+        await using var queue = Queue();
+        await queue.EnqueueAsync(OtherRig, Frame("old.fits"), null, default);
+        await queue.EnqueueAsync(Destination, Frame("new.fits"), null, default);
+        Server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 500"));
+
+        await queue.ProcessDueJobsAsync(default);
+
+        Assert.Single(Server.Uploads);
+        Assert.Equal(new DirectorUploadSummary(1, 1, 0, new(DirectorUploadStateKind.Enabled)), queue.Summarize(Destination));
+        Assert.Equal(1, await queue.ForgetHeldAsync(default));
+        Assert.Equal(1, Jobs());
+        Assert.Equal(new DirectorUploadSummary(1, 0, 0, new(DirectorUploadStateKind.Enabled)), queue.Summarize(Destination));
+    }
+
+    [Fact]
+    public async Task OneClientServesADestinationUntilItsPairingChanges()
+    {
+        await using var queue = Queue();
+        for (var i = 0; i < 3; i++)
+        {
+            await queue.EnqueueAsync(Destination, Frame($"{i}.fits"), null, default);
+            await queue.ProcessDueJobsAsync(default);
+        }
+        Assert.Equal(1, connector.Connects);
+
+        connector.Key = "re-paired";
+        await queue.EnqueueAsync(Destination, Frame("after.fits"), null, default);
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(2, connector.Connects);
+        Assert.Equal(1, connector.Disposed);
+        Assert.Equal(4, Server.Uploads.Count);
+    }
+
+    [Fact]
+    public async Task TheIndexIsReadFromDiskWhenTheQueueStarts()
+    {
+        await using var queue = Queue();
+        await queue.EnqueueAsync(Destination, Frame("a.fits"), null, default);
+        await queue.ProcessDueJobsAsync(default);
+        // A job file written behind the queue's back is not read again on each pass.
+        await using (var other = Queue()) await other.EnqueueAsync(Destination, Frame("b.fits"), null, default);
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(Server.Uploads);
+
+        // A start reads the folder again.
+        queue.Start();
+        await queue.StopAsync();
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(2, Server.Uploads.Count);
+        Assert.Equal(0, Jobs());
+    }
+
+    [Fact]
+    public async Task AnUnpairedOrFailingConnectorLeavesJobsWaiting()
+    {
+        connector.Covers = _ => false;
+        await using (var unpaired = Queue())
         {
             await unpaired.EnqueueAsync(Destination, Frame(), null, default);
             await unpaired.ProcessDueJobsAsync(default);
         }
-        await using (var failing = Queue(_ => throw new InvalidOperationException("Director credential is invalid.")))
+        connector.Covers = _ => throw new InvalidOperationException("Director credential is invalid.");
+        await using (var failing = Queue())
+        {
             await failing.ProcessDueJobsAsync(default);
+            // An unreadable credential does not make a frame an earlier pairing's.
+            Assert.Equal(new DirectorUploadSummary(1, 0, 0, null), failing.Summarize(Destination));
+        }
         Assert.Equal(1, Jobs());
-        Assert.Empty(server.Uploads);
+        Assert.Empty(Server.Uploads);
     }
 
     [Fact]
@@ -502,24 +623,31 @@ public sealed class DirectorUploadQueueTests : IDisposable
         await using var queue = Queue();
         await queue.EnqueueAsync(Destination, Frame(), null, default);
         await File.WriteAllTextAsync(Path.Combine(QueueRoot, "00000000000000000000000000000000.json"), "{ not json");
+        queue.Start();
+        await queue.StopAsync();
 
         await queue.ProcessDueJobsAsync(default);
 
-        Assert.Single(server.Uploads);
+        Assert.Single(Server.Uploads);
         Assert.Equal(1, Jobs(DirectorUploadQueue.BlockedFolderName));
         Assert.Equal(0, Jobs());
     }
 
-    [Fact]
-    public async Task OfferNeverThrowsAndQueuesInTheBackground()
+    private sealed class FakeConnector : IDirectorUploadConnector
     {
-        await using var queue = Queue();
-        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Changed += (_, _) => changed.TrySetResult();
-        queue.Offer(Destination, Frame(), "capture-1");
-        await changed.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(1, Jobs());
-        queue.Offer(Destination, "\0bad", null);
+        public FakeServer Server { get; } = new();
+        public Func<DirectorUploadDestination, bool> Covers { get; set; } = _ => true;
+        public string Key { get; set; } = "pairing";
+        public int Connects { get; private set; }
+        public int Disposed => Server.Disposed;
+
+        public string? PairingKey(DirectorUploadDestination destination) => Covers(destination) ? Key : null;
+
+        public IDirectorUploadServer Connect(DirectorUploadDestination destination)
+        {
+            Connects++;
+            return Server;
+        }
     }
 
     private sealed class FakeServer : IDirectorUploadServer
@@ -528,6 +656,7 @@ public sealed class DirectorUploadQueueTests : IDisposable
         public Queue<DirectorUploadAnswer> Answers { get; } = new();
         public List<string> Uploads { get; } = [];
         public int StateCalls { get; private set; }
+        public int Disposed { get; private set; }
 
         public Task<DirectorUploadState> GetStateAsync(CancellationToken token)
         {
@@ -537,11 +666,11 @@ public sealed class DirectorUploadQueueTests : IDisposable
 
         public Task<DirectorUploadAnswer> UploadAsync(string path, CancellationToken token)
         {
-            Uploads.Add(path);
+            lock (Uploads) Uploads.Add(path);
             return Task.FromResult(Answers.Count > 0 ? Answers.Dequeue() : new DirectorUploadAnswer(DirectorUploadOutcome.Stored, "Stored"));
         }
 
-        public void Dispose() { }
+        public void Dispose() => Disposed++;
     }
 
     private sealed class FakeClock : TimeProvider

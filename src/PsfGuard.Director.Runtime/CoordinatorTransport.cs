@@ -48,16 +48,14 @@ internal sealed class CoordinatorTransport : IDisposable
     private async Task<CoordinatorResponse> SendCoreAsync(string route, byte[]? body, CancellationToken token,
         Guid? profileId, bool allowMissing)
     {
-        using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(Endpoint, route));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
-        if (profileId is { } profile) request.Headers.Add("X-PSF-Director-Profile", profile.ToString("D"));
+        ByteArrayContent? content = null;
         if (body is not null)
         {
-            request.Content = new ByteArrayContent(body);
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            content = new ByteArrayContent(body);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         }
-        await AuthorizeAsync(request, token).ConfigureAwait(false);
+        using var request = await CreateRequestAsync(body is null ? HttpMethod.Get : HttpMethod.Post, route, content, null,
+            profileId, token).ConfigureAwait(false);
         try
         {
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
@@ -86,6 +84,30 @@ internal sealed class CoordinatorTransport : IDisposable
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Transport); }
     }
 
+    /// <summary>
+    /// A request with the headers every coordinator call carries: JSON
+    /// accepted, no caching, the profile when given, and the bearer token.
+    /// </summary>
+    private async Task<HttpRequestMessage> CreateRequestAsync(HttpMethod method, string route, HttpContent? content,
+        IReadOnlyDictionary<string, string>? headers, Guid? profileId, CancellationToken token)
+    {
+        var request = new HttpRequestMessage(method, new Uri(Endpoint, route)) { Content = content };
+        try
+        {
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
+            if (profileId is { } profile) request.Headers.Add("X-PSF-Director-Profile", profile.ToString("D"));
+            foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.Add(name, value);
+            await AuthorizeAsync(request, token).ConfigureAwait(false);
+            return request;
+        }
+        catch
+        {
+            request.Dispose();
+            throw;
+        }
+    }
+
     private async Task AuthorizeAsync(HttpRequestMessage request, CancellationToken token)
     {
         string? secret;
@@ -110,12 +132,7 @@ internal sealed class CoordinatorTransport : IDisposable
     internal async Task<CoordinatorExchange> ExchangeAsync(HttpMethod method, string route, HttpContent? content,
         IReadOnlyDictionary<string, string>? headers, Guid profileId, CancellationToken token, int maximumBytes = 65536)
     {
-        using var request = new HttpRequestMessage(method, new Uri(Endpoint, route)) { Content = content };
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
-        request.Headers.Add("X-PSF-Director-Profile", profileId.ToString("D"));
-        foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.Add(name, value);
-        await AuthorizeAsync(request, token).ConfigureAwait(false);
+        using var request = await CreateRequestAsync(method, route, content, headers, profileId, token).ConfigureAwait(false);
         try
         {
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);

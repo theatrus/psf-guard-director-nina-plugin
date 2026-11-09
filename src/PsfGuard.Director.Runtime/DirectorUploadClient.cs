@@ -16,7 +16,11 @@ public enum DirectorUploadStateKind
     /// <summary>The server takes Director uploads, but this database has them off.</summary>
     Disabled,
 
-    /// <summary>The server takes no Director uploads: an older PSF Guard.</summary>
+    /// <summary>
+    /// The server takes no Director uploads now: 403, 404 or 405, or a 200 that
+    /// is not an upload state. That can be an older PSF Guard, the Director
+    /// service turned off, or a proxy's page, so the queue asks again later.
+    /// </summary>
     Unsupported,
 
     /// <summary>No answer this time: a timeout, a lost connection or a server error.</summary>
@@ -87,6 +91,17 @@ public static class DirectorUploadPolicy
         return null;
     }
 
+    /// <summary>Room left for the multipart boundary and part headers, with a safety margin.</summary>
+    public const long RequestOverheadBytes = 64 * 1024;
+
+    /// <summary>
+    /// The size of the upload request for a file: its bytes, the part headers
+    /// that carry its name, and <see cref="RequestOverheadBytes"/>. Compare
+    /// this, not the file length, with the server's <c>max_bytes</c>.
+    /// </summary>
+    public static long RequestBytes(long fileLength, string fileName) =>
+        fileLength + RequestOverheadBytes + 2L * System.Text.Encoding.UTF8.GetByteCount(fileName);
+
     /// <summary>
     /// The wait before retry number <paramref name="attempts"/>: the server's
     /// Retry-After when it sent one, kept between 1 second and 10 minutes;
@@ -149,19 +164,20 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
         switch (answer.Status)
         {
             case HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed:
-                return new(DirectorUploadStateKind.Unsupported);
+                return new(DirectorUploadStateKind.Unsupported, $"PSF Guard answered HTTP {(int)answer.Status}.");
             case not HttpStatusCode.OK:
                 return new(DirectorUploadStateKind.Unavailable, $"PSF Guard answered HTTP {(int)answer.Status}.");
         }
         // A 200 without data.enabled also comes from a server that knows nothing of this route.
-        if (!answer.Json) return new(DirectorUploadStateKind.Unsupported);
+        var notState = new DirectorUploadState(DirectorUploadStateKind.Unsupported, "PSF Guard's answer was not an upload state.");
+        if (!answer.Json) return notState;
         try
         {
             using var body = JsonDocument.Parse(answer.Bytes);
             if (body.RootElement.ValueKind != JsonValueKind.Object
                 || !body.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
                 || !data.TryGetProperty("enabled", out var enabled) || enabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                return new(DirectorUploadStateKind.Unsupported);
+                return notState;
             var reason = data.TryGetProperty("reason", out var text) && text.ValueKind == JsonValueKind.String
                 ? Clean(text.GetString()) : null;
             long? maximum = data.TryGetProperty("max_bytes", out var bytes) && bytes.TryGetInt64(out var value) && value > 0 ? value : null;
@@ -169,7 +185,7 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
                 ? new(DirectorUploadStateKind.Enabled, null, maximum)
                 : new(DirectorUploadStateKind.Disabled, reason ?? "Image uploads are off for this database.", maximum);
         }
-        catch (JsonException) { return new(DirectorUploadStateKind.Unsupported); }
+        catch (JsonException) { return notState; }
     }
 
     public async Task<DirectorUploadAnswer> UploadAsync(string path, CancellationToken token)
