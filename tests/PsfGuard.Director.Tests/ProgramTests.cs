@@ -17,6 +17,53 @@ public sealed class ProgramTests
     private static ProgramLocalState Local() => new(Program().Configuration, new("config", Program().Targets[0]), false, false, 0);
 
     [Fact]
+    public void WaitingRefreshDetectsActivatedAndRemovedPlansWithoutChurningOnProgress()
+    {
+        var held = Program();
+        var added = held with
+        {
+            Assignment = held.Assignment with { Goals = held.Assignment.Goals.Add(held.Assignment.Goals[0] with { Id = "new-goal" }) },
+            Bindings = held.Bindings.Add(held.Bindings[0] with { GoalId = "new-goal" })
+        };
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, added));
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(added, held));
+        var replaced = held with { Assignment = held.Assignment with { Goals = [held.Assignment.Goals[0] with { Id = "replacement" }] } };
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, replaced));
+        var progress = held with
+        {
+            Assignment = held.Assignment with
+            {
+                Id = "new-preview",
+                Revision = 10,
+                ValidFromMs = 100,
+                ExpiresAtMs = 100000,
+                Goals = [held.Assignment.Goals[0] with { Pending = 1, Accepted = 1, AttemptsRemaining = 0, EligibleWindows = [new(100, 100000)] }]
+            }
+        };
+        Assert.False(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, progress));
+        Assert.False(CoordinatorPriorityRefresh.RequiredWhileWaiting(added, added with
+        {
+            Assignment = added.Assignment with { Goals = added.Assignment.Goals.Reverse().ToImmutableArray() },
+            Bindings = added.Bindings.Reverse().ToImmutableArray()
+        }));
+        Assert.False(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, added with { Configuration = held.Configuration with { Id = "other" } }));
+    }
+
+    [Fact]
+    public void WaitingRefreshDetectsChangedCountsFramingAndExposureSettings()
+    {
+        var held = Program();
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, held with
+        { Assignment = held.Assignment with { Goals = [held.Assignment.Goals[0] with { Requested = 100 }] } }));
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, held with
+        { Targets = [held.Targets[0] with { IcrsRaMas = 1000 }] }));
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, held with
+        { Recipes = [held.Recipes[0] with { Gain = 100 }] }));
+        Assert.True(CoordinatorPriorityRefresh.RequiredWhileWaiting(held, held with
+        { Recipes = [held.Recipes[0] with { Moon = new(true, 45, 14, 0, -15, 5, true) }] }));
+    }
+
+    [Fact]
     public void PriorityRefreshIgnoresProgressAndRequiresTheSameGoalsAndConfiguration()
     {
         var held = Program();

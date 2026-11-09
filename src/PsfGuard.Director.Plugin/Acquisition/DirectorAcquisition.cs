@@ -720,6 +720,7 @@ public sealed partial class DirectorAcquisition
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
             var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
+            long? lastWaitingRefresh = null;
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
             {
@@ -732,7 +733,7 @@ public sealed partial class DirectorAcquisition
                     if (recovery is not null && !await recovery.RefreshAsync(lifetime.Token, allowNightEnd: true)) break;
                     if (Volatile.Read(ref priorityRefresh) != 0)
                     {
-                        Report("Priority changed; parking for a refreshed workload", "Online");
+                        Report("Plans changed. Requesting updated work from PSF Guard", "Online");
                         break;
                     }
                     var current = Snapshot();
@@ -758,6 +759,17 @@ public sealed partial class DirectorAcquisition
                         {
                             if (native is not null) await native.StopGuidingAsync(progress, operations.Token);
                             await Park(lifetime.Token);
+                        }
+                        // Waiting for geometry must not hide newly activated plans
+                        // until the held assignment ends. This read-only poll also
+                        // works when capture delivery is deferred. The normal
+                        // handoff below delivers saved images before requesting work.
+                        if (options.AutomaticWorkloads && (lastWaitingRefresh is null
+                            || TimeProvider.System.GetElapsedTime(lastWaitingRefresh.Value) >= TimeSpan.FromSeconds(30)))
+                        {
+                            lastWaitingRefresh = TimeProvider.System.GetTimestamp();
+                            await RefreshWorkAsync(operations.Token, waiting: true);
+                            if (Volatile.Read(ref priorityRefresh) != 0) continue;
                         }
                         await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, operations.Token);
                         // Waiting ends the target visit, so re-enter its setup on
@@ -1075,7 +1087,7 @@ public sealed partial class DirectorAcquisition
             if (!WeatherInterrupted()) await hooks.FinishAsync(progress, operations.Token);
             await EnsureSettledAsync(runtime, lifetime.Token);
             if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
-            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
+            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reporting saved images before requesting updated work"
                 : "Allocation finished; awaiting assessment or a new reconciled plan", null);
 
             void QueueCheckIn(bool refreshPriority = true)
@@ -1121,19 +1133,7 @@ public sealed partial class DirectorAcquisition
                     } while (drain && (!result.CaughtUp || !operations.CaughtUp));
                     if (refreshPriority && !drain && result.CaughtUp && options.AutomaticWorkloads && options.CheckInMode == DirectorCheckInMode.Live)
                     {
-                        // Progress alone changes the preview revision. Compare
-                        // priority intent so ordinary saves cannot churn grants.
-                        CoordinatorProgramPreview preview;
-                        try { preview = await previews.ReadPreviewAsync(pairing.Binding, configuration, token: ct); }
-                        catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.NotReady)
-                        {
-                            Logger.Info("Director priority preview is not ready; retaining the current allocation.");
-                            return;
-                        }
-                        var changed = CoordinatorPriorityRefresh.Required(program, preview.Envelope.Program);
-                        if (changed && Volatile.Read(ref priorityRefresh) == 0)
-                            Logger.Info("Director priority update queued for the next settled exposure boundary.");
-                        Volatile.Write(ref priorityRefresh, changed ? 1 : 0);
+                        await RefreshWorkAsync(ct, waiting: false);
                     }
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
@@ -1142,6 +1142,24 @@ public sealed partial class DirectorAcquisition
                     Logger.Info("Director check-in offline; local scheduling continues within the allocation.");
                 }
                 finally { checkpointDelivery.Release(); }
+            }
+            async Task RefreshWorkAsync(CancellationToken ct, bool waiting)
+            {
+                try
+                {
+                    var preview = await previews.ReadPreviewAsync(pairing.Binding, configuration, token: ct);
+                    var changed = waiting
+                        ? CoordinatorPriorityRefresh.RequiredWhileWaiting(program, preview.Envelope.Program)
+                        : CoordinatorPriorityRefresh.Required(program, preview.Envelope.Program);
+                    // Latch the handoff. A concurrent priority-only check must not
+                    // erase a newly activated plan detected by the waiting loop.
+                    if (changed && Interlocked.Exchange(ref priorityRefresh, 1) == 0)
+                        Logger.Info("Director plans changed. Updated work will be requested after saved images are reported.");
+                }
+                catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.NotReady)
+                { Logger.Info("Director plan preview is not ready. Keeping the current assignment."); }
+                catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+                { Logger.Info("Director could not check for plan changes. It will check again automatically."); }
             }
         }
         catch (Exception error)
