@@ -1,5 +1,53 @@
 # Real N.I.N.A. smoke test
 
+## Target startup, session progress and guiding errors
+
+2026-11-08: NINA `3.2.0.9001`, bundled runtime `0.14.0` / IPC 14,
+ASCOM OmniSim, native Direct Guider and an isolated PSF Guard server.
+The development ZIP SHA-256 was
+`989f3966393c0211c3468c066b1234ed26b7c3ed9593f89f2fe5f4af7223c2dc`.
+
+The native success run used `-PublicAcquisition -AutomaticWorkloads
+-LocalTargetScheduling -NativeImaging -StartUnparked`. The simulator began
+unparked with tracking off. Director explicitly started sidereal tracking
+before centering, captured three science images across two targets, reported
+the images, parked and stopped cleanly while waiting for more work. The probe
+verified that no Unpark operation ran, that sidereal tracking was reported in
+the status bar, and that the mount was tracking at the correct rate when the
+native centering solver ran. Evidence:
+`artifacts/nina-smoke-18340945f4624a4d9ecdf27260315a12/probe/c0cf942c13f047209d15e5a86f4dddee/result.json`.
+
+The native failure run used `-PublicAcquisition -AutomaticWorkloads
+-LocalTargetScheduling -NativeImaging -NativeImagingFailure guiding`.
+The real NINA Start Guiding instruction received a controlled failure from
+its guider mediator. Director kept `Start guiding: Failed to start guiding`
+in session status and Activity through shutdown, saved no science images and
+parked. Evidence:
+`artifacts/nina-smoke-f6c44e575767422fa3616844682ebc1d/probe/ff6099d3ce364b8fa650927ce8154e87/result.json`.
+
+Each run records NINA status-bar updates in `director-status-bar.txt` next to
+its result. The harness checks startup actions, one saved-run delivery pass,
+absence of duplicate camera status and clearing the status bar after exit.
+All six session tabs render in NINA's theme at 640 and 1000 pixels. The new
+calibration toggle binds to saved options and is disabled for custom guiding
+instructions.
+
+All 1,083 managed tests passed, along with formatter verification, development
+package build and `git diff --check`. Managed tests exercise the native NINA
+Start Guiding instruction with controlled guider responses, including confirmed
+stop before forced calibration, failed stop, unsupported calibration, saved
+settings and custom instructions. They also cover worker-thread status updates,
+native trigger progress, original instruction/trigger errors and successful
+retries followed by a different failure. Mount tests cover already-unparked
+startup, changing a non-sidereal rate, delayed equipment updates, refusal,
+missing confirmation and cancellation before centering.
+This campaign did not run a real PHD2
+calibration; optical results in the native fixture are synthetic.
+
+An earlier managed run encountered a Windows lock on `recovery.sqlite-shm`
+while deleting a recovery test fixture. The complete repeat after the native
+host tests passed; no recovery code was changed for that cleanup failure.
+
 ## One Package for NINA 3.2 and 3.3
 
 2026-10-05: one .NET 8 package built against NINA `3.2.0.9001`, with the

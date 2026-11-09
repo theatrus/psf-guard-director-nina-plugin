@@ -30,6 +30,8 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     private DirectorAbortPolicy onAbort = DirectorAbortPolicy.ParkMount;
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
     private bool retryFocusAndGuiding;
+    private bool forceGuideCalibration;
+    [JsonProperty] public bool ForceGuideCalibration { get => forceGuideCalibration; set => Set(ref forceGuideCalibration, value); }
     private DirectorQualityPolicy quality;
     private int poorQualityFrames = 3, goodQualityProbes = 2, maximumOperationFailures = 3;
     [JsonProperty] public DirectorQualityPolicy Quality { get => quality; set => Set(ref quality, value); }

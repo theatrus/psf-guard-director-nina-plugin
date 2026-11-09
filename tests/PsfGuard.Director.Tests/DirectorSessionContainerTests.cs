@@ -139,7 +139,7 @@ public sealed class DirectorSessionContainerTests
         session.Options.AutomaticWorkloads = automatic;
         var summary = session.Readiness;
         Assert.Contains(local ? "Director selects targets" : "one prepared target", summary);
-        Assert.Contains(automatic ? "requests work from PSF Guard automatically" : "Assign a workload in PSF Guard", summary);
+        Assert.Contains(automatic ? "gets the latest plans from PSF Guard" : "Assign targets in PSF Guard", summary);
         Assert.DoesNotContain("Before New Target", summary);
         Assert.DoesNotContain("commissioned", summary);
         session.Options.EnableAcquisition = true;

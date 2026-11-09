@@ -211,27 +211,48 @@
                                         <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Shutdown}" AutomationProperties.Name="Park mount" MaxWidth="320" Margin="0,3" />
                                     </Grid>
                                 </Expander>
-                                <Expander Header="Check-ins and status" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                <Expander Header="Guiding calibration" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <StackPanel Margin="8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <TextBlock Text="Recalibrate before guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox Grid.Column="1" IsChecked="{Binding ForceGuideCalibration}" AutomationProperties.Name="Recalibrate before guiding" Margin="0,5"
+                                                ToolTip="Resets calibration when Director starts guiding for each target, including a retry. N.I.N.A. controls guiding recovery after a meridian flip or lost guide star.">
+                                                <CheckBox.Style>
+                                                    <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Guiding}" Value="{x:Static local:DirectorOperationOwner.Sequence}">
+                                                                <Setter Property="IsEnabled" Value="False" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </CheckBox.Style>
+                                            </CheckBox>
+                                        </Grid>
+                                        <TextBlock Text="For a custom calibration sequence, set Guiding to Sequence instructions / triggers above. Add your calibration steps and Start Guiding to Instructions → Before New Target. When Director controls Slew and center, it centers the target before running these steps." TextWrapping="Wrap" Margin="0,5" />
+                                    </StackPanel>
+                                </Expander>
+                                <Expander Header="Image reports and status" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="220" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                                        <TextBlock Grid.Row="0" Text="Continue authorized work offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue authorized work offline" VerticalAlignment="Center" Margin="0,5" />
-                                        <TextBlock Grid.Row="1" Text="Check in at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Check in at session start" VerticalAlignment="Center" Margin="0,5" />
-                                        <TextBlock Grid.Row="2" Text="Check in at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Check in at session end" VerticalAlignment="Center" Margin="0,5" />
-                                        <TextBlock Grid.Row="3" Text="Check in on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Check in on target change" VerticalAlignment="Center" Margin="0,5" />
-                                        <TextBlock Grid.Row="4" Text="Check-in interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Check-in interval (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
+                                        <TextBlock Grid.Row="0" Text="Continue current targets while offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue current targets while offline" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="1" Text="Send saved image records at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Send saved image records at session start" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="2" Text="Send image records at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Send image records at session end" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="3" Text="Send image records on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Send image records on target change" VerticalAlignment="Center" Margin="0,5" />
+                                        <TextBlock Grid.Row="4" Text="Image report interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image report interval (minutes)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="5" Text="Report live status" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <CheckBox Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" MaxWidth="280" HorizontalAlignment="Stretch" Margin="0,3" />
-                                        <TextBlock Grid.Row="7" Text="Capture delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Capture delivery" MaxWidth="320" Margin="0,3"
-                                            ToolTip="Sends capture records. Image files stay on disk. Deferred skips target and periodic check-ins. Session-end delivery follows its checkbox. Automatic workloads always check in before requesting more work." />
+                                        <TextBlock Grid.Row="7" Text="Image record delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                        <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Image record delivery" MaxWidth="320" Margin="0,3"
+                                            ToolTip="Sends image records, not image files. Use Sync or another transfer tool for the files. Deferred sends records at session end if enabled. Director always sends saved records before requesting more targets." />
                                     </Grid>
                                 </Expander>
                             </StackPanel>

@@ -1,5 +1,38 @@
 # Native capture adapter
 
+## Follow session progress
+
+N.I.N.A.'s bottom status bar shows Director's current action and elapsed time,
+including mount and guider shutdown, reporting saved images, and requesting
+targets. During capture, Director shows the target, filter and exposure length;
+N.I.N.A. continues to show camera exposure and download progress. The Activity
+tab and N.I.N.A. log record how long each startup step took. Previous captures
+are reported once before a fresh start, including after a failed run.
+
+## Start target tracking
+
+When Director controls **Slew and center**, it starts sidereal tracking and
+waits for the mount to confirm the rate and tracking state before centering.
+This also applies when the sequence already unparked the mount. A refusal or
+missing confirmation stops target setup before autofocus, guiding or exposures.
+
+## Choose guiding calibration
+
+To recalibrate when Director starts guiding, open **Session → Guiding
+calibration** and enable **Recalibrate before guiding**. This uses N.I.N.A.'s
+Start Guiding operation and resets calibration for each target and guiding
+retry. Director first confirms guiding stopped, so this also works when the
+guider was already running. Leave it off to reuse calibration. N.I.N.A.
+controls guiding recovery after a meridian flip or a lost guide star.
+
+For custom calibration steps, set **Guiding** to **Sequence instructions /
+triggers** under **Operation ownership**. Add the steps, followed by **Start
+Guiding**, to **Instructions → Before New Target**. With Director controlling
+**Slew and center**, it centers the target before running these instructions.
+Director will not add a second Start Guiding instruction. Failures show the
+instruction and its error in session status and Activity, including while
+Director stops equipment or waits to retry.
+
 ## Automatic session recovery
 
 Director reports connected equipment when a session starts. PSF Guard applies
@@ -127,14 +160,14 @@ operation receipts remain in the sidecar ledger. Neither display is launch autho
 
 ## Live and Deferred Check-In
 
-Session **Capture delivery** selects Live (the default) or Deferred. Live sends
+Session **Image record delivery** selects Live (the default) or Deferred. Live sends
 bounded periodic and target-change batches during acquisition. Deferred keeps
 capture evidence local until session-end check-in, an explicit **Director Check
 In** sequence instruction, or **Check in** in plugin settings. Turn off
-**Check in at session end** for deliberate manual/end-of-night delivery. Live
+**Send image records at session end** for deliberate manual/end-of-night delivery. Live
 status telemetry is independent and is never backfilled as a current rig state.
 
-**Check in at session start** first delivers saved runs for the current pairing.
+**Send saved image records at session start** first delivers saved runs for the current pairing.
 The session duration limit includes this work. Session-end delivery drains the
 backlog in bounded pages; cancellation preserves the last acknowledged cursor.
 Automatic workloads always require terminal delivery before requesting another

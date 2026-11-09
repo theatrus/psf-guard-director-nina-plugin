@@ -42,6 +42,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
             options.SlewCenter,
             options.Focus,
             options.Guiding,
+            options.ForceGuideCalibration,
             options.Dither,
             options.MeridianFlip
         });
@@ -57,6 +58,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
             if (guiderId == "No_Guider" || profiles.ActiveProfile.GuiderSettings.GuiderName != guiderId || !guider.GetInfo().Connected
                 || guider.GetInfo().DeviceId != guiderId)
                 throw new InvalidOperationException("Director guiding/dither requires the configured guider connected. Use Sequence ownership for an unguided setup.");
+            if (options.Guiding == DirectorOperationOwner.Director && options.ForceGuideCalibration && !guider.GetInfo().CanClearCalibration)
+                throw new InvalidOperationException("The connected guider cannot reset calibration. Turn off Recalibrate before guiding or choose a guider that supports calibration.");
         }
         if ((options.Focus == DirectorOperationOwner.Director
             || options.MeridianFlip == DirectorOperationOwner.Director && profiles.ActiveProfile.MeridianFlipSettings.AutoFocusAfterFlip)
@@ -72,7 +75,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     {
         var items = new List<ISequenceItem>();
         if (options.Focus == DirectorOperationOwner.Director) items.Add(Recoverable(Item<RunAutofocus>(), RecoveryOperation.Focus, focuserId));
-        if (options.Guiding == DirectorOperationOwner.Director) items.Add(Recoverable(Item<StartGuiding>(), RecoveryOperation.Guide, guiderId));
+        if (options.Guiding == DirectorOperationOwner.Director) items.Add(Recoverable(GuideStart(), RecoveryOperation.Guide, guiderId));
         slots.AppendTargetDefaults(items);
     }
 
@@ -83,7 +86,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
                 ?? throw new InvalidOperationException("No recovery target is selected."), async ct =>
             {
                 CheckEquipment();
-                var fresh = operation == RecoveryOperation.Focus ? (SequenceItem)Item<RunAutofocus>() : Item<StartGuiding>();
+                var fresh = operation == RecoveryOperation.Focus ? (SequenceItem)Item<RunAutofocus>() : GuideStart();
                 fresh.AttachNewParent(parent);
                 try
                 {
@@ -119,6 +122,36 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         }
         public override object Clone() => new RetryItem(Name, execute);
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) => execute(Parent, progress, token);
+    }
+
+    private SequenceItem GuideStart()
+    {
+        var start = Item<StartGuiding>();
+        return options.ForceGuideCalibration ? new RecalibratingGuideStart(start, profiles, guider) : start;
+    }
+
+    // NINA skips Start Guiding entirely if PHD2 is already guiding, even with
+    // ForceCalibration set. Confirm a stop before requesting recalibration.
+    private sealed class RecalibratingGuideStart : SequenceItem
+    {
+        private readonly StartGuiding start;
+        private readonly IProfileService profiles;
+        private readonly IGuiderMediator guider;
+        internal RecalibratingGuideStart(StartGuiding start, IProfileService profiles, IGuiderMediator guider)
+        {
+            this.start = start; this.profiles = profiles; this.guider = guider;
+            Name = start.Name; Attempts = 1; ErrorBehavior = InstructionErrorBehavior.AbortOnError;
+        }
+        public override object Clone() => new RecalibratingGuideStart((StartGuiding)start.Clone(), profiles, guider);
+        public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            progress.Report(new ApplicationStatus { Status = "Stopping guiding before calibration" });
+            await NinaGuiderStop.ConfirmAsync(profiles, guider, token);
+            token.ThrowIfCancellationRequested();
+            if (!start.Validate() || start.Issues.Count != 0) throw new InvalidOperationException(string.Join("; ", start.Issues));
+            progress.Report(new ApplicationStatus { Status = "Calibrating and starting guiding" });
+            await start.Execute(progress, token);
+        }
     }
 
     internal void Install(DirectorSessionContainer target) => NinaSequencerDispatcher.Invoke(() =>
@@ -212,6 +245,11 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     private T Item<T>() where T : SequenceItem
     {
         var item = factory.GetItem<T>() ?? throw new InvalidOperationException($"NINA action {typeof(T).Name} is unavailable.");
+        if (item is StartGuiding start)
+        {
+            start.ForceCalibration = options.ForceGuideCalibration;
+            start.Name = options.ForceGuideCalibration ? "Calibrate and start guiding" : "Start guiding";
+        }
         item.Attempts = 1;
         item.ErrorBehavior = InstructionErrorBehavior.AbortOnError;
         return item;
