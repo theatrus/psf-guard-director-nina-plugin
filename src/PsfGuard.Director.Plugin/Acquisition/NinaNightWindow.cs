@@ -8,7 +8,12 @@ internal sealed class NinaNightWindow(ulong start, ulong end, TimeProvider clock
     internal ulong End { get; } = end > start ? end : throw new ArgumentOutOfRangeException(nameof(end));
     internal ulong Now => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
     internal bool Ended => Now >= End;
-    internal ulong BoundValidity(ulong allocationEnd) => Math.Min(End, allocationEnd);
+    // Translate the remaining local session duration into the planner's clock domain.
+    internal ulong EndOn(ulong planningNow)
+    {
+        var now = Now;
+        return checked(planningNow + (now < End ? End - now : 0));
+    }
 
     internal TimeSpan Remaining(TimeSpan maximum)
     {

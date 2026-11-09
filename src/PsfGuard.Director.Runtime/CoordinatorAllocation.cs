@@ -14,11 +14,23 @@ public sealed class CoordinatorAllocation
     public CoordinatorAllocationEnvelope Envelope { get; }
     internal CoordinatorProgramPreview ValidatedSnapshot { get; }
     public string Fingerprint { get; }
-    internal CoordinatorAllocation(CoordinatorAllocationEnvelope envelope, CoordinatorProgramPreview snapshot, string fingerprint)
-        => (Envelope, ValidatedSnapshot, Fingerprint) = (envelope, snapshot, fingerprint);
+    private readonly CoordinatorClock? clock;
+    internal TimeProvider PlanningClock => clock ?? TimeProvider.System;
+    internal ulong PlanningNowMs => checked((ulong)PlanningClock.GetUtcNow().ToUnixTimeMilliseconds());
+
+    private CoordinatorAllocation(CoordinatorAllocationEnvelope envelope, CoordinatorProgramPreview snapshot, string fingerprint, CoordinatorClock? clock)
+        => (Envelope, ValidatedSnapshot, Fingerprint, this.clock) = (envelope, snapshot, fingerprint, clock);
 
     internal static CoordinatorAllocation Read(byte[] bytes, string origin, CoordinatorBinding binding, Guid clientId,
-        DirectorConfiguration configuration, ulong now)
+        DirectorConfiguration configuration, ulong now) =>
+        Read(bytes, origin, binding, clientId, configuration, now, null);
+
+    internal static CoordinatorAllocation Read(byte[] bytes, string origin, CoordinatorBinding binding, Guid clientId,
+        DirectorConfiguration configuration, CoordinatorClock clock) =>
+        Read(bytes, origin, binding, clientId, configuration, 0, clock);
+
+    private static CoordinatorAllocation Read(byte[] bytes, string origin, CoordinatorBinding binding, Guid clientId,
+        DirectorConfiguration configuration, ulong now, CoordinatorClock? clock)
     {
         try
         {
@@ -43,10 +55,11 @@ public sealed class CoordinatorAllocation
                 || envelope.AdmittedAtMs < envelope.Snapshot.IssuedAtMs
                 || envelope.AdmittedAtMs >= assignment.ExpiresAtMs || assignment.ExpiresAtMs - assignment.ValidFromMs > 86400000)
                 throw new InvalidDataException();
+            clock = clock?.WithIssuance(envelope.AdmittedAtMs);
             var snapshot = CoordinatorProgramContract.Read(Wrap(envelope.Snapshot), $"\"{envelope.Snapshot.Revision}\"",
-                origin, binding, configuration, now, null);
+                origin, binding, configuration, now, null, clock);
             var fingerprint = HashEncoding.Lower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(envelope, CoordinatorProgramContract.Options)));
-            return new(envelope, snapshot, fingerprint);
+            return new(envelope, snapshot, fingerprint, clock);
         }
         catch (Exception error) when (error is JsonException or InvalidDataException or InvalidOperationException
             or KeyNotFoundException or ArgumentException or NotSupportedException or OverflowException or FormatException)
@@ -60,12 +73,11 @@ public sealed class CoordinatorAllocation
 public sealed class CoordinatorAllocationClient : IDisposable
 {
     private readonly CoordinatorTransport transport;
-    private readonly TimeProvider clock;
     public CoordinatorAllocationClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential, bool allowInsecureHttp = false)
         : this(endpoint, credential, CoordinatorTransport.Handler(), TimeProvider.System, allowInsecureHttp) { }
     internal CoordinatorAllocationClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential,
         HttpMessageHandler handler, TimeProvider clock, bool allowInsecureHttp = false)
-    { transport = new(endpoint, credential, handler, allowInsecureHttp); this.clock = clock; }
+    { transport = new(endpoint, credential, handler, allowInsecureHttp, clock); }
 
     public async Task<CoordinatorAllocation> ReadAsync(CoordinatorBinding binding, Guid clientId, DirectorConfiguration configuration,
         CancellationToken token = default)
@@ -79,7 +91,7 @@ public sealed class CoordinatorAllocationClient : IDisposable
             var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/allocation?coordinator_instance_id={binding.CoordinatorInstanceId:D}&catalog_id={binding.CatalogId:D}",
                 null, deadline.Token, binding.ProfileId).ConfigureAwait(false);
             var allocation = CoordinatorAllocation.Read(response.Bytes, transport.Endpoint.AbsoluteUri, binding, clientId, configuration,
-                checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds()));
+                response.Clock);
             deadline.Token.ThrowIfCancellationRequested();
             return allocation;
         }
@@ -150,7 +162,7 @@ public sealed class CoordinatorAllocationClient : IDisposable
                     ledger_id = ledger.LedgerId
                 }), deadline.Token, binding.ProfileId).ConfigureAwait(false);
             var confirmed = CoordinatorAllocation.Read(response.Bytes, transport.Endpoint.AbsoluteUri, binding, clientId,
-                allocation.Envelope.Snapshot.Program.Configuration, checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds()));
+                allocation.Envelope.Snapshot.Program.Configuration, response.Clock);
             if (confirmed.Fingerprint != allocation.Fingerprint)
                 throw new InvalidDataException("Allocation changed during launch.");
             deadline.Token.ThrowIfCancellationRequested();

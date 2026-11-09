@@ -630,12 +630,13 @@ public sealed partial class DirectorAcquisition
         var targetContexts = new Dictionary<string, NinaTargetContainer>(StringComparer.Ordinal);
         var filterCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
         var assignment = program.Assignment;
+        var planningNightEnd = window.EndOn(allocation.PlanningNowMs);
         var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
             assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, options.MinimumAltitude, options.MaximumAltitude, 0)).ToImmutableArray());
         var geometry = new NinaGeometrySnapshot(constraintsReader, equipmentReader);
         new CoordinatorAllocationCache(runRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, connection.AllowInsecureHttp)
-            .Store(allocation, Now());
+            .Store(allocation, allocation.PlanningNowMs);
         LastRunDirectory = runRoot;
         Task? watchdog = null;
         Task? constraintWatchdog = null;
@@ -698,7 +699,7 @@ public sealed partial class DirectorAcquisition
             { CollectQuality = options.Quality != DirectorQualityPolicy.Off };
             var qualityStore = options.Quality == DirectorQualityPolicy.Off ? null : new QualityReferenceStore(Path.Combine(recoveryDirectory, "quality"), night, runtime);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
-            var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, TimeProvider.System, telescope);
+            var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, allocation.PlanningClock, telescope);
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
             var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
@@ -1260,15 +1261,15 @@ public sealed partial class DirectorAcquisition
             native?.CheckEquipment();
             if (profiles.ActiveProfile.Id != profile || container.Options.Safety != options.Safety
                 || !ignoreWeather && (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
-                || runtime.Status.State != RuntimeState.Ready || Now() >= assignment.ExpiresAtMs)
+                || runtime.Status.State != RuntimeState.Ready || allocation.PlanningNowMs >= assignment.ExpiresAtMs)
                 throw new InvalidOperationException("Director context, safety, runtime or allocation validity changed.");
         }
         NinaDispatchSnapshot Snapshot()
         {
             Check();
             var g = geometry.Read(constraintBinding, equipmentBinding, inputs);
-            return new(g.Configuration, g.Constraints, new(rig, configuration.Id, Now(), window.BoundValidity(assignment.ExpiresAtMs),
-                interlock.Read().Safety, true, false, constraintBinding.MeridianExclusion, window.End));
+            return new(g.Configuration, g.Constraints, new(rig, configuration.Id, allocation.PlanningNowMs, Math.Min(planningNightEnd, assignment.ExpiresAtMs),
+                interlock.Read().Safety, true, false, constraintBinding.MeridianExclusion, planningNightEnd));
         }
         void CheckPointing()
         {

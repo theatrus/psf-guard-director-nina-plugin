@@ -54,7 +54,7 @@ internal static class CoordinatorProgramContract
     };
 
     internal static CoordinatorProgramPreview Read(byte[] bytes, string etag, string origin,
-        CoordinatorBinding binding, DirectorConfiguration expected, ulong now, CoordinatorProgramPreview? previous)
+        CoordinatorBinding binding, DirectorConfiguration expected, ulong now, CoordinatorProgramPreview? previous, CoordinatorClock? clock = null)
     {
         try
         {
@@ -78,10 +78,13 @@ internal static class CoordinatorProgramContract
                 || assignment.ConfigurationId != expected.Id
                 || JsonSerializer.Serialize(program.Configuration, Options) != JsonSerializer.Serialize(expected, Options))
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.ConfigurationMismatch);
+            now = clock?.WithIssuance(envelope.IssuedAtMs).NowMs ?? now;
             if (assignment.Revision == 0 || assignment.ValidFromMs >= assignment.ExpiresAtMs
-                || envelope.IssuedAtMs < assignment.ValidFromMs || envelope.IssuedAtMs > now
-                || now < assignment.ValidFromMs || now >= assignment.ExpiresAtMs)
+                || envelope.IssuedAtMs < assignment.ValidFromMs || now >= assignment.ExpiresAtMs)
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.ExpiredOrFutureProgram);
+            if (envelope.IssuedAtMs > now)
+                throw new CoordinatorIntakeException(clock is null
+                    ? CoordinatorIntakeFailure.ExpiredOrFutureProgram : CoordinatorIntakeFailure.FutureProgramWindow);
             if (JsonSerializer.SerializeToUtf8Bytes(program, Options).Length > PlannerContract.MaxRequestBytes)
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.ResponseTooLarge);
             CheckLinks(envelope);

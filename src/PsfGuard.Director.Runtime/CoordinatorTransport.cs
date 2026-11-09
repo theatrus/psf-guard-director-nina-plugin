@@ -6,6 +6,7 @@ namespace PsfGuard.Director.Runtime;
 internal sealed class CoordinatorTransport : IDisposable
 {
     private readonly HttpClient http;
+    private readonly TimeProvider clock;
     private readonly Func<CancellationToken, ValueTask<string?>> credential;
     internal Uri Endpoint { get; }
 
@@ -26,24 +27,22 @@ internal sealed class CoordinatorTransport : IDisposable
     };
 
     internal CoordinatorTransport(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential,
-        HttpMessageHandler handler, bool allowInsecureHttp)
+        HttpMessageHandler handler, bool allowInsecureHttp, TimeProvider? clock = null)
     {
         Endpoint = Normalize(endpoint, allowInsecureHttp);
         ArgumentNullException.ThrowIfNull(credential);
         this.credential = credential;
+        this.clock = clock ?? TimeProvider.System;
         http = new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
-    internal async Task<(byte[] Bytes, string? ETag)> SendAsync(string route, byte[]? body, CancellationToken token, Guid? profileId = null)
-    {
-        var result = await SendCoreAsync(route, body, token, profileId, false).ConfigureAwait(false);
-        return (result.Bytes, result.ETag);
-    }
+    internal Task<CoordinatorResponse> SendAsync(string route, byte[]? body, CancellationToken token, Guid? profileId = null) =>
+        SendCoreAsync(route, body, token, profileId, false);
 
-    internal Task<(byte[] Bytes, string? ETag, HttpStatusCode Status)> ReadOptionalAsync(string route, CancellationToken token, Guid profileId) =>
+    internal Task<CoordinatorResponse> ReadOptionalAsync(string route, CancellationToken token, Guid profileId) =>
         SendCoreAsync(route, null, token, profileId, true);
 
-    private async Task<(byte[] Bytes, string? ETag, HttpStatusCode Status)> SendCoreAsync(string route, byte[]? body, CancellationToken token,
+    private async Task<CoordinatorResponse> SendCoreAsync(string route, byte[]? body, CancellationToken token,
         Guid? profileId, bool allowMissing)
     {
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(Endpoint, route));
@@ -68,6 +67,7 @@ internal sealed class CoordinatorTransport : IDisposable
         try
         {
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            var responseClock = new CoordinatorClock(clock, response.Headers.Date, clock.GetTimestamp());
             if (response.StatusCode != HttpStatusCode.OK && !(allowMissing && response.StatusCode == HttpStatusCode.NotFound))
                 throw new CoordinatorIntakeException(Classify(response.StatusCode), response.StatusCode);
             if (response.Content.Headers.ContentType?.MediaType != "application/json" || response.Content.Headers.ContentEncoding.Count != 0)
@@ -86,7 +86,7 @@ internal sealed class CoordinatorTransport : IDisposable
                 bytes.Write(buffer, 0, read);
             }
             token.ThrowIfCancellationRequested();
-            return (bytes.ToArray(), response.Headers.ETag is { IsWeak: false } etag ? etag.ToString() : null, response.StatusCode);
+            return new(bytes.ToArray(), response.Headers.ETag is { IsWeak: false } etag ? etag.ToString() : null, response.StatusCode, responseClock);
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Transport); }

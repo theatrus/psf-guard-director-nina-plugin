@@ -53,7 +53,7 @@ public sealed class CoordinatorStarDetectionClient : IDisposable
         status.Status = null;
         try
         {
-            (byte[] Bytes, string? ETag) response;
+            CoordinatorResponse response;
             try { response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/star-detection-settings", bytes, deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             // This handler answers 422 only through its JSON extractor, for a
             // body that does not match the request type, never for a passing state.

@@ -11,13 +11,16 @@ namespace PsfGuard.Director.Tests;
 public sealed class CoordinatorWorkloadTests
 {
     [Theory]
-    [InlineData(80, 0)]
-    [InlineData(80, 40)]
-    [InlineData(35000, 35000)]
-    public async Task AClockDifferenceKeepsTheSameWorkloadRequest(int admissionLead, int windowLead)
+    [InlineData(-120000)]
+    [InlineData(120000)]
+    [InlineData(-7200000)]
+    [InlineData(7200000)]
+    public async Task WorkloadUsesCoordinatorTimeAcrossClockOffsets(int rigOffsetMs)
     {
         var root = Root();
+        var clock = new SkewedClock { OffsetMs = rigOffsetMs };
         var calls = 0;
+        CoordinatorAllocationEnvelope? issued = null;
         try
         {
             using var client = new CoordinatorWorkloadClient(root, Endpoint, Binding, Client, Configuration,
@@ -26,48 +29,66 @@ public sealed class CoordinatorWorkloadTests
                     calls++;
                     using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
                     var id = body.RootElement.GetProperty("request_id").GetGuid();
-                    var grant = Grant(id);
-                    var snapshot = grant.Snapshot;
-                    if (windowLead > 0)
-                    {
-                        var start = Now + (ulong)windowLead;
-                        snapshot = snapshot with
-                        {
-                            IssuedAtMs = start,
-                            Program = snapshot.Program with { Assignment = snapshot.Program.Assignment with { ValidFromMs = start } }
-                        };
-                    }
-                    return Response(new
+                    issued ??= FreshGrant(id);
+                    Assert.Equal(issued.AllocationId, id);
+                    var response = Response(new
                     {
                         request_id = id,
                         state = "issued",
                         retry_after_seconds = 0,
                         workload = new
                         {
-                            allocation = grant with { AdmittedAtMs = Now + (ulong)admissionLead, Snapshot = snapshot },
+                            allocation = issued,
                             released = false,
                             ledger_id = (Guid?)null,
                             terminal_sequence = (int?)null
                         }
                     });
-                }), new AdvancingClock());
-            if (windowLead > 30000)
-            {
-                var failure = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.RequestAsync());
-                Assert.Equal(CoordinatorIntakeFailure.FutureProgramWindow, failure.Failure);
-            }
-            else
-                Assert.Equal(Now + (ulong)admissionLead, (await client.RequestAsync()).Allocation!.Envelope.AdmittedAtMs);
-            Assert.Equal(1, calls);
+                    response.Headers.Date = DateTimeOffset.FromUnixTimeMilliseconds((long)Now + clock.ElapsedMs);
+                    return response;
+                }), clock);
+            var allocation = (await client.RequestAsync()).Allocation!;
+            Assert.Equal(Now + 80, allocation.PlanningNowMs);
+            clock.ElapsedMs = 5000;
+            clock.OffsetMs = -rigOffsetMs;
+            Assert.Equal(Now + 5080, allocation.PlanningNowMs);
+            var replay = (await client.RequestAsync()).Allocation!;
+            Assert.Equal(allocation.Fingerprint, replay.Fingerprint);
+            Assert.Equal(Now + 5000, replay.PlanningNowMs);
+
+            clock.ElapsedMs = (long)(allocation.Envelope.Snapshot.Program.Assignment.ExpiresAtMs - Now);
+            var expired = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.RequestAsync());
+            Assert.Equal(CoordinatorIntakeFailure.ExpiredOrFutureProgram, expired.Failure);
+            Assert.Equal(3, calls);
         }
         finally { Directory.Delete(root, true); }
     }
 
-    private sealed class AdvancingClock : TimeProvider
+    private static CoordinatorAllocationEnvelope FreshGrant(Guid id)
     {
-        private int read;
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds(
-            (long)Now + (Interlocked.Increment(ref read) == 1 ? 0 : 100));
+        var grant = Grant(id);
+        var start = Now + 40;
+        return grant with
+        {
+            AdmittedAtMs = Now + 80,
+            Snapshot = grant.Snapshot with
+            {
+                IssuedAtMs = start,
+                Program = grant.Snapshot.Program with
+                {
+                    Assignment = grant.Snapshot.Program.Assignment with { ValidFromMs = start }
+                }
+            }
+        };
+    }
+
+    private sealed class SkewedClock : TimeProvider
+    {
+        internal long OffsetMs;
+        internal long ElapsedMs;
+        public override long TimestampFrequency => 1000;
+        public override long GetTimestamp() => ElapsedMs;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now + OffsetMs + ElapsedMs);
     }
 
     [Fact]

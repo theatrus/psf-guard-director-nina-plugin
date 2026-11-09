@@ -16,7 +16,6 @@ public sealed class CoordinatorWorkloadClient : IDisposable
     private readonly CoordinatorBinding binding;
     private readonly Guid clientId;
     private readonly DirectorConfiguration configuration;
-    private readonly TimeProvider clock;
     private readonly string executionMode;
 
     public CoordinatorWorkloadClient(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId,
@@ -29,8 +28,8 @@ public sealed class CoordinatorWorkloadClient : IDisposable
     {
         CoordinatorCheckpointClient.ValidateBinding(binding);
         if (clientId == Guid.Empty || configuration.RigId != binding.RigId.ToString("D")) throw new ArgumentException("Exact client and configuration required.");
-        transport = new(endpoint, credential, handler, allowInsecureHttp);
-        this.binding = binding; this.clientId = clientId; this.configuration = configuration; this.clock = clock;
+        transport = new(endpoint, credential, handler, allowInsecureHttp, clock);
+        this.binding = binding; this.clientId = clientId; this.configuration = configuration;
         executionMode = nativeImaging ? localTargetScheduling ? "native_imaging_v1" : "native_single_target_v1"
             : localTargetScheduling ? "local_sequence_v3" : "prepared_target_v3";
         file = new(root, new { origin = transport.Endpoint.AbsoluteUri, binding, clientId }, "workload-request");
@@ -43,7 +42,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         if (pending.Submitted && (pending.ConfigurationId != configuration.Id || !CompatibleMode(pending.ExecutionMode)))
             pending = await ReconcileUnusedRequestAsync(pending, token).ConfigureAwait(false);
         file.Write(pending with { Submitted = true });
-        var bytes = await Send("request", new
+        var response = await Send("request", new
         {
             coordinator_instance_id = binding.CoordinatorInstanceId,
             catalog_id = binding.CatalogId,
@@ -51,7 +50,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             configuration_id = configuration.Id,
             execution_mode = pending.ExecutionMode
         }, token).ConfigureAwait(false);
-        var reply = Read<Reply>(bytes);
+        var reply = Read<Reply>(response.Bytes);
         if (reply.RequestId != pending.RequestId) throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
         if (reply.State == "waiting" && reply.Workload is null && reply.RetryAfterSeconds is >= 5 and <= 300 && pending.AllocationFingerprint is null)
         {
@@ -64,9 +63,10 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         var w = reply.Workload;
         // Released history can be expired. Validate its immutable scope at issuance;
         // it is never returned as an equipment permit.
-        var validationTime = w.Released ? w.Allocation.AdmittedAtMs
-            : await WaitForProgramWindowAsync(w.Allocation.Snapshot, token).ConfigureAwait(false);
-        var allocation = Validate(w.Allocation, validationTime);
+        var allocation = w.Released
+            ? Validate(w.Allocation, w.Allocation.AdmittedAtMs)
+            : CoordinatorAllocation.Read(CoordinatorAllocation.Wrap(w.Allocation), transport.Endpoint.AbsoluteUri,
+                binding, clientId, configuration, response.Clock);
         if (pending.AllocationFingerprint is not null && pending.AllocationFingerprint != allocation.Fingerprint)
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
         if (w.Released)
@@ -106,7 +106,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
                 // Validate historical scope at issuance, never as a capture permit.
                 var previous = CoordinatorAllocation.Read(response.Bytes, transport.Endpoint.AbsoluteUri, binding, clientId,
                     envelope.Snapshot.Program.Configuration, envelope.AdmittedAtMs);
-                var bytes = await Send($"{previous.Envelope.AllocationId:D}/reconcile", new
+                var retirement = await Send($"{previous.Envelope.AllocationId:D}/reconcile", new
                 {
                     coordinator_instance_id = binding.CoordinatorInstanceId,
                     catalog_id = binding.CatalogId,
@@ -114,7 +114,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
                     mount_stopped = true,
                     guider_stopped = true
                 }, deadline.Token).ConfigureAwait(false);
-                var retired = Read<ReconciliationAcknowledgement>(bytes);
+                var retired = Read<ReconciliationAcknowledgement>(retirement.Bytes);
                 if (!retired.Retired || retired.AllocationId != previous.Envelope.AllocationId)
                     throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
             }
@@ -151,7 +151,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             || ledger.AssignmentRevision != a.Envelope.Snapshot.Program.Assignment.Revision || ledger.ConfigurationId != configuration.Id
             || ledger.RigId != binding.RigId.ToString("D") || !Guid.TryParseExact(ledger.LedgerId, "D", out var ledgerId) || ledgerId == Guid.Empty)
             throw new InvalidDataException("Archived terminal workload scope mismatch.");
-        var bytes = await Send("release", new
+        var response = await Send("release", new
         {
             coordinator_instance_id = binding.CoordinatorInstanceId,
             catalog_id = binding.CatalogId,
@@ -161,7 +161,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             operations_quiescent = true,
             parked = true
         }, token).ConfigureAwait(false);
-        var w = Read<Workload>(bytes);
+        var w = Read<Workload>(response.Bytes);
         if (!w.Released || w.LedgerId != ledgerId || w.TerminalSequence != through || w.Allocation is null
             || Validate(w.Allocation, w.Allocation.AdmittedAtMs).Fingerprint != allocation.Fingerprint)
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
@@ -203,31 +203,9 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         || pendingMode is "prepared_target_v1" or "prepared_target_v2" && executionMode == "prepared_target_v3"
         || pendingMode is "local_sequence_v1" or "local_sequence_v2" && executionMode == "local_sequence_v3";
     private void Advance(Pending p) => file.Write(p with { RequestId = Guid.NewGuid(), Submitted = false, AllocationFingerprint = null });
-    private ulong Now() => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
-
-    private async Task<ulong> WaitForProgramWindowAsync(CoordinatorProgramEnvelope snapshot, CancellationToken token)
-    {
-        var assignment = snapshot?.Program?.Assignment
-            ?? throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
-        var now = Now();
-        var startsAt = Math.Max(snapshot!.IssuedAtMs, assignment.ValidFromMs);
-        if (startsAt <= now) return now;
-        var ahead = startsAt - now;
-        // A freshly compiled program may start just ahead of the local clock.
-        // Keep the same reply and wait for its window before granting access.
-        if (ahead <= 30000)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(ahead + 25), clock, token).ConfigureAwait(false);
-            now = Now();
-        }
-        if (startsAt > now)
-            throw new CoordinatorIntakeException(CoordinatorIntakeFailure.FutureProgramWindow);
-        return now;
-    }
-
     private CoordinatorAllocation Validate(CoordinatorAllocationEnvelope a, ulong now) => CoordinatorAllocation.Read(
         CoordinatorAllocation.Wrap(a), transport.Endpoint.AbsoluteUri, binding, clientId, configuration, now);
-    private async Task<byte[]> Send(string operation, object body, CancellationToken token)
+    private async Task<CoordinatorResponse> Send(string operation, object body, CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -236,7 +214,7 @@ public sealed class CoordinatorWorkloadClient : IDisposable
             var response = await transport.SendAsync($"api/director/v1/rigs/{binding.RigId:D}/workloads/{operation}",
                 JsonSerializer.SerializeToUtf8Bytes(body, CoordinatorProgramContract.Options), deadline.Token, binding.ProfileId).ConfigureAwait(false);
             deadline.Token.ThrowIfCancellationRequested();
-            return response.Bytes;
+            return response;
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
