@@ -40,11 +40,19 @@ public sealed partial class DirectorPlugin
     public string UploadQueueStatus => uploadQueueStatus;
 
     public ICommand RetryRefusedUploadsCommand => retryRefusedUploads ??= new(
-        () => Task.Run(() => DirectorImageUploads.Queue.RetryRefusedAsync(Volatile.Read(ref uploadContext).Destination, CancellationToken.None)),
+        () =>
+        {
+            var destination = Volatile.Read(ref uploadContext).Destination;
+            return Task.Run(() => DirectorImageUploads.Queue.RetryRefusedAsync(destination, CancellationToken.None));
+        },
         () => initialized && refusedUploads > 0, ReportError);
 
     public ICommand ForgetHeldUploadsCommand => forgetHeldUploads ??= new(
-        () => Task.Run(() => DirectorImageUploads.Queue.ForgetHeldAsync(Volatile.Read(ref uploadContext).Destination, CancellationToken.None)),
+        () =>
+        {
+            var destination = Volatile.Read(ref uploadContext).Destination;
+            return Task.Run(() => DirectorImageUploads.Queue.ForgetHeldAsync(destination, CancellationToken.None));
+        },
         () => initialized && heldUploads > 0, ReportError);
 
     private DirectorUploadDestination? CurrentUploadDestination()

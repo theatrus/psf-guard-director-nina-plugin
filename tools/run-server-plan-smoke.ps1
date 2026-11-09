@@ -118,7 +118,7 @@ try {
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
     if ($ImageUploads) {
         New-Item -ItemType Directory -Path "$root/received" | Out-Null
-        Json-Request Put "databases/$slug" @{remote_image_upload=@{enabled=$true;image_directory="$root/received";placement='flat'}} | Out-Null
+        Json-Request Put "databases/$slug" @{image_dirs=@("$root/images", "$root/received");remote_image_upload=@{enabled=$true;image_directory="$root/received";placement='flat'}} | Out-Null
     }
     if ($Phd2Executable) { $phd2 = & "$PSScriptRoot/start-phd2-simulator.ps1" -Executable $Phd2Executable -ArtifactDirectory $root }
     $fixture = "$root/fixture.json"
