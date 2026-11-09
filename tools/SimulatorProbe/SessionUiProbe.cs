@@ -51,7 +51,7 @@ internal static class SessionUiProbe
     private sealed class EditorBoundCondition : SequenceCondition
     {
         public EditorBoundCondition() => Name = "Editor-bound condition";
-        public override bool Check(ISequenceItem previousItem, ISequenceItem nextItem) => false;
+        public override bool Check(ISequenceItem previousItem, ISequenceItem nextItem) => true;
         public override object Clone() => new EditorBoundCondition();
         public override void SequenceBlockInitialize() => Application.Current.Dispatcher.VerifyAccess();
         public override void SequenceBlockStarted() => Application.Current.Dispatcher.VerifyAccess();
