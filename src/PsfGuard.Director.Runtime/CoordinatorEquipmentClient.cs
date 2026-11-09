@@ -65,7 +65,7 @@ public sealed class CoordinatorEquipmentClient : IDisposable
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         try
         {
-            (byte[] Bytes, string? ETag) response;
+            CoordinatorResponse response;
             try { response = await transport.SendAsync(route, report, deadline.Token, binding.ProfileId).ConfigureAwait(false); }
             // PSF Guard 0.13 refuses a field it does not know with 422. Its reports work as before without the defaults.
             catch (CoordinatorIntakeException error) when (cameraDefaults is not null && error.StatusCode == HttpStatusCode.UnprocessableEntity)

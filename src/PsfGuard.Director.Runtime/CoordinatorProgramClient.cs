@@ -28,7 +28,6 @@ public sealed class CoordinatorProgramClient : IDisposable
 {
     private readonly CoordinatorTransport transport;
     private readonly Uri endpoint;
-    private readonly TimeProvider clock;
     private readonly TimeSpan timeout;
 
     public CoordinatorProgramClient(Uri endpoint, Func<CancellationToken, ValueTask<string?>> credential,
@@ -40,9 +39,8 @@ public sealed class CoordinatorProgramClient : IDisposable
         HttpMessageHandler handler, TimeProvider clock, TimeSpan timeout, bool allowInsecureHttp = false)
     {
         if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(1)) throw new ArgumentOutOfRangeException(nameof(timeout));
-        transport = new(endpoint, credential, handler, allowInsecureHttp);
+        transport = new(endpoint, credential, handler, allowInsecureHttp, clock);
         this.endpoint = transport.Endpoint;
-        this.clock = clock;
         this.timeout = timeout;
     }
 
@@ -66,7 +64,7 @@ public sealed class CoordinatorProgramClient : IDisposable
             if (response.ETag is null) throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
             deadline.Token.ThrowIfCancellationRequested();
             var result = CoordinatorProgramContract.Read(response.Bytes, response.ETag, endpoint.AbsoluteUri, binding, expected,
-                checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds()), previous);
+                0, previous, response.Clock);
             deadline.Token.ThrowIfCancellationRequested();
             return result;
         }

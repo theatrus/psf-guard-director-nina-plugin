@@ -112,7 +112,10 @@ public sealed class CoordinatorAllocationTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now); }
+    private sealed class Clock(int offsetMs = 0) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now + offsetMs);
+    }
 
     [Theory]
     [InlineData("ledger")]
@@ -137,9 +140,10 @@ public sealed class CoordinatorAllocationTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LaunchPostsOnceAndNeverRetriesConflict(bool conflict)
+    [InlineData(false, -7200000)]
+    [InlineData(false, 7200000)]
+    [InlineData(true, 0)]
+    public async Task LaunchPostsOnceAndNeverRetriesConflict(bool conflict, int rigOffsetMs)
     {
         var allocation = Read(Allocation());
         var a = allocation.Envelope.Snapshot.Program.Assignment;
@@ -150,9 +154,12 @@ public sealed class CoordinatorAllocationTests
             calls++;
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.EndsWith("/allocation/start", request.RequestUri!.AbsolutePath);
-            return conflict ? new(HttpStatusCode.Conflict) : new(HttpStatusCode.OK)
+            if (conflict) return new(HttpStatusCode.Conflict);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(System.Text.Encoding.UTF8.GetString(CoordinatorAllocation.Wrap(allocation.Envelope)), System.Text.Encoding.UTF8, "application/json") };
-        }), new Clock());
+            response.Headers.Date = DateTimeOffset.FromUnixTimeMilliseconds((long)Now);
+            return response;
+        }), new Clock(rigOffsetMs));
         if (conflict) await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.StartOnceAsync(Binding, ClientId, allocation, ledger));
         else await client.StartOnceAsync(Binding, ClientId, allocation, ledger);
         Assert.Equal(1, calls);

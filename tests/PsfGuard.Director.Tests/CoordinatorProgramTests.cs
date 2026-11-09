@@ -207,7 +207,7 @@ public sealed class CoordinatorProgramTests
     [InlineData("configuration", CoordinatorIntakeFailure.ConfigurationMismatch)]
     [InlineData("version", CoordinatorIntakeFailure.UnsupportedProgram)]
     [InlineData("expired", CoordinatorIntakeFailure.ExpiredOrFutureProgram)]
-    [InlineData("future", CoordinatorIntakeFailure.ExpiredOrFutureProgram)]
+    [InlineData("future", CoordinatorIntakeFailure.FutureProgramWindow)]
     public async Task RejectsIncompatibleOrExpiredPrograms(string fault, CoordinatorIntakeFailure failure)
     {
         var body = Body(Envelope());

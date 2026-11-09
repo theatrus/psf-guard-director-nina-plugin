@@ -322,7 +322,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
         var detail = primary switch
         {
             CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.FutureProgramWindow } =>
-                "The observing window is still ahead of this computer's clock. Check the N.I.N.A. computer's date and time before retrying.",
+                "PSF Guard returned a workload whose observing window has yet to open. Restart the Director Session to request fresh work.",
             CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.MalformedResponse } =>
                 "Director could not read the PSF Guard workload reply. Check the N.I.N.A. log before retrying.",
             CoordinatorIntakeException failure =>

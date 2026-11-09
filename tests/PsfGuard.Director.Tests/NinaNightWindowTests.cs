@@ -18,10 +18,11 @@ public sealed class NinaNightWindowTests
         var clock = new Clock();
         var night = new NinaNightWindow(1000, 5000, clock);
         Assert.Equal(TimeSpan.FromSeconds(4), night.Remaining(TimeSpan.FromMinutes(1)));
-        Assert.Equal(4000UL, night.BoundValidity(4000));
-        Assert.Equal(5000UL, night.BoundValidity(8000));
+        Assert.Equal(5000UL, night.EndOn(1000));
+        Assert.Equal(7_205_000UL, night.EndOn(7_201_000));
         clock.Milliseconds = 4000;
         Assert.Equal(TimeSpan.FromSeconds(1), night.Remaining(TimeSpan.FromMinutes(1)));
+        Assert.Equal(7_205_000UL, night.EndOn(7_204_000));
         clock.Milliseconds = 5000;
         Assert.True(night.Ended);
         Assert.Equal(TimeSpan.Zero, night.Remaining(TimeSpan.FromMinutes(1)));
