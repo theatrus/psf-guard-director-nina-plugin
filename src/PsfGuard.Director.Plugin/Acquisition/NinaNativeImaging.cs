@@ -1,3 +1,4 @@
+using System.Windows;
 using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Equipment.Interfaces.Mediator;
@@ -121,7 +122,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) => execute(Parent, progress, token);
     }
 
-    internal void Install(DirectorSessionContainer target)
+    internal void Install(DirectorSessionContainer target) => OnSequencerDispatcher(() =>
     {
         if (session is not null) throw new InvalidOperationException("Native defaults already installed.");
         ValidateOwnership(target, options);
@@ -135,15 +136,15 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         }
         if (options.MeridianFlip == DirectorOperationOwner.Director) Add<MeridianFlipTrigger>();
         if (options.Guiding == DirectorOperationOwner.Director) Add<NINA.Sequencer.Trigger.Guider.RestoreGuiding>();
-    }
+    });
 
     private void Add<T>() where T : ISequenceTrigger
     {
         var trigger = factory.GetTrigger<T>() ?? throw new InvalidOperationException($"NINA action {typeof(T).Name} is unavailable.");
         if (string.IsNullOrWhiteSpace(trigger.Name))
             trigger.Name = typeof(T) == typeof(MeridianFlipTrigger) ? "Meridian flip" : typeof(T).Name;
-        session!.AddRuntimeTrigger(trigger);
         installed.Add(trigger);
+        session!.AddRuntimeTrigger(trigger);
         trigger.Initialize();
         trigger.SequenceBlockInitialize();
         trigger.SequenceBlockStarted();
@@ -285,17 +286,30 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
 
     public void Dispose()
     {
-        var errors = new List<Exception>();
-        foreach (var trigger in installed)
+        if (installed.Count == 0) return;
+        OnSequencerDispatcher(() =>
         {
-            try { trigger.SequenceBlockTeardown(); }
-            catch (Exception error) { errors.Add(error); }
-            try { trigger.Teardown(); }
-            catch (Exception error) { errors.Add(error); }
-            try { session!.RemoveRuntimeTrigger(trigger); }
-            catch (Exception error) { errors.Add(error); }
-        }
-        installed.Clear();
-        if (errors.Count != 0) throw new AggregateException("Native imaging trigger cleanup failed.", errors);
+            var errors = new List<Exception>();
+            foreach (var trigger in installed)
+            {
+                try { trigger.SequenceBlockTeardown(); }
+                catch (Exception error) { errors.Add(error); }
+                try { trigger.Teardown(); }
+                catch (Exception error) { errors.Add(error); }
+                try { session!.RemoveRuntimeTrigger(trigger); }
+                catch (Exception error) { errors.Add(error); }
+            }
+            installed.Clear();
+            if (errors.Count != 0) throw new AggregateException("Native imaging trigger cleanup failed.", errors);
+        });
+    }
+
+    private static void OnSequencerDispatcher(Action action)
+    {
+        // N.I.N.A.'s editor can bind the session and trigger-runner collections
+        // while acquisition installs or removes the native defaults.
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess()) dispatcher.Invoke(action);
+        else action();
     }
 }

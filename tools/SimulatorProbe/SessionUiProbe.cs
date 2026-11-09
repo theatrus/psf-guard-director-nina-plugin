@@ -7,6 +7,7 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem.Utility;
 using PsfGuard.Director.Plugin.Sequencer;
 
@@ -23,8 +24,12 @@ internal static class SessionUiProbe
             chart.SetBinding(NINA.WPF.Base.View.AltitudeChart.NighttimeDataProperty, new Binding(nameof(session.SkyNighttime)) { Source = session });
             var history = new DataGrid { Height = 220, IsReadOnly = true, AutoGenerateColumns = true };
             history.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(session.ActionHistory)) { Source = session });
+            // Bind the actual N.I.N.A. trigger collection, including temporary
+            // triggers, to exercise the same CollectionView as the editor.
+            var triggers = new ItemsControl { ItemsSource = ((SequentialContainer)session).Triggers, DisplayMemberPath = "Name" };
             var content = new StackPanel();
             content.Children.Add(new Button { Content = "Report equipment", Command = session.ReportEquipmentCommand });
+            content.Children.Add(triggers);
             content.Children.Add(chart);
             content.Children.Add(history);
             var window = new Window
