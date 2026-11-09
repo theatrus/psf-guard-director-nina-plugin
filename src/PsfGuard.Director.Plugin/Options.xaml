@@ -74,6 +74,14 @@
                 <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />
                 <CheckBox Content="Report sequence activity to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding ReportSequenceActivity}" Margin="0,8,0,4" />
                 <TextBlock Text="Show the active Advanced Sequencer instructions when a Director Session is not running." TextWrapping="Wrap" />
+                <CheckBox Content="Send NINA weather telemetry to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding SendWeatherTelemetry}" Margin="0,12,0,4" />
+                <TextBlock Text="Shares available readings and their source. Weather-provider keys stay on PSF Guard." TextWrapping="Wrap" />
+                <StackPanel DataContext="{Binding Weather}" Margin="0,8,0,0">
+                    <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding ReportedSummary}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding ForecastSummary}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Attribution}" TextWrapping="Wrap" />
+                </StackPanel>
             </StackPanel>
             <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
                 <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />
