@@ -7,6 +7,9 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using NINA.Sequencer.Conditions;
+using NINA.Sequencer.Container;
+using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.SequenceItem.Utility;
 using PsfGuard.Director.Plugin.Sequencer;
 
@@ -14,7 +17,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 
 internal static class SessionUiProbe
 {
-    internal static async Task<IAsyncDisposable> ObserveLiveAsync(DirectorSessionContainer session)
+    internal static async Task<IAsyncDisposable> ObserveLiveAsync(DirectorSessionContainer session, bool verifyLifecycle)
     {
         return await Application.Current.Dispatcher.InvokeAsync(() =>
         {
@@ -23,8 +26,12 @@ internal static class SessionUiProbe
             chart.SetBinding(NINA.WPF.Base.View.AltitudeChart.NighttimeDataProperty, new Binding(nameof(session.SkyNighttime)) { Source = session });
             var history = new DataGrid { Height = 220, IsReadOnly = true, AutoGenerateColumns = true };
             history.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(session.ActionHistory)) { Source = session });
+            // Bind the actual N.I.N.A. trigger collection, including temporary
+            // triggers, to exercise the same CollectionView as the editor.
+            var triggers = new ItemsControl { ItemsSource = ((SequentialContainer)session).Triggers, DisplayMemberPath = "Name" };
             var content = new StackPanel();
             content.Children.Add(new Button { Content = "Report equipment", Command = session.ReportEquipmentCommand });
+            content.Children.Add(triggers);
             content.Children.Add(chart);
             content.Children.Add(history);
             var window = new Window
@@ -35,9 +42,21 @@ internal static class SessionUiProbe
                 Owner = Application.Current.MainWindow,
                 Content = content
             };
+            if (verifyLifecycle) session.Add(new EditorBoundCondition());
             window.Show();
             return (IAsyncDisposable)new LiveView(window);
         });
+    }
+
+    private sealed class EditorBoundCondition : SequenceCondition
+    {
+        public EditorBoundCondition() => Name = "Editor-bound condition";
+        public override bool Check(ISequenceItem previousItem, ISequenceItem nextItem) => true;
+        public override object Clone() => new EditorBoundCondition();
+        public override void SequenceBlockInitialize() => Application.Current.Dispatcher.VerifyAccess();
+        public override void SequenceBlockStarted() => Application.Current.Dispatcher.VerifyAccess();
+        public override void SequenceBlockFinished() => Application.Current.Dispatcher.VerifyAccess();
+        public override void SequenceBlockTeardown() => Application.Current.Dispatcher.VerifyAccess();
     }
 
     private sealed class LiveView(Window window) : IAsyncDisposable

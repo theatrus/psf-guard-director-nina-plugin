@@ -26,9 +26,13 @@ internal sealed class NinaSessionHooks
     internal NinaSessionHooks(DirectorSessionContainer session, TimeProvider clock, Action<NinaInstructionSlots>? configure = null)
     {
         if (session.Options.ValidateSettings().Count != 0) throw new InvalidOperationException("Invalid Director session settings.");
-        NinaHookAdmission.Validate(session.InstructionBlocks, session);
-        slots = session.Slots.Clone();
-        configure?.Invoke(slots);
+        slots = NinaSequencerDispatcher.Invoke(() =>
+        {
+            NinaHookAdmission.Validate(session.InstructionBlocks, session);
+            var snapshot = session.Slots.Clone();
+            configure?.Invoke(snapshot);
+            return snapshot;
+        });
         parent = session;
         timeout = TimeSpan.FromSeconds(session.Options.HookTimeoutSeconds);
         this.clock = clock;

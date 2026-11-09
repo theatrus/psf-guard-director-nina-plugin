@@ -393,7 +393,7 @@ public sealed class SimulatorSequence : SequenceItem
                     nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
-                await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer);
+                await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer, coordinator.NativeImaging);
                 sessionContainer.Options.EnableAcquisition = true;
                 sessionContainer.Options.Enclosure = coordinator.UsesEnclosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
                 sessionContainer.Options.OnAbort = coordinator.AbortWithoutPark ? DirectorAbortPolicy.StopMount : DirectorAbortPolicy.ParkMount;
