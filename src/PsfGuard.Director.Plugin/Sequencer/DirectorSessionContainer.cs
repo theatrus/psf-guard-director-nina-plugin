@@ -233,7 +233,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     {
         ErrorBehavior = InstructionErrorBehavior.AbortOnError;
         token.ThrowIfCancellationRequested();
-        if (!Validate())
+        if (!NinaSequencerDispatcher.Invoke(Validate))
         {
             var error = new InvalidOperationException(string.Join(" ", Issues));
             ReportExecutionFailure(error);
@@ -254,12 +254,18 @@ public sealed class DirectorSessionContainer : SequentialContainer
                 Exception? executionError = null;
                 try
                 {
-                    Iterations = 0;
-                    foreach (var condition in conditions) { condition.SequenceBlockInitialize(); condition.SequenceBlockStarted(); }
-                    foreach (var trigger in triggers) { trigger.SequenceBlockInitialize(); trigger.SequenceBlockStarted(); }
+                    NinaSequencerDispatcher.Invoke(() =>
+                    {
+                        Iterations = 0;
+                        foreach (var condition in conditions) { condition.SequenceBlockInitialize(); condition.SequenceBlockStarted(); }
+                        foreach (var trigger in triggers) { trigger.SequenceBlockInitialize(); trigger.SequenceBlockStarted(); }
+                    });
                     await (acquisition ?? throw new InvalidOperationException("Director acquisition services unavailable.")).ExecuteAsync(this, progress, attended, cancellation.Token);
-                    foreach (var condition in conditions) condition.SequenceBlockFinished();
-                    foreach (var trigger in triggers) trigger.SequenceBlockFinished();
+                    NinaSequencerDispatcher.Invoke(() =>
+                    {
+                        foreach (var condition in conditions) condition.SequenceBlockFinished();
+                        foreach (var trigger in triggers) trigger.SequenceBlockFinished();
+                    });
                 }
                 catch (Exception error)
                 {
@@ -274,10 +280,13 @@ public sealed class DirectorSessionContainer : SequentialContainer
                     var cleanupErrors = new List<Exception>();
                     try
                     {
-                        foreach (var condition in conditions)
-                            try { condition.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
-                        foreach (var trigger in triggers)
-                            try { trigger.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
+                        NinaSequencerDispatcher.Invoke(() =>
+                        {
+                            foreach (var condition in conditions)
+                                try { condition.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
+                            foreach (var trigger in triggers)
+                                try { trigger.SequenceBlockTeardown(); } catch (Exception error) { cleanupErrors.Add(error); }
+                        });
                     }
                     finally { lock (executionLock) { executionCancellation = null; cancellation.Dispose(); } reportEquipmentCommand.Refresh(); }
                     if (cleanupErrors.Count != 0)

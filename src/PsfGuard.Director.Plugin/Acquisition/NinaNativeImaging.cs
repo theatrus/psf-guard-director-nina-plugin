@@ -1,4 +1,3 @@
-using System.Windows;
 using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Equipment.Interfaces.Mediator;
@@ -122,7 +121,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) => execute(Parent, progress, token);
     }
 
-    internal void Install(DirectorSessionContainer target) => OnSequencerDispatcher(() =>
+    internal void Install(DirectorSessionContainer target) => NinaSequencerDispatcher.Invoke(() =>
     {
         if (session is not null) throw new InvalidOperationException("Native defaults already installed.");
         ValidateOwnership(target, options);
@@ -287,7 +286,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     public void Dispose()
     {
         if (installed.Count == 0) return;
-        OnSequencerDispatcher(() =>
+        NinaSequencerDispatcher.Invoke(() =>
         {
             var errors = new List<Exception>();
             foreach (var trigger in installed)
@@ -304,12 +303,4 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         });
     }
 
-    private static void OnSequencerDispatcher(Action action)
-    {
-        // N.I.N.A.'s editor can bind the session and trigger-runner collections
-        // while acquisition installs or removes the native defaults.
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is not null && !dispatcher.CheckAccess()) dispatcher.Invoke(action);
-        else action();
-    }
 }
