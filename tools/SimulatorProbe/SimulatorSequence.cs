@@ -315,7 +315,13 @@ public sealed class SimulatorSequence : SequenceItem
                 if (coordinator.PublicAcquisition)
                 {
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
+                    settings.SetValueBoolean("ReportSequenceActivity", coordinator.SequenceActivity);
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
+                    if (coordinator.SequenceActivity)
+                    {
+                        await coordinator.VerifySequenceActivityAsync(Name, lifetime.Token);
+                        Step("PSF Guard shows the active N.I.N.A. instruction before Director Session");
+                    }
                     publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
                         nativeProbe?.Factory ?? factory, guider, focuser, rotator)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
@@ -865,6 +871,13 @@ public sealed class SimulatorSequence : SequenceItem
                 if (coordinator.DeferredCheckIn && (Directory.GetFiles(service.LastRunDirectory!, "capture-cursor-*.json").Length != 0
                     || Directory.GetFiles(service.LastRunDirectory!, "preparation-cursor-*.json").Length != 0))
                     throw new InvalidDataException("Deferred mode delivered events before explicit check-in.");
+                if (coordinator.SequenceActivity)
+                {
+                    await coordinator.VerifySequenceActivityAsync(Name, lifetime.Token);
+                    Step("PSF Guard shows the active N.I.N.A. instruction again after Director Session");
+                    new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"))
+                        .SetValueBoolean("ReportSequenceActivity", false);
+                }
                 var statusBeforeReplay = await coordinator.ReadRigStatusAsync(lifetime.Token);
                 var savedCheckIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
                 var delivered = await savedCheckIn.RunAsync(null, lifetime.Token);

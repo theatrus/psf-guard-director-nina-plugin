@@ -33,7 +33,8 @@ public sealed class CoordinatorAllocationTests
     [InlineData("instance")]
     [InlineData("schema")]
     [InlineData("preview-id")]
-    [InlineData("future")]
+    [InlineData("admitted-before-issue")]
+    [InlineData("admitted-after-expiry")]
     [InlineData("expired")]
     [InlineData("changed-scope")]
     [InlineData("unknown-field")]
@@ -49,7 +50,8 @@ public sealed class CoordinatorAllocationTests
             "instance" => a with { CoordinatorInstanceId = Guid.NewGuid() },
             "schema" => a with { SchemaVersion = 2 },
             "preview-id" => a with { Snapshot = Envelope() },
-            "future" => a with { AdmittedAtMs = Now + 1 },
+            "admitted-before-issue" => a with { AdmittedAtMs = a.Snapshot.IssuedAtMs - 1 },
+            "admitted-after-expiry" => a with { AdmittedAtMs = a.Snapshot.Program.Assignment.ExpiresAtMs },
             "changed-scope" => a with { Snapshot = a.Snapshot with { CatalogId = Guid.NewGuid() } },
             _ => a
         };
@@ -63,6 +65,14 @@ public sealed class CoordinatorAllocationTests
         var error = Assert.Throws<CoordinatorIntakeException>(() => CoordinatorAllocation.Read(bytes, Endpoint.AbsoluteUri,
             Binding, ClientId, Configuration, fault == "expired" ? Now + 60000 : Now));
         Assert.DoesNotContain("do-not-log", error.ToString());
+    }
+
+    [Fact]
+    public void ServerAdmissionTimestampCanBeAheadOfAnAlreadyOpenObservingWindow()
+    {
+        var grant = Allocation() with { AdmittedAtMs = Now + 80 };
+        var allocation = Read(grant);
+        Assert.Equal(grant.AdmittedAtMs, allocation.Envelope.AdmittedAtMs);
     }
 
     [Fact]
@@ -176,6 +186,41 @@ public sealed class CoordinatorAllocationTests
             Assert.Equal(CoordinatorIntakeFailure.InvalidAcknowledgement, error.Failure);
             Assert.DoesNotContain("do-not-log", error.ToString());
         }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SequenceActivityUsesScopedStatusWithoutAnAllocation(bool running)
+    {
+        var at = DateTimeOffset.FromUnixTimeMilliseconds((long)Now);
+        var session = Guid.NewGuid().ToString("D");
+        using var reporter = new CoordinatorSessionReporter(Endpoint, Binding, _ => ValueTask.FromResult<string?>("test-token"),
+            new Handler(request =>
+            {
+                Assert.EndsWith($"/rigs/{Binding.RigId:D}/status", request.RequestUri!.AbsolutePath);
+                Assert.Equal(Binding.ProfileId.ToString("D"), Assert.Single(request.Headers.GetValues("X-PSF-Director-Profile")));
+                using var json = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                var body = json.RootElement;
+                var status = body.GetProperty("status");
+                Assert.Equal(session, body.GetProperty("session_id").GetString());
+                Assert.Equal((long)Now, body.GetProperty("reported_at_ms").GetInt64());
+                Assert.Equal(JsonValueKind.Null, body.GetProperty("program_revision").ValueKind);
+                Assert.Equal(JsonValueKind.Null, status.GetProperty("allocation_id").ValueKind);
+                Assert.Equal(running ? "N.I.N.A. sequence running" : "N.I.N.A. sequence stopped", status.GetProperty("phase").GetString());
+                Assert.Equal(running ? "Start Sequence › Cool Camera" : null, status.GetProperty("operation").GetString());
+                return new(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(System.Text.Encoding.UTF8.GetString(CoordinatorAllocation.Wrap(new
+                    {
+                        accepted = true,
+                        program_revision = new string('a', 64),
+                        program_changed = true,
+                        received_at_ms = Now
+                    })), System.Text.Encoding.UTF8, "application/json")
+                };
+            }));
+        await reporter.ReportSequenceAsync(session, running, running ? "Start Sequence › Cool Camera" : null, at, default);
     }
 
     [Fact]

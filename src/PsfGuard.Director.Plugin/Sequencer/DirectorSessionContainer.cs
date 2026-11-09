@@ -39,6 +39,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private bool reportingEquipment;
     private bool confirmAttendedRun;
     private bool resumeRecordedNight;
+    private INotifyPropertyChanged? sequenceRootNotifications;
     private const string AttendedGate = "Confirm that you will supervise this attended run before starting the sequence.";
 
     public bool ConfirmAttendedRun
@@ -190,13 +191,22 @@ public sealed class DirectorSessionContainer : SequentialContainer
                 (ulong)System.Diagnostics.Stopwatch.GetElapsedTime(active.Timestamp).TotalMilliseconds);
         }
     }
-    public string SessionStatus => Display.Phase != DirectorSessionDisplay.Empty.Phase ? Display.Phase :
-        Options.EnableAcquisition
-            ? "Not started. Equipment and permission to image are checked when you start the sequence."
-            : "Acquisition is off. Turn on Enable acquisition in the Session tab to allow imaging.";
+    public string SessionStatus
+    {
+        get
+        {
+            if (Display.Phase != DirectorSessionDisplay.Empty.Phase) return Display.Phase;
+            if (!Options.EnableAcquisition) return "Acquisition is off. Turn on Enable acquisition in the Session tab to allow imaging.";
+            if (Status == SequenceEntityStatus.RUNNING) return "Director Session is starting.";
+            var waiting = ItemUtility.GetRootContainer(Parent)?.Status == SequenceEntityStatus.RUNNING
+                ? "N.I.N.A. is running the sequence. Director Session is waiting for its turn."
+                : "Director Session has not started.";
+            return waiting + " Director checks equipment and permission to image when this session starts.";
+        }
+    }
     public string Readiness =>
         (Options.LocalTargetScheduling ? "Director selects targets from the workload." : "Each workload uses one prepared target.") + " " +
-        (Options.AutomaticWorkloads ? "Director requests work from PSF Guard automatically when the sequence runs." :
+        (Options.AutomaticWorkloads ? "Director requests work from PSF Guard automatically when this session starts." :
             "Assign a workload in PSF Guard before starting the sequence.");
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
@@ -309,9 +319,16 @@ public sealed class DirectorSessionContainer : SequentialContainer
     private void ReportExecutionFailure(Exception error)
     {
         var primary = error is AggregateException aggregate ? aggregate.Flatten().InnerExceptions[0] : error;
-        var detail = primary is CoordinatorIntakeException failure
-            ? $"PSF Guard could not authorize the work ({failure.Failure}). Check the rig's Director setup in PSF Guard."
-            : primary.Message;
+        var detail = primary switch
+        {
+            CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.FutureProgramWindow } =>
+                "The observing window is still ahead of this computer's clock. Check the N.I.N.A. computer's date and time before retrying.",
+            CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.MalformedResponse } =>
+                "Director could not read the PSF Guard workload reply. Check the N.I.N.A. log before retrying.",
+            CoordinatorIntakeException failure =>
+                $"PSF Guard could not authorize the work ({failure.Failure}). Check the rig's Director setup in PSF Guard.",
+            _ => primary.Message
+        };
         UpdateDisplay(display => display with { Phase = $"Session stopped. {detail}", Operation = "", WaitReason = detail });
         RecordAction("", "Session", $"Failed. {detail}");
     }
@@ -396,8 +413,16 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public override void AfterParentChanged()
     {
         base.AfterParentChanged();
+        if (sequenceRootNotifications is not null)
+            PropertyChangedEventManager.RemoveHandler(sequenceRootNotifications, SequenceStatusChanged, nameof(Status));
+        sequenceRootNotifications = ItemUtility.GetRootContainer(Parent) as INotifyPropertyChanged;
+        if (sequenceRootNotifications is not null)
+            PropertyChangedEventManager.AddHandler(sequenceRootNotifications, SequenceStatusChanged, nameof(Status));
+        RaisePropertyChanged(nameof(SessionStatus));
         foreach (var block in InstructionBlocks) block.AfterParentChanged();
     }
+
+    private void SequenceStatusChanged(object? sender, PropertyChangedEventArgs args) => RaisePropertyChanged(nameof(SessionStatus));
 
     [OnDeserialized]
     private void RestoreParents(StreamingContext _)

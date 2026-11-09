@@ -38,7 +38,9 @@ public sealed class CoordinatorAllocation
             if (envelope.Snapshot.Program.Configuration is null || envelope.Snapshot.Rig is null) throw new InvalidDataException();
             if (assignment.Id != $"allocation-{envelope.AllocationId:D}" || envelope.PreviewRevision.Length != 64
                 || envelope.PreviewRevision.Any(c => !char.IsAsciiHexDigitLower(c))
-                || envelope.AdmittedAtMs < envelope.Snapshot.IssuedAtMs || envelope.AdmittedAtMs > now
+                // Admission is a server timestamp. Compare it to the server's
+                // snapshot and expiry, and check the observing window below.
+                || envelope.AdmittedAtMs < envelope.Snapshot.IssuedAtMs
                 || envelope.AdmittedAtMs >= assignment.ExpiresAtMs || assignment.ExpiresAtMs - assignment.ValidFromMs > 86400000)
                 throw new InvalidDataException();
             var snapshot = CoordinatorProgramContract.Read(Wrap(envelope.Snapshot), $"\"{envelope.Snapshot.Revision}\"",

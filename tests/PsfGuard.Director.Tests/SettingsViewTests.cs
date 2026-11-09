@@ -104,7 +104,7 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard" },
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
                     foreach (var option in options)
                     {
@@ -263,6 +263,7 @@ public sealed class SettingsViewTests
         public ICommand CancelCheckInCommand { get; } = new StubCommand(false);
         public string CheckInStatus => "Checked in 128 runs; 16000 events; 4 workloads released";
         public bool SendStarDetectionSettings { get; set; } = true;
+        public bool ReportSequenceActivity { get; set; } = true;
     }
 
     public sealed class ConnectionViewModel
