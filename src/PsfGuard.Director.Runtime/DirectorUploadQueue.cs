@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace PsfGuard.Director.Runtime;
 
@@ -22,36 +21,74 @@ internal sealed record DirectorUploadJob
     public string? LastError { get; set; }
     public string? RefusalReason { get; set; }
 
-    internal DirectorUploadDestination Destination => new(new Uri(Endpoint),
-        new(CoordinatorInstanceId, CatalogId, RigId, ProfileId), AllowInsecureHttp);
+    internal DirectorUploadDestination Destination => new(new Uri(Endpoint), new(CoordinatorInstanceId, CatalogId, RigId, ProfileId), AllowInsecureHttp);
 }
 
-/// <summary>Counts and the server's state for the settings page.</summary>
-public sealed record DirectorUploadSummary(int Queued, int Refused, DirectorUploadState? State);
+/// <summary>How the queue reaches the server for a destination.</summary>
+public interface IDirectorUploadConnector
+{
+    /// <summary>
+    /// An identity for the pairing that covers <paramref name="destination"/>
+    /// now, or null when none does: the job is for an earlier pairing. A new
+    /// identity makes the queue build a new client.
+    /// </summary>
+    string? PairingKey(DirectorUploadDestination destination);
+
+    /// <summary>A client for the destination's current pairing.</summary>
+    IDirectorUploadServer Connect(DirectorUploadDestination destination);
+}
+
+public sealed class DirectorUploadConnector(
+    Func<DirectorUploadDestination, string?> pairingKey,
+    Func<DirectorUploadDestination, IDirectorUploadServer> connect) : IDirectorUploadConnector
+{
+    public string? PairingKey(DirectorUploadDestination destination) => pairingKey(destination);
+    public IDirectorUploadServer Connect(DirectorUploadDestination destination) => connect(destination);
+}
 
 /// <summary>
-/// The Director plugin's durable upload queue. Each frame is one small job
-/// file below <c>root</c>, naming the saved image, its destination, attempts
-/// and next try, so the queue survives restarts. One background worker
+/// The settings page's view of the queue. <see cref="EarlierPairing"/> counts
+/// frames whose rig or server no current pairing covers; they are not queued.
+/// </summary>
+public sealed record DirectorUploadSummary(int Queued, int EarlierPairing, int Refused, DirectorUploadState? State);
+
+/// <summary>
+/// The Director plugin's durable upload queue. Each saved frame is one small
+/// job file below <c>root</c> naming the file, its destination, attempts and
+/// next try, so the queue survives restarts. The queue keeps an index of the
+/// job files in memory, read from disk when it starts. One background worker
 /// uploads one frame at a time and never runs on N.I.N.A.'s UI thread.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The worker asks the server whether it takes uploads before an upload, at
-/// most once a minute for each destination. An older server (404, 405,
-/// or no <c>data.enabled</c>) gets no upload and no new jobs until
-/// <see cref="RequestRecheck"/> or a restart; its queued jobs stay on disk.
-/// A refused frame moves to the <c>refused</c> folder with the reason. A file
-/// gone from disk drops its job. Every other failure retries after the
-/// server's Retry-After, or else after 5 seconds, doubling to 10 minutes.
+/// Every offered frame is written to disk, whatever the queue knows about
+/// the server; only the worker decides when to send. The one exception is a
+/// frame the server's known <c>max_bytes</c> cannot hold, which goes straight
+/// to the <c>refused</c> folder.
 /// </para>
-/// <para>Nothing here throws to a caller except cancellation and disposal.</para>
+/// <para>
+/// Before uploading to a destination the worker reads its upload state, at
+/// most once a minute, or once every 10 minutes after the server answered
+/// 404, 405 or not with an upload state. A 401 or 403 on an upload
+/// pauses that destination for a minute. A retry, after 503, 429, a server
+/// error, a timeout or a lost connection, holds every job for the destination
+/// until the server's Retry-After, or else 5 seconds doubling to 10 minutes,
+/// has passed. A refused frame moves to <c>refused</c> with the reason; a
+/// file gone from disk drops its job.
+/// </para>
+/// <para>
+/// The queue can stop and start again; a frame offered while it is stopped
+/// is still written to disk. Nothing here throws to a caller except
+/// cancellation.
+/// </para>
 /// </remarks>
 public sealed class DirectorUploadQueue : IAsyncDisposable
 {
     public const string RefusedFolderName = "refused";
     public const string BlockedFolderName = "blocked";
     internal static readonly TimeSpan StateLifetime = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan UnsupportedLifetime = TimeSpan.FromMinutes(10);
+    internal static readonly TimeSpan PauseLength = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan IdleWait = TimeSpan.FromMinutes(1);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -59,41 +96,51 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         WriteIndented = true,
     };
 
+    private sealed record Entry(string File, DirectorUploadJob Job);
+
+    private sealed class Link
+    {
+        public DirectorUploadState? State;
+        public DateTimeOffset CheckedAt;
+        public DateTimeOffset HoldUntil;
+        public string? Key;
+        public IDirectorUploadServer? Server;
+        public bool FailureLogged;
+    }
+
     private readonly string root;
     private readonly string refusedFolder;
-    private readonly Func<DirectorUploadDestination, IDirectorUploadServer?> connect;
+    private readonly IDirectorUploadConnector connector;
     private readonly Action<string> log;
     private readonly TimeProvider time;
-    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SemaphoreSlim diskGate = new(1, 1);
+    private readonly SemaphoreSlim serverGate = new(1, 1);
     private readonly SemaphoreSlim signal = new(0, 1);
-    private readonly CancellationTokenSource stopping = new();
-    private readonly object stateGate = new();
+    private readonly object indexLock = new();
+    private readonly object stateLock = new();
+    private readonly object lifeLock = new();
+    private readonly Dictionary<Guid, Entry> jobs = [];
+    private readonly Dictionary<Guid, Entry> refused = [];
+    private readonly Dictionary<DirectorUploadDestination, Link> links = [];
     private readonly object routingGate = new();
     private DirectorUploadDestination? enabledDestination;
     private CancellationTokenSource transferLifetime = new();
-    private readonly Dictionary<DirectorUploadDestination, (DirectorUploadState State, DateTimeOffset At)> states = [];
-    private readonly Dictionary<DirectorUploadDestination, DateTimeOffset> retryAfter = [];
-    private readonly HashSet<string> logged = [];
+    private bool loaded;
+    private CancellationTokenSource? running;
     private Task? worker;
-    private int disposed;
 
     /// <param name="root">The queue folder.</param>
-    /// <param name="connect">
-    /// A server client for a destination, or null when the current pairing
-    /// does not cover it; its jobs then wait.
-    /// </param>
     /// <param name="log">Writes one line to the N.I.N.A. log at info level.</param>
-    public DirectorUploadQueue(string root, Func<DirectorUploadDestination, IDirectorUploadServer?> connect,
-        Action<string> log, TimeProvider? time = null)
+    public DirectorUploadQueue(string root, IDirectorUploadConnector connector, Action<string> log, TimeProvider? time = null)
     {
         this.root = Path.GetFullPath(root);
         refusedFolder = Path.Combine(this.root, RefusedFolderName);
-        this.connect = connect;
+        this.connector = connector;
         this.log = log;
         this.time = time ?? TimeProvider.System;
     }
 
-    /// <summary>Raised after a job is added, finished, refused or forgotten, or a server state changes.</summary>
+    /// <summary>Raised after a job is added, finished, refused or forgotten, or a server's state changes.</summary>
     public event EventHandler? Changed;
 
     /// <summary>
@@ -106,7 +153,7 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         CancellationTokenSource previous;
         lock (routingGate)
         {
-            if (Volatile.Read(ref disposed) != 0 || enabledDestination == destination) return;
+            if (enabledDestination == destination) return;
             enabledDestination = destination;
             previous = transferLifetime;
             transferLifetime = new();
@@ -120,46 +167,93 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
     private CancellationTokenSource? TransferPermit(DirectorUploadDestination destination, CancellationToken token)
     {
         lock (routingGate)
-            return Volatile.Read(ref disposed) == 0 && enabledDestination == destination
-                ? CancellationTokenSource.CreateLinkedTokenSource(token, transferLifetime.Token, stopping.Token) : null;
+            return enabledDestination == destination
+                ? CancellationTokenSource.CreateLinkedTokenSource(token, transferLifetime.Token) : null;
     }
 
-    /// <summary>Starts the background worker. Safe to call more than once.</summary>
+
+
+    /// <summary>
+    /// Read the job files from disk again and start the background worker.
+    /// After <see cref="StopAsync"/> it starts again. Safe to call more than once.
+    /// </summary>
     public void Start()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        worker ??= Task.Run(() => RunAsync(stopping.Token));
+        lock (lifeLock)
+        {
+            if (running is not null) return;
+            running = new CancellationTokenSource();
+            var token = running.Token;
+            lock (indexLock) loaded = false;
+            worker = Task.Run(() => RunAsync(token));
+        }
         Wake();
     }
 
+    /// <summary>Stop the worker and close its connections. Queued frames stay on disk.</summary>
+    public async Task StopAsync()
+    {
+        CancellationTokenSource? stopping;
+        Task? stopped;
+        lock (lifeLock)
+        {
+            stopping = running;
+            stopped = worker;
+            running = null;
+            worker = null;
+        }
+        if (stopping is null) return;
+        stopping.Cancel();
+        Wake();
+        try { if (stopped is not null) await stopped.ConfigureAwait(false); }
+        catch (Exception) { }
+        stopping.Dispose();
+        await serverGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (stateLock)
+                foreach (var link in links.Values)
+                {
+                    DisposeQuietly(link.Server);
+                    link.Server = null;
+                    link.Key = null;
+                }
+        }
+        finally { serverGate.Release(); }
+    }
+
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+
     /// <summary>
-    /// Forget what the queue learned about every server, so the next upload
-    /// asks again. Call it after pairing and after a server or profile change.
+    /// Forget what the queue learned about every server and lift every pause,
+    /// so the next pass asks again. Call it after pairing and after a server
+    /// or profile change.
     /// </summary>
     public void RequestRecheck()
     {
-        lock (stateGate) { states.Clear(); logged.Clear(); }
+        lock (stateLock)
+            foreach (var link in links.Values)
+            {
+                // Keep the last answer to show and compare with; it is stale now.
+                link.CheckedAt = DateTimeOffset.MinValue;
+                link.HoldUntil = DateTimeOffset.MinValue;
+            }
         Wake();
         RaiseChanged();
     }
 
-    /// <summary>
-    /// Queue a saved frame without blocking the caller. It skips the frame
-    /// when the server is known to take no uploads, or the file is larger
-    /// than the server takes. Never throws.
-    /// </summary>
-    public void Offer(DirectorUploadDestination destination, string imagePath, string? captureId)
-    {
-        if (Volatile.Read(ref disposed) != 0) return;
+    /// <summary>Queue a saved frame on a pool thread. Never blocks and never throws.</summary>
+    public void Offer(DirectorUploadDestination destination, string imagePath, string? captureId) =>
         _ = Task.Run(async () =>
         {
-            try { await EnqueueAsync(destination, imagePath, captureId, stopping.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
+            try { await EnqueueAsync(destination, imagePath, captureId, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception error) { Log($"Could not queue {SafeName(imagePath)} for upload ({error.GetType().Name})."); }
         });
-    }
 
-    /// <summary>Queue a saved frame. Returns false when the frame is not queued.</summary>
+    /// <summary>
+    /// Write a job for a saved frame. Returns false when the frame went
+    /// straight to <c>refused</c> because it is larger than the server takes.
+    /// </summary>
     internal async Task<bool> EnqueueAsync(DirectorUploadDestination destination, string imagePath, string? captureId,
         CancellationToken token)
     {
@@ -168,15 +262,7 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         if (permit is null) return false;
         token = permit.Token;
         var path = Path.GetFullPath(imagePath);
-        var known = Cached(destination, fresh: true);
-        if (known?.Kind is DirectorUploadStateKind.Unsupported or DirectorUploadStateKind.Disabled
-            || Sticky(destination) is { Kind: DirectorUploadStateKind.Unsupported })
-            return false;
-        if (known?.MaxBytes is { } maximum && File.Exists(path) && new FileInfo(path).Length > maximum)
-        {
-            Log($"{SafeName(path)} is larger than PSF Guard takes ({maximum:N0} bytes); it was not queued.");
-            return false;
-        }
+        EnsureLoaded();
         var now = time.GetUtcNow();
         var job = new DirectorUploadJob
         {
@@ -192,98 +278,147 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
             QueuedAt = now,
             NextAttemptAt = now,
         };
-        Directory.CreateDirectory(root);
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try { await WriteAsync(job, JobPath(job.JobId), token).ConfigureAwait(false); }
-        finally { gate.Release(); }
+        long? maximum;
+        lock (stateLock) maximum = links.TryGetValue(destination, out var link) ? link.State?.MaxBytes : null;
+        if (maximum is { } max && TooLarge(path, max))
+        {
+            job.RefusalReason = TooLargeReason(max);
+            var held = Path.Combine(refusedFolder, $"{job.JobId:N}.json");
+            await diskGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                Directory.CreateDirectory(refusedFolder);
+                await WriteAsync(job, held, token).ConfigureAwait(false);
+                lock (indexLock) refused[job.JobId] = new(held, job);
+            }
+            finally { diskGate.Release(); }
+            Log($"{SafeName(path)} is larger than PSF Guard takes; it is held under Refused uploads.");
+            RaiseChanged();
+            return false;
+        }
+        var file = Path.Combine(root, $"{job.JobId:N}.json");
+        await diskGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            Directory.CreateDirectory(root);
+            await WriteAsync(job, file, token).ConfigureAwait(false);
+            lock (indexLock) jobs[job.JobId] = new(file, job);
+        }
+        finally { diskGate.Release(); }
         Wake();
         RaiseChanged();
         return true;
     }
 
     /// <summary>
-    /// Ask the server for its upload state now, if the cached answer is older
-    /// than a minute. Used at startup and after pairing; never throws.
+    /// Ask the server for its upload state now unless the last answer is
+    /// still current. For startup and pairing; never throws.
     /// </summary>
     public async Task<DirectorUploadState?> RefreshStateAsync(DirectorUploadDestination destination, CancellationToken token)
     {
         using var permit = TransferPermit(destination, token);
         if (permit is null) return null;
-        try { return await StateAsync(destination, permit.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        var callerToken = token;
+        token = permit.Token;
+        try
+        {
+            await serverGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                var server = ServerFor(destination);
+                return server is null ? null : await StateAsync(destination, server, token).ConfigureAwait(false);
+            }
+            finally { serverGate.Release(); }
+        }
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested) { throw; }
         catch (Exception) { return null; }
     }
 
-    /// <summary>The queue's counts and the last known state of <paramref name="destination"/>.</summary>
+    /// <summary>
+    /// The queue's counts and the last known state of
+    /// <paramref name="destination"/>. It reads pairings, so call it off the
+    /// UI thread.
+    /// </summary>
     public DirectorUploadSummary Summarize(DirectorUploadDestination? destination)
     {
-        int Count(string folder)
+        EnsureLoaded();
+        Entry[] waiting;
+        int held;
+        lock (indexLock) { waiting = [.. jobs.Values.Where(e => e.Job.Destination == destination)]; held = refused.Values.Count(e => e.Job.Destination == destination); }
+        var queued = 0;
+        var earlier = 0;
+        foreach (var group in waiting.GroupBy(entry => entry.Job.Destination))
         {
-            try { return destination is null ? 0 : Files(folder).Count(file => Matches(file, destination)); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return 0; }
+            if (Covered(group.Key)) queued += group.Count();
+            else earlier += group.Count();
         }
-        return new(Count(root), Count(refusedFolder), destination is null ? null : Cached(destination, fresh: false));
+        DirectorUploadState? state = null;
+        if (destination is not null)
+            lock (stateLock) state = links.TryGetValue(destination, out var link) ? link.State : null;
+        return new(queued, earlier, held, state);
     }
 
-    /// <summary>Retry refused jobs for this connection. Returns how many moved.</summary>
+    /// <summary>Move every refused job back into the queue. Returns how many moved.</summary>
     public async Task<int> RetryRefusedAsync(DirectorUploadDestination? destination, CancellationToken token)
     {
-        if (destination is null) return 0;
+        EnsureLoaded();
         var moved = 0;
-        await gate.WaitAsync(token).ConfigureAwait(false);
+        await diskGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            foreach (var file in Files(refusedFolder))
+            Entry[] held;
+            lock (indexLock) held = [.. refused.Values.Where(e => e.Job.Destination == destination)];
+            foreach (var entry in held)
             {
-                var job = await ReadAsync(file, token).ConfigureAwait(false);
-                if (job is null || job.Destination != destination) continue;
-                job.Attempts = 0;
-                job.RefusalReason = null;
-                job.LastError = null;
-                job.NextAttemptAt = time.GetUtcNow();
-                await WriteAsync(job, file, token).ConfigureAwait(false);
-                File.Move(file, Path.Combine(root, Path.GetFileName(file)), overwrite: true);
+                var job = entry.Job with { Attempts = 0, RefusalReason = null, LastError = null, NextAttemptAt = time.GetUtcNow() };
+                var file = Path.Combine(root, Path.GetFileName(entry.File));
+                try
+                {
+                    await WriteAsync(job, entry.File, token).ConfigureAwait(false);
+                    Directory.CreateDirectory(root);
+                    File.Move(entry.File, file, overwrite: true);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
+                lock (indexLock)
+                {
+                    refused.Remove(job.JobId);
+                    jobs[job.JobId] = new(file, job);
+                }
                 moved++;
             }
         }
-        finally { gate.Release(); }
+        finally { diskGate.Release(); }
         if (moved > 0) { Wake(); RaiseChanged(); }
         return moved;
     }
 
-    /// <summary>Remove refused jobs for this connection. Image files stay on disk.</summary>
-    public async Task<int> ForgetRefusedAsync(DirectorUploadDestination? destination, CancellationToken token)
+    /// <summary>
+    /// Delete every refused job and every job for an earlier pairing. The
+    /// image files stay on disk. Returns how many jobs were removed.
+    /// </summary>
+    public async Task<int> ForgetHeldAsync(DirectorUploadDestination? destination, CancellationToken token)
     {
-        if (destination is null) return 0;
+        EnsureLoaded();
+        Entry[] held, waiting;
+        lock (indexLock) { held = [.. refused.Values.Where(e => e.Job.Destination == destination)]; waiting = [.. jobs.Values.Where(e => e.Job.Destination == destination)]; }
+        var orphans = waiting.GroupBy(entry => entry.Job.Destination).Where(group => !Covered(group.Key))
+            .SelectMany(group => group).ToArray();
         var removed = 0;
-        await gate.WaitAsync(token).ConfigureAwait(false);
+        await diskGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            foreach (var file in Files(refusedFolder))
+            foreach (var entry in held.Concat(orphans))
             {
                 token.ThrowIfCancellationRequested();
-                if (!Matches(file, destination)) continue;
-                File.Delete(file);
+                try { File.Delete(entry.File); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { continue; }
+                lock (indexLock) { refused.Remove(entry.Job.JobId); jobs.Remove(entry.Job.JobId); }
                 removed++;
             }
         }
-        finally { gate.Release(); }
+        finally { diskGate.Release(); }
         if (removed > 0) RaiseChanged();
         return removed;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-        stopping.Cancel();
-        Wake();
-        if (worker is not null)
-        {
-            try { await worker.ConfigureAwait(false); }
-            catch (Exception) { }
-        }
-        transferLifetime.Dispose();
-        stopping.Dispose();
     }
 
     private async Task RunAsync(CancellationToken token)
@@ -300,117 +435,128 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// One pass over the queue: uploads every due job whose server takes
-    /// uploads, one at a time. Returns how long to wait before the next pass.
+    /// One pass: for each destination that a pairing covers and whose server
+    /// takes uploads, upload its due jobs one at a time until one does not
+    /// succeed. Returns how long to wait before the next pass.
     /// </summary>
     internal async Task<TimeSpan> ProcessDueJobsAsync(CancellationToken token)
     {
-        if (!Directory.Exists(root)) return IdleWait;
+        EnsureLoaded();
+        Entry[] waiting;
+        lock (indexLock) waiting = [.. jobs.Values];
         var soonest = IdleWait;
-        foreach (var file in Files(root))
+        await serverGate.WaitAsync(token).ConfigureAwait(false);
+        try
         {
-            token.ThrowIfCancellationRequested();
-            DirectorUploadJob? job;
-            await gate.WaitAsync(token).ConfigureAwait(false);
-            try { job = await ReadAsync(file, token).ConfigureAwait(false); }
-            finally { gate.Release(); }
-            if (job is null) continue;
-            using var permit = TransferPermit(job.Destination, token);
-            if (permit is null) continue;
-            try { soonest = Min(soonest, await ProcessJobAsync(job, file, permit.Token).ConfigureAwait(false)); }
-            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            foreach (var group in waiting.GroupBy(entry => entry.Job.Destination))
+            {
+                using var permit = TransferPermit(group.Key, token);
+                if (permit is null) continue;
+                try
+                {
+                    var wait = await ProcessDestinationAsync(group.Key,
+                        group.OrderBy(entry => entry.Job.QueuedAt).ThenBy(entry => entry.Job.JobId), permit.Token).ConfigureAwait(false);
+                    if (wait < soonest) soonest = wait;
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            }
         }
+        finally { serverGate.Release(); }
         return soonest < TimeSpan.FromMilliseconds(100) ? TimeSpan.FromMilliseconds(100) : soonest;
     }
 
-    private async Task<TimeSpan> ProcessJobAsync(DirectorUploadJob job, string file, CancellationToken token)
+    private async Task<TimeSpan> ProcessDestinationAsync(DirectorUploadDestination destination, IEnumerable<Entry> entries,
+        CancellationToken token)
     {
+        var link = LinkFor(destination);
+        DateTimeOffset holdUntil;
+        lock (stateLock) holdUntil = link.HoldUntil;
+        var held = holdUntil - time.GetUtcNow();
+        if (held > TimeSpan.Zero) return held;
+        var server = ServerFor(destination);
+        if (server is null) return IdleWait;
+        var state = await StateAsync(destination, server, token).ConfigureAwait(false);
+        if (state.Kind != DirectorUploadStateKind.Enabled)
+        {
+            DateTimeOffset checkedAt;
+            lock (stateLock) checkedAt = link.CheckedAt;
+            return checkedAt + Lifetime(state) - time.GetUtcNow();
+        }
         var soonest = IdleWait;
-        var wait = job.NextAttemptAt - time.GetUtcNow();
-        lock (stateGate)
-            if (retryAfter.TryGetValue(job.Destination, out var until) && until - time.GetUtcNow() > wait)
-                wait = until - time.GetUtcNow();
-        if (wait > TimeSpan.Zero) { soonest = Min(soonest, wait); return soonest; }
-        var destination = job.Destination;
-        var state = await StateAsync(destination, token).ConfigureAwait(false);
-        if (state is null || state.Kind != DirectorUploadStateKind.Enabled)
+        foreach (var entry in entries)
         {
-            // Off, unsupported, unpaired or unreachable: keep the job and
-            // look again once the cached answer expires.
-            soonest = Min(soonest, StateLifetime);
-            return soonest;
-        }
-        if (!File.Exists(job.ImagePath))
-        {
-            await DeleteAsync(file, token).ConfigureAwait(false);
-            Log($"{SafeName(job.ImagePath)} is no longer on disk, so it will not be uploaded.");
-            RaiseChanged();
-            return soonest;
-        }
-        if (state.MaxBytes is { } maximum && new FileInfo(job.ImagePath).Length > maximum)
-        {
-            await RefuseAsync(job, file, $"The file is larger than PSF Guard takes ({maximum:N0} bytes).", token).ConfigureAwait(false);
-            return soonest;
-        }
-        DirectorUploadAnswer answer;
-        try
-        {
-            using var server = connect(destination);
-            if (server is null) { soonest = Min(soonest, StateLifetime); return soonest; }
-            answer = await server.UploadAsync(job.ImagePath, token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
-        {
-            await DeleteAsync(file, token).ConfigureAwait(false);
-            Log($"{SafeName(job.ImagePath)} is no longer on disk, so it will not be uploaded.");
-            RaiseChanged();
-            return soonest;
-        }
-        catch (Exception error) { answer = new(DirectorUploadOutcome.Retry, error.GetType().Name); }
+            token.ThrowIfCancellationRequested();
+            var job = entry.Job;
+            var due = job.NextAttemptAt - time.GetUtcNow();
+            if (due > TimeSpan.Zero) { soonest = Min(soonest, due); continue; }
+            if (!File.Exists(job.ImagePath))
+            {
+                await DropAsync(entry, token).ConfigureAwait(false);
+                continue;
+            }
+            if (state.MaxBytes is { } maximum && TooLarge(job.ImagePath, maximum))
+            {
+                await RefuseAsync(entry, TooLargeReason(maximum), token).ConfigureAwait(false);
+                continue;
+            }
+            DirectorUploadAnswer answer;
+            try { answer = await server.UploadAsync(job.ImagePath, token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+            {
+                await DropAsync(entry, token).ConfigureAwait(false);
+                continue;
+            }
+            catch (Exception error) { answer = new(DirectorUploadOutcome.Retry, error.GetType().Name); }
 
-        switch (answer.Outcome)
-        {
-            case DirectorUploadOutcome.Stored:
-                await DeleteAsync(file, token).ConfigureAwait(false);
-                RaiseChanged();
-                break;
-            case DirectorUploadOutcome.Refused:
-                await RefuseAsync(job, file, answer.Detail, token).ConfigureAwait(false);
-                break;
-            case DirectorUploadOutcome.Paused:
-                // Keep the job; stop sending to this server until its state is read again.
-                Remember(destination, new(DirectorUploadStateKind.Disabled, "PSF Guard stopped taking uploads from this rig. The plugin checks again in a minute.", state.MaxBytes));
-                soonest = Min(soonest, StateLifetime);
-                break;
-            case DirectorUploadOutcome.Unsupported:
-                Remember(destination, new(DirectorUploadStateKind.Unsupported));
-                break;
-            default:
-                job.Attempts = job.Attempts == int.MaxValue ? job.Attempts : job.Attempts + 1;
-                job.LastError = answer.Detail;
-                var delay = DirectorUploadPolicy.RetryDelay(job.Attempts, answer.RetryAfter);
-                job.NextAttemptAt = time.GetUtcNow() + delay;
-                lock (stateGate) retryAfter[destination] = job.NextAttemptAt;
-                await gate.WaitAsync(token).ConfigureAwait(false);
-                try { await WriteAsync(job, file, token).ConfigureAwait(false); }
-                finally { gate.Release(); }
-                LogOnce($"retry:{destination}", $"An upload to PSF Guard failed ({answer.Detail}). The plugin keeps the frame and tries again.");
-                soonest = Min(soonest, delay);
-                break;
+            switch (answer.Outcome)
+            {
+                case DirectorUploadOutcome.Stored:
+                    await DeleteAsync(entry, token).ConfigureAwait(false);
+                    RaiseChanged();
+                    continue;
+                case DirectorUploadOutcome.Refused:
+                    await RefuseAsync(entry, answer.Detail, token).ConfigureAwait(false);
+                    continue;
+                case DirectorUploadOutcome.Paused:
+                    // Frames still queue; this destination gets no upload for a minute.
+                    Remember(destination, new(DirectorUploadStateKind.Disabled,
+                        $"PSF Guard paused uploads from this rig ({answer.Detail}). Director checks again in a minute.", state.MaxBytes));
+                    lock (stateLock) link.HoldUntil = time.GetUtcNow() + PauseLength;
+                    return PauseLength;
+                case DirectorUploadOutcome.Unsupported:
+                    Remember(destination, new(DirectorUploadStateKind.Unsupported, answer.Detail));
+                    return UnsupportedLifetime;
+                default:
+                    job.Attempts = job.Attempts == int.MaxValue ? job.Attempts : job.Attempts + 1;
+                    job.LastError = answer.Detail;
+                    var delay = DirectorUploadPolicy.RetryDelay(job.Attempts, answer.RetryAfter);
+                    job.NextAttemptAt = time.GetUtcNow() + delay;
+                    await diskGate.WaitAsync(token).ConfigureAwait(false);
+                    try { await WriteAsync(job, entry.File, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                    finally { diskGate.Release(); }
+                    // The whole destination waits, not just this frame.
+                    bool first;
+                    lock (stateLock)
+                    {
+                        link.HoldUntil = job.NextAttemptAt;
+                        first = !link.FailureLogged;
+                        link.FailureLogged = true;
+                    }
+                    if (first) Log($"An upload to PSF Guard failed ({answer.Detail}). Director keeps the frames and tries again.");
+                    return delay;
+            }
         }
         return soonest;
     }
 
-    private async Task<DirectorUploadState?> StateAsync(DirectorUploadDestination destination, CancellationToken token)
+    private async Task<DirectorUploadState> StateAsync(DirectorUploadDestination destination, IDirectorUploadServer server,
+        CancellationToken token)
     {
-        if (Sticky(destination) is { Kind: DirectorUploadStateKind.Unsupported } unsupported) return unsupported;
-        if (Cached(destination, fresh: true) is { } cached) return cached;
-        IDirectorUploadServer? server;
-        try { server = connect(destination); }
-        catch (Exception) { return null; }
-        if (server is null) return null;
-        using var owned = server;
+        var link = LinkFor(destination);
+        lock (stateLock)
+            if (link.State is { } known && time.GetUtcNow() - link.CheckedAt < Lifetime(known)) return known;
         DirectorUploadState state;
         try { state = await server.GetStateAsync(token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -419,75 +565,151 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         return state;
     }
 
+    /// <summary>Store a server's state and log it once when it changes.</summary>
     private void Remember(DirectorUploadDestination destination, DirectorUploadState state)
     {
+        var link = LinkFor(destination);
         DirectorUploadState? previous;
-        lock (stateGate)
+        lock (stateLock)
         {
-            previous = states.TryGetValue(destination, out var entry) ? entry.State : null;
-            states[destination] = (state, time.GetUtcNow());
+            previous = link.State;
+            link.State = state;
+            link.CheckedAt = time.GetUtcNow();
         }
-        if (state.Kind == DirectorUploadStateKind.Unsupported)
-            LogOnce($"unsupported:{destination}", "This PSF Guard server does not take uploads from Director. Frames stay on disk and are not queued; the plugin asks again after pairing, a server or profile change, or a N.I.N.A. restart.");
-        else if (state.Kind == DirectorUploadStateKind.Disabled && state.Reason is { } reason)
-            LogOnce($"disabled:{destination}:{reason}", $"PSF Guard does not take uploads now: {reason}");
-        if (previous != state) RaiseChanged();
+        if (previous?.Kind == state.Kind && previous.Reason == state.Reason) return;
+        // A first answer that uploads are on needs no line.
+        if (previous is not null || state.Kind != DirectorUploadStateKind.Enabled)
+            Log(state.Kind switch
+            {
+                DirectorUploadStateKind.Enabled => "PSF Guard takes uploads from this rig again.",
+                DirectorUploadStateKind.Disabled => $"PSF Guard does not take uploads now: {state.Reason}",
+                DirectorUploadStateKind.Unsupported => $"PSF Guard does not take uploads from Director now ({state.Reason}). "
+                    + "Frames stay queued; Director asks again every 10 minutes and after pairing.",
+                _ => $"PSF Guard could not be reached ({state.Reason}). Frames stay queued.",
+            });
+        RaiseChanged();
     }
 
-    private DirectorUploadState? Cached(DirectorUploadDestination destination, bool fresh)
+    private static TimeSpan Lifetime(DirectorUploadState state) =>
+        state.Kind == DirectorUploadStateKind.Unsupported ? UnsupportedLifetime : StateLifetime;
+
+    private Link LinkFor(DirectorUploadDestination destination)
     {
-        lock (stateGate)
+        lock (stateLock)
         {
-            if (!states.TryGetValue(destination, out var entry)) return null;
-            if (entry.State.Kind == DirectorUploadStateKind.Unsupported) return entry.State;
-            return !fresh || time.GetUtcNow() - entry.At < StateLifetime ? entry.State : null;
+            if (!links.TryGetValue(destination, out var link)) links[destination] = link = new Link();
+            return link;
         }
     }
 
-    private DirectorUploadState? Sticky(DirectorUploadDestination destination)
+    /// <summary>
+    /// The cached client for the destination's current pairing, rebuilt when
+    /// the pairing changes; null when no pairing covers it. Call while
+    /// holding <see cref="serverGate"/>.
+    /// </summary>
+    private IDirectorUploadServer? ServerFor(DirectorUploadDestination destination)
     {
-        lock (stateGate)
-            return states.TryGetValue(destination, out var entry) && entry.State.Kind == DirectorUploadStateKind.Unsupported ? entry.State : null;
+        string? key;
+        try { key = connector.PairingKey(destination); }
+        catch (Exception) { return null; }
+        var link = LinkFor(destination);
+        IDirectorUploadServer? current;
+        string? currentKey;
+        lock (stateLock) { current = link.Server; currentKey = link.Key; }
+        if (key is not null && current is not null && currentKey == key) return current;
+        DisposeQuietly(current);
+        IDirectorUploadServer? server = null;
+        if (key is not null)
+        {
+            try { server = connector.Connect(destination); }
+            catch (Exception) { server = null; }
+        }
+        lock (stateLock) { link.Server = server; link.Key = server is null ? null : key; }
+        return server;
     }
 
-    private async Task RefuseAsync(DirectorUploadJob job, string file, string reason, CancellationToken token)
+    private bool Covered(DirectorUploadDestination destination)
     {
-        job.RefusalReason = reason;
-        job.LastError = null;
-        await gate.WaitAsync(token).ConfigureAwait(false);
+        try { return connector.PairingKey(destination) is not null; }
+        // An unreadable credential is not proof of an earlier pairing.
+        catch (Exception) { return true; }
+    }
+
+    /// <summary>Read the job files once after each start; later changes update the index directly.</summary>
+    private void EnsureLoaded()
+    {
+        lock (indexLock) if (loaded) return;
+        diskGate.Wait();
         try
         {
-            await WriteAsync(job, file, token).ConfigureAwait(false);
-            Directory.CreateDirectory(refusedFolder);
-            File.Move(file, Path.Combine(refusedFolder, Path.GetFileName(file)), overwrite: true);
+            lock (indexLock) if (loaded) return;
+            var found = new List<Entry>();
+            var held = new List<Entry>();
+            foreach (var file in Files(root)) if (Read(file) is { } job) found.Add(new(file, job));
+            foreach (var file in Files(refusedFolder)) if (Read(file) is { } job) held.Add(new(file, job));
+            lock (indexLock)
+            {
+                jobs.Clear();
+                refused.Clear();
+                foreach (var entry in found) jobs[entry.Job.JobId] = entry;
+                foreach (var entry in held) refused[entry.Job.JobId] = entry;
+                loaded = true;
+            }
         }
-        finally { gate.Release(); }
+        finally { diskGate.Release(); }
+    }
+
+    private async Task RefuseAsync(Entry entry, string reason, CancellationToken token)
+    {
+        var job = entry.Job with { RefusalReason = reason, LastError = null };
+        var held = Path.Combine(refusedFolder, Path.GetFileName(entry.File));
+        await diskGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await WriteAsync(job, entry.File, token).ConfigureAwait(false);
+            Directory.CreateDirectory(refusedFolder);
+            File.Move(entry.File, held, overwrite: true);
+            lock (indexLock) { jobs.Remove(job.JobId); refused[job.JobId] = new(held, job); }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return; }
+        finally { diskGate.Release(); }
         Log($"PSF Guard refused {SafeName(job.ImagePath)}: {reason} It is held under Refused uploads.");
         RaiseChanged();
     }
 
-    private async Task DeleteAsync(string file, CancellationToken token)
+    private async Task DropAsync(Entry entry, CancellationToken token)
     {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try { File.Delete(file); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        finally { gate.Release(); }
+        await DeleteAsync(entry, token).ConfigureAwait(false);
+        Log($"{SafeName(entry.Job.ImagePath)} is no longer on disk, so it will not be uploaded.");
+        RaiseChanged();
     }
 
-    private async Task<DirectorUploadJob?> ReadAsync(string file, CancellationToken token)
+    private async Task DeleteAsync(Entry entry, CancellationToken token)
+    {
+        await diskGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            File.Delete(entry.File);
+            lock (indexLock) jobs.Remove(entry.Job.JobId);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        finally { diskGate.Release(); }
+    }
+
+    private DirectorUploadJob? Read(string file)
     {
         try
         {
-            var job = JsonSerializer.Deserialize<DirectorUploadJob>(await File.ReadAllBytesAsync(file, token).ConfigureAwait(false), JsonOptions);
-            if (job is null || job.Version != 2 || job.JobId == Guid.Empty || job.ProfileId == Guid.Empty || job.RigId == Guid.Empty
-                || job.CoordinatorInstanceId == Guid.Empty || job.CatalogId == Guid.Empty
-                || !Uri.TryCreate(job.Endpoint, UriKind.Absolute, out _) || !Path.IsPathFullyQualified(job.ImagePath))
+            var job = JsonSerializer.Deserialize<DirectorUploadJob>(File.ReadAllBytes(file), JsonOptions);
+            if (job is null || job.Version != 2 || job.CoordinatorInstanceId == Guid.Empty || job.CatalogId == Guid.Empty || job.JobId == Guid.Empty || job.ProfileId == Guid.Empty || job.RigId == Guid.Empty
+                || !Uri.TryCreate(job.Endpoint, UriKind.Absolute, out _) || !Path.IsPathFullyQualified(job.ImagePath)
+                || !string.Equals(Path.GetFileNameWithoutExtension(file), job.JobId.ToString("N"), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Invalid upload job.");
             return job;
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (FileNotFoundException) { return null; }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException
+            or InvalidDataException or NotSupportedException or ArgumentException)
         {
             // An unreadable job never blocks the others.
             try
@@ -517,21 +739,26 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         }
     }
 
-    private static string[] Files(string folder) => Directory.Exists(folder)
-        ? Directory.EnumerateFiles(folder, "*.json", SearchOption.TopDirectoryOnly).OrderBy(p => p, StringComparer.Ordinal).ToArray()
-        : [];
+    private static bool TooLarge(string path, long maximum)
+    {
+        // max_bytes is the largest image file the server takes; the request's own overhead is the server's concern.
+        try { return File.Exists(path) && new FileInfo(path).Length > maximum; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+    }
 
-    private static bool Matches(string path, DirectorUploadDestination destination)
+    private static string TooLargeReason(long maximum) =>
+        $"The file is larger than PSF Guard takes ({maximum:N0} bytes).";
+
+    private static string[] Files(string folder)
     {
         try
         {
-            var job = JsonSerializer.Deserialize<DirectorUploadJob>(File.ReadAllBytes(path), JsonOptions);
-            return job?.Version == 2 && job.Destination == destination;
+            return Directory.Exists(folder)
+                ? Directory.EnumerateFiles(folder, "*.json", SearchOption.TopDirectoryOnly).OrderBy(p => p, StringComparer.Ordinal).ToArray()
+                : [];
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return false; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
     }
-
-    private string JobPath(Guid id) => Path.Combine(root, $"{id:N}.json");
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
@@ -541,10 +768,10 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
         catch (ArgumentException) { return "a frame"; }
     }
 
-    private void LogOnce(string key, string message)
+    private static void DisposeQuietly(IDisposable? value)
     {
-        lock (stateGate) { if (!logged.Add(key)) return; }
-        Log(message);
+        try { value?.Dispose(); }
+        catch (Exception) { }
     }
 
     private void Log(string message)

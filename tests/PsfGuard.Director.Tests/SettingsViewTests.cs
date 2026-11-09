@@ -275,7 +275,7 @@ public sealed class SettingsViewTests
         public string UploadStatus => "File uploads are off. Queued files wait; image record delivery is unchanged.";
         public string UploadQueueStatus => "2 frames are queued; PSF Guard refused 1 frame.";
         public ICommand RetryRefusedUploadsCommand { get; } = new StubCommand(true);
-        public ICommand ForgetRefusedUploadsCommand { get; } = new StubCommand(true);
+        public ICommand ForgetHeldUploadsCommand { get; } = new StubCommand(true);
     }
 
     public sealed class ConnectionViewModel

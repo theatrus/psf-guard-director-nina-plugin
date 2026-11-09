@@ -8,12 +8,17 @@ namespace PsfGuard.Director.Plugin;
 
 public sealed partial class DirectorPlugin
 {
+    private static readonly TimeSpan UploadViewInterval = TimeSpan.FromSeconds(1);
     private AsyncCommand? retryRefusedUploads;
-    private AsyncCommand? forgetRefusedUploads;
+    private AsyncCommand? forgetHeldUploads;
     private bool uploadsStarted;
-    private string uploadStatus = "No paired server.";
+    private int uploadViewPending;
+    private string uploadStatus = "Pair with PSF Guard to upload frames.";
     private string uploadQueueStatus = "No frames are queued.";
     private int refusedUploads;
+    private int heldUploads;
+    private sealed record UploadContext(DirectorUploadDestination? Destination, bool Enabled);
+    private UploadContext uploadContext = new(null, false);
 
     /// <summary>Per profile, off by default. Independent of Live image record delivery.</summary>
     public bool UploadCapturedFrames
@@ -31,16 +36,16 @@ public sealed partial class DirectorPlugin
     /// <summary>Whether the paired server takes uploads, or why not.</summary>
     public string UploadStatus => uploadStatus;
 
-    /// <summary>How many frames wait and how many PSF Guard refused.</summary>
+    /// <summary>How many frames wait, are for an earlier pairing, or were refused.</summary>
     public string UploadQueueStatus => uploadQueueStatus;
 
     public ICommand RetryRefusedUploadsCommand => retryRefusedUploads ??= new(
-        async () => { await DirectorImageUploads.Queue.RetryRefusedAsync(CurrentUploadDestination(), CancellationToken.None); RefreshUploads(); },
+        () => Task.Run(() => DirectorImageUploads.Queue.RetryRefusedAsync(Volatile.Read(ref uploadContext).Destination, CancellationToken.None)),
         () => initialized && refusedUploads > 0, ReportError);
 
-    public ICommand ForgetRefusedUploadsCommand => forgetRefusedUploads ??= new(
-        async () => { await DirectorImageUploads.Queue.ForgetRefusedAsync(CurrentUploadDestination(), CancellationToken.None); RefreshUploads(); },
-        () => initialized && refusedUploads > 0, ReportError);
+    public ICommand ForgetHeldUploadsCommand => forgetHeldUploads ??= new(
+        () => Task.Run(() => DirectorImageUploads.Queue.ForgetHeldAsync(Volatile.Read(ref uploadContext).Destination, CancellationToken.None)),
+        () => initialized && heldUploads > 0, ReportError);
 
     private DirectorUploadDestination? CurrentUploadDestination()
     {
@@ -59,10 +64,10 @@ public sealed partial class DirectorPlugin
         try
         {
             var queue = DirectorImageUploads.Queue;
-            queue.Changed += UploadsChanged;
-            queue.Start();
+            if (!uploadsStarted) queue.Changed += UploadsChanged;
             uploadsStarted = true;
             CheckUploadState();
+            queue.Start();
         }
         catch (Exception error)
         {
@@ -76,8 +81,8 @@ public sealed partial class DirectorPlugin
         if (!uploadsStarted) return;
         uploadsStarted = false;
         DirectorImageUploads.Queue.Changed -= UploadsChanged;
-        // The queue lives for the N.I.N.A. process; queued frames stay on disk.
-        try { await DirectorImageUploads.Queue.DisposeAsync(); }
+        // The queue stays usable: frames offered from now on are still written to disk.
+        try { await DirectorImageUploads.Queue.StopAsync(); }
         catch (Exception error) { Logger.Error(error); }
     }
 
@@ -85,48 +90,97 @@ public sealed partial class DirectorPlugin
     private void CheckUploadState()
     {
         if (!uploadsStarted) return;
-        var destination = CurrentUploadDestination();
-        DirectorImageUploads.Queue.SetDestination(UploadCapturedFrames ? destination : null);
-        DirectorImageUploads.Queue.RequestRecheck();
-        if (UploadCapturedFrames && destination is not null)
-            _ = Task.Run(() => DirectorImageUploads.Queue.RefreshStateAsync(destination, CancellationToken.None));
-        RefreshUploads();
+        var context = new UploadContext(CurrentUploadDestination(), UploadCapturedFrames);
+        Volatile.Write(ref uploadContext, context);
+        var queue = DirectorImageUploads.Queue;
+        queue.SetDestination(context.Enabled ? context.Destination : null);
+        queue.RequestRecheck();
+        ScheduleUploadView();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (context.Enabled && context.Destination is { } destination)
+                    await queue.RefreshStateAsync(destination, CancellationToken.None);
+            }
+            catch (Exception error) { Logger.Debug($"PSF Guard Director could not check uploads: {error.GetType().Name}"); }
+            ScheduleUploadView();
+        });
     }
 
-    private void UploadsChanged(object? sender, EventArgs args) => RefreshUploads();
+    private void UploadsChanged(object? sender, EventArgs args) => ScheduleUploadView();
 
-    private void RefreshUploads()
+    /// <summary>
+    /// Recompute the settings text on a pool thread at most once a second,
+    /// then post only the finished values to the UI thread.
+    /// </summary>
+    private void ScheduleUploadView()
     {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is not null && !dispatcher.CheckAccess())
+        if (Interlocked.Exchange(ref uploadViewPending, 1) != 0) return;
+        _ = Task.Run(async () =>
         {
-            if (!dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(RefreshUploads);
-            return;
-        }
-        var destination = initialized ? CurrentUploadDestination() : null;
-        var summary = DirectorImageUploads.Queue.Summarize(destination);
-        uploadStatus = !UploadCapturedFrames ? "File uploads are off. Queued files wait; image record delivery is unchanged."
-            : destination is null ? "Pair with PSF Guard to upload frames." : summary.State switch
+            try
             {
-                null => "Checking whether PSF Guard takes uploads.",
-                { Kind: DirectorUploadStateKind.Enabled } => "PSF Guard takes uploads from this rig.",
-                { Kind: DirectorUploadStateKind.Disabled, Reason: { } reason } => reason,
-                { Kind: DirectorUploadStateKind.Disabled } => "Image uploads are off for this database.",
-                { Kind: DirectorUploadStateKind.Unsupported } => "This PSF Guard server does not take uploads from Director. Frames stay on disk.",
-                _ => "PSF Guard could not be reached. Queued frames wait and upload later.",
-            };
-        refusedUploads = summary.Refused;
-        uploadQueueStatus = (summary.Queued, summary.Refused) switch
+                await Task.Delay(UploadViewInterval);
+                Volatile.Write(ref uploadViewPending, 0);
+                var view = ComputeUploadView();
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher is null) ApplyUploadView(view);
+                else if (!dispatcher.HasShutdownStarted) _ = dispatcher.BeginInvoke(() => ApplyUploadView(view));
+            }
+            catch (Exception error)
+            {
+                Volatile.Write(ref uploadViewPending, 0);
+                Logger.Debug($"PSF Guard Director could not read the upload queue: {error.GetType().Name}");
+            }
+        });
+    }
+
+    private sealed record UploadView(UploadContext Context, string Status, string Queue, int Refused, int Held);
+
+    internal static string DescribeUploads(DirectorUploadDestination? destination, DirectorUploadSummary summary)
+    {
+        if (destination is null) return "Pair with PSF Guard to upload frames.";
+        return summary.State switch
         {
-            (0, 0) => "No frames are queued.",
-            (var queued, 0) => queued == 1 ? "1 frame is queued." : $"{queued} frames are queued.",
-            (var queued, var refused) => (queued == 1 ? "1 frame is queued; " : $"{queued} frames are queued; ")
-                + (refused == 1 ? "PSF Guard refused 1 frame." : $"PSF Guard refused {refused} frames."),
+            null => "Checking whether PSF Guard takes uploads.",
+            { Kind: DirectorUploadStateKind.Enabled } => "PSF Guard takes uploads from this rig.",
+            { Kind: DirectorUploadStateKind.Disabled, Reason: { } reason } => reason,
+            { Kind: DirectorUploadStateKind.Disabled } => "Image uploads are off for this database.",
+            { Kind: DirectorUploadStateKind.Unsupported } =>
+                "PSF Guard does not take uploads from Director now. Frames stay queued; Director asks again every 10 minutes.",
+            _ => "PSF Guard could not be reached. Queued frames upload later.",
         };
+    }
+
+    internal static string DescribeQueue(DirectorUploadSummary summary)
+    {
+        static string Frames(int count) => count == 1 ? "1 frame" : $"{count} frames";
+        var parts = new List<string> { summary.Queued == 1 ? "1 frame is queued" : $"{summary.Queued} frames are queued" };
+        if (summary.EarlierPairing > 0) parts.Add($"{Frames(summary.EarlierPairing)} for an earlier pairing");
+        if (summary.Refused > 0) parts.Add($"{Frames(summary.Refused)} refused by PSF Guard");
+        return summary is { Queued: 0, EarlierPairing: 0, Refused: 0 } ? "No frames are queued." : string.Join("; ", parts) + ".";
+    }
+
+    private UploadView ComputeUploadView()
+    {
+        var context = Volatile.Read(ref uploadContext);
+        var summary = DirectorImageUploads.Queue.Summarize(context.Destination);
+        var status = context.Enabled ? DescribeUploads(context.Destination, summary)
+            : "File uploads are off. Queued files wait; image record delivery is unchanged.";
+        return new(context, status, DescribeQueue(summary), summary.Refused, summary.Refused + summary.EarlierPairing);
+    }
+
+    private void ApplyUploadView(UploadView view)
+    {
+        if (!uploadsStarted || !ReferenceEquals(view.Context, Volatile.Read(ref uploadContext))) return;
+        uploadStatus = view.Status;
+        uploadQueueStatus = view.Queue;
+        refusedUploads = view.Refused;
+        heldUploads = view.Held;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadQueueStatus)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadCapturedFrames)));
         retryRefusedUploads?.Refresh();
-        forgetRefusedUploads?.Refresh();
+        forgetHeldUploads?.Refresh();
     }
 }

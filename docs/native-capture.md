@@ -891,8 +891,8 @@ are not sent.
 ### Image uploads
 
 When **Upload captured frames to PSF Guard** is on, Director uploads each light
-file saved by a Director Session to the paired PSF Guard database. PSF Guard stores it as it stores a PSF
-Guard Sync upload: the same receive folder, folder layout, header import and
+file saved by a Director Session to the paired PSF Guard database. PSF Guard
+stores it as it stores a PSF Guard Sync upload: the same receive folder, folder layout, header import and
 calibration matching. The database's **Image uploads** setting, under Rig setup
 › Plugins in PSF Guard, controls both plugins. Director does not upload flats,
 darks, quality probes or frames from other instructions. When the Sync
@@ -924,23 +924,22 @@ whether the database takes uploads, at most once a minute while uploads are on.
 It also asks when you enable uploads and after pairing. The settings page shows the answer and the queued and refused counts for the
 current connection. Retry and Forget apply only to that connection.
 
-- Uploads are off: queued frames wait. Director also skips new frames while
-  its latest answer, at most a minute old, says uploads are off.
+- The database has uploads off: queued frames wait. If Director's upload switch
+  is on, new frames still enter the queue for later delivery.
 - An older PSF Guard (HTTP 404 or 405, or an answer without
-  `data.enabled`): Director uploads nothing and queues nothing. It logs this
-  once and asks again only after pairing, a server or profile change, or a
-  NINA restart. Frames already queued stay on disk.
+  `data.enabled`): Director keeps frames queued and checks again every ten
+  minutes, or after pairing, a server or profile change, or a NINA restart.
 - PSF Guard refuses a frame (HTTP 400, 409, 410 or 413, a file name it would
   refuse, or a file larger than `max_bytes`): Director moves the job to the `refused`
   folder with the reason and does not retry it. **Retry refused uploads**
-  queues those frames again; **Forget refused uploads** removes the jobs. The
-  image files stay on disk.
+  queues those frames again; **Forget held uploads** removes held jobs for
+  the current connection. The image files stay on disk.
 - HTTP 403 or 401: Director keeps the frame and stops sending
   until it reads the upload state again a minute later.
 - A timeout, a lost connection, HTTP 429 or a server error: Director keeps the
   frame and retries. It waits as long as the server's `Retry-After` asks, kept
   between 1 second and 10 minutes, or else 5 seconds, doubling up to 10
-  minutes. PSF Guard answers 503 with `Retry-After` while another upload
+  minutes. The delay applies to all files for that connection. PSF Guard answers 503 with `Retry-After` while another upload
   imports into the same database. Director logs the first such failure.
 - A successful HTTP response without a matching upload receipt: Director keeps
   the job and retries instead of assuming the file arrived.
