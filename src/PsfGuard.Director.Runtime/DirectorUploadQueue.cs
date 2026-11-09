@@ -691,12 +691,13 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
 
     private static bool TooLarge(string path, long maximum)
     {
-        try { return File.Exists(path) && DirectorUploadPolicy.RequestBytes(new FileInfo(path).Length, Path.GetFileName(path)) > maximum; }
+        // max_bytes is the largest image file the server takes; the request's own overhead is the server's concern.
+        try { return File.Exists(path) && new FileInfo(path).Length > maximum; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }
 
     private static string TooLargeReason(long maximum) =>
-        $"The file and its upload request are larger than PSF Guard takes ({maximum:N0} bytes).";
+        $"The file is larger than PSF Guard takes ({maximum:N0} bytes).";
 
     private static string[] Files(string folder)
     {

@@ -520,25 +520,25 @@ public sealed class DirectorUploadQueueTests : IDisposable
     }
 
     [Fact]
-    public async Task TheRequestNotJustTheFileMustFitMaxBytes()
+    public async Task AFileLargerThanMaxBytesIsRefused()
     {
-        var limit = 200 + DirectorUploadPolicy.RequestOverheadBytes;
-        Server.States.Enqueue(new(DirectorUploadStateKind.Enabled, null, limit));
+        // max_bytes is the largest image file the server takes.
+        Server.States.Enqueue(new(DirectorUploadStateKind.Enabled, null, 200));
         await using var queue = Queue();
-        // 190 bytes fits on its own, but not with the request's part headers.
-        await queue.EnqueueAsync(Destination, Frame("tight.fits", 190), null, default);
+        await queue.EnqueueAsync(Destination, Frame("big.fits", 201), null, default);
 
         await queue.ProcessDueJobsAsync(default);
 
         Assert.Empty(Server.Uploads);
         Assert.Equal(1, Jobs(DirectorUploadQueue.RefusedFolderName));
         // Once max_bytes is known, a frame that cannot fit goes straight to refused.
-        Assert.False(await queue.EnqueueAsync(Destination, Frame("tight2.fits", 190), null, default));
+        Assert.False(await queue.EnqueueAsync(Destination, Frame("big2.fits", 201), null, default));
         Assert.Equal(2, Jobs(DirectorUploadQueue.RefusedFolderName));
         Assert.Equal(0, Jobs());
-        Assert.True(await queue.EnqueueAsync(Destination, Frame("small.fits", 100), null, default));
-        Assert.True(DirectorUploadPolicy.RequestBytes(190, "tight.fits") > limit);
-        Assert.True(DirectorUploadPolicy.RequestBytes(100, "small.fits") <= limit);
+        // A file exactly at the limit fits.
+        Assert.True(await queue.EnqueueAsync(Destination, Frame("exact.fits", 200), null, default));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(Server.Uploads);
     }
 
     [Fact]

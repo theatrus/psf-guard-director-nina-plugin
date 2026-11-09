@@ -926,10 +926,10 @@ answer once.
   Guard, Director turned off on the server, or a proxy's page. Queued frames
   wait, and Director asks again every 10 minutes.
 - PSF Guard refuses a frame (HTTP 400, 409, 410 or 413, a file name it would
-  refuse, or a request larger than `max_bytes`): Director moves the job to the
-  `refused` folder with the reason and does not retry it. The request counts
-  the file, its part headers and 64 KiB to spare. A frame that cannot fit a
-  known `max_bytes` goes there as soon as it is saved.
+  refuse, or a file larger than `max_bytes`, the largest image file the server
+  takes): Director moves the job to the `refused` folder with the reason and
+  does not retry it. A frame larger than a known `max_bytes` goes there as soon
+  as it is saved.
 - HTTP 403 or 401 on an upload: Director keeps the frames and sends nothing to
   that server for a minute, then reads the upload state again.
 - A timeout, a lost connection, HTTP 429 or a server error: Director keeps the

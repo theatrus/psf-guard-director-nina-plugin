@@ -91,17 +91,6 @@ public static class DirectorUploadPolicy
         return null;
     }
 
-    /// <summary>Room left for the multipart boundary and part headers, with a safety margin.</summary>
-    public const long RequestOverheadBytes = 64 * 1024;
-
-    /// <summary>
-    /// The size of the upload request for a file: its bytes, the part headers
-    /// that carry its name, and <see cref="RequestOverheadBytes"/>. Compare
-    /// this, not the file length, with the server's <c>max_bytes</c>.
-    /// </summary>
-    public static long RequestBytes(long fileLength, string fileName) =>
-        fileLength + RequestOverheadBytes + 2L * System.Text.Encoding.UTF8.GetByteCount(fileName);
-
     /// <summary>
     /// The wait before retry number <paramref name="attempts"/>: the server's
     /// Retry-After when it sent one, kept between 1 second and 10 minutes;
