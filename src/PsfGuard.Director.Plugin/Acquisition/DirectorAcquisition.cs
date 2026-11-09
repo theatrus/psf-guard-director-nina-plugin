@@ -181,8 +181,8 @@ public sealed partial class DirectorAcquisition
                 && CanAutomaticallyRecover(error))
             {
                 Logger.Error(error);
-                container.RecordAction("", "Session recovery", $"Retrying after failure. {error.Message}");
-                container.UpdateDisplay(display => display with { Phase = "Recovering session; retrying in 10 seconds", Operation = "", WaitReason = error.Message });
+                container.RecordAction("", "Session", $"Director will try again in 10 seconds. {error.Message}");
+                container.UpdateDisplay(display => display with { Phase = "Trying again in 10 seconds", Operation = "", WaitReason = error.Message });
                 reconcile = true;
                 firstAllocation = true;
                 restartedNight = null;
@@ -198,7 +198,7 @@ public sealed partial class DirectorAcquisition
         owner.RequireIdle(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var options = container.Options.Clone();
-        container.UpdateDisplay(display => display with { Phase = "Recovering previous session", Operation = "Confirming idle equipment" });
+        container.UpdateDisplay(display => display with { Phase = "Checking equipment before starting", Operation = "Confirming equipment is idle" });
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(options.SaveTimeoutSeconds));
         while (camera.GetInfo().IsExposing)
@@ -245,7 +245,7 @@ public sealed partial class DirectorAcquisition
         await Credential(deadline.Token);
         owner.RequireIdle(LocalStateRoot);
         CoordinatorRecoveryHistory.Archive(LocalStateRoot, pairing.Binding.RigId);
-        container.RecordAction("", "Session recovery", "Previous assignment retired; saved captures retained; fresh work will use current image counts");
+        container.RecordAction("", "Session", "Ready to request new work using the latest image counts.");
         container.UpdateDisplay(display => display with { Phase = "Requesting fresh work from PSF Guard", Operation = "", WaitReason = "-" });
     }
 
@@ -330,20 +330,37 @@ public sealed partial class DirectorAcquisition
         using var enclosure = new NinaEnclosureInterlock(profiles, dome, options.Enclosure, TimeProvider.System);
         if (!weatherHolds)
         {
-            using var fresh = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-            fresh.CancelAfter(TimeSpan.FromSeconds(15));
-            try
+            var startupProfile = profiles.ActiveProfile;
+            var monitorId = startupProfile.SafetyMonitorSettings.Id;
+            var domeId = startupProfile.DomeSettings.Id;
+            while (true)
             {
-                while (interlock.Read().Safety != PlannerSafety.Safe || enclosure.Read().Motion != RecoveryMotion.Permitted)
-                    await Task.Delay(100, fresh.Token);
+                lifetime.Token.ThrowIfCancellationRequested();
+                owner.CheckClock();
+                if (window.Ended)
+                {
+                    Report("Session ended while waiting for safe conditions", null,
+                        "The session reached its maximum duration.");
+                    return false;
+                }
+                if (!ReferenceEquals(profiles.ActiveProfile, startupProfile) || startupProfile.Id != profile
+                    || startupProfile.SafetyMonitorSettings.Id != monitorId || startupProfile.DomeSettings.Id != domeId
+                    || !container.Options.EnableAcquisition || container.Options.Safety != options.Safety
+                    || container.Options.Enclosure != options.Enclosure || container.Options.Weather != options.Weather)
+                    throw PolicyStop("The N.I.N.A. profile or Director safety settings changed. Start a new session.");
+
+                var monitor = interlock.Read();
+                var roof = enclosure.Read();
+                if (monitor.Safety == PlannerSafety.Safe && roof.Motion == RecoveryMotion.Permitted) break;
+                var message = DirectorSessionText.StartupWait(monitor, roof);
+                Report(message.Phase, null, message.Detail);
+                await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
             }
-            catch (OperationCanceledException error) when (!lifetime.IsCancellationRequested && fresh.IsCancellationRequested)
-            {
-                throw new InvalidOperationException($"Director startup timed out waiting for safety and enclosure clearance. " +
-                    $"{interlock.Read().Reason}. {enclosure.Read().Reason}.", error);
-            }
+
+            interlock.Arm();
+            enclosure.Arm();
+            if (lastLoggedPhase is not null) Report("Safe to start", null, "-");
         }
-        if (!weatherHolds) { interlock.Arm(); enclosure.Arm(); }
         void Interrupt() { if (!weatherHolds) lifetime.Cancel(); }
         using var safetyCancellation = interlock.Interrupted.Register(Interrupt);
         using var enclosureCancellation = enclosure.Interrupted.Register(Interrupt);
@@ -423,10 +440,10 @@ public sealed partial class DirectorAcquisition
                     if (weatherHolds && !await AdmitIdleWeatherAsync()) return await FinishIdleNightAsync();
                     try
                     {
-                        Report("Requesting commissioned work", "Online");
+                        Report("Requesting work from PSF Guard", "Online", "-");
                         var result = await workloads.RequestAsync(operations.Token);
                         if (result.Allocation is not null) { allocation = result.Allocation; break; }
-                        Report("Waiting for eligible work or quality assessment", "Online");
+                        Report("Waiting for PSF Guard to assign more images", "Online");
                         await WaitIdleAsync(TimeSpan.FromSeconds(result.RetryAfterSeconds));
                     }
                     catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
@@ -483,7 +500,7 @@ public sealed partial class DirectorAcquisition
                         catch (Exception recordError) { errors.Add(recordError); }
                 }
             }
-            Report("Workload admission stopped; review required", null);
+            Report("Could not start the assigned work", null);
             if (errors.Count > 1) throw new AggregateException("Workload admission and shutdown failed.", errors);
             throw;
         }
@@ -703,6 +720,7 @@ public sealed partial class DirectorAcquisition
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
             var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
+            long? lastWaitingRefresh = null;
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
             {
@@ -715,13 +733,15 @@ public sealed partial class DirectorAcquisition
                     if (recovery is not null && !await recovery.RefreshAsync(lifetime.Token, allowNightEnd: true)) break;
                     if (Volatile.Read(ref priorityRefresh) != 0)
                     {
-                        Report("Priority changed; parking for a refreshed workload", "Online");
+                        Report("Plans changed. Requesting updated work from PSF Guard", "Online");
                         break;
                     }
                     var current = Snapshot();
                     if (window.Ended) break;
                     var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
-                    Report(decision.Reason, null);
+                    var message = DirectorSessionText.ForDecision(decision);
+                    if (lastLoggedPhase != message.Phase) Logger.Debug($"Director planner decision: {decision.Action}, {decision.Reason}.");
+                    Report(message.Phase, null, message.Detail);
                     if (decision.Action == PlannerAction.Complete)
                     {
                         if (context is not null && decision.Reason != "observing_night_ended") await hooks.TargetCompletedAsync(progress, operations.Token);
@@ -740,6 +760,17 @@ public sealed partial class DirectorAcquisition
                             if (native is not null) await native.StopGuidingAsync(progress, operations.Token);
                             await Park(lifetime.Token);
                         }
+                        // Waiting for geometry must not hide newly activated plans
+                        // until the held assignment ends. This read-only poll also
+                        // works when capture delivery is deferred. The normal
+                        // handoff below delivers saved images before requesting work.
+                        if (options.AutomaticWorkloads && (lastWaitingRefresh is null
+                            || TimeProvider.System.GetElapsedTime(lastWaitingRefresh.Value) >= TimeSpan.FromSeconds(30)))
+                        {
+                            lastWaitingRefresh = TimeProvider.System.GetTimestamp();
+                            await RefreshWorkAsync(operations.Token, waiting: true);
+                            if (Volatile.Read(ref priorityRefresh) != 0) continue;
+                        }
                         await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, operations.Token);
                         // Waiting ends the target visit, so re-enter its setup on
                         // the next core selection even if the mount has not moved.
@@ -747,7 +778,7 @@ public sealed partial class DirectorAcquisition
                         continue;
                     }
                     if (decision.Action != PlannerAction.Acquire || decision.GoalId is null)
-                        throw new InvalidOperationException($"Director stopped: {decision.Reason}.");
+                        throw new InvalidOperationException(message.Detail == "-" ? message.Phase : message.Detail);
                     // Resolve the core's choice, never sort targets in the adapter.
                     var selected = program.Bindings.Single(b => b.GoalId == decision.GoalId);
                     target = program.Targets.Single(t => t.Id == selected.TargetId);
@@ -796,7 +827,7 @@ public sealed partial class DirectorAcquisition
                         }
                         if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
                         var block = TargetBlock();
-                        var operationName = ((PreparationNext.Run)next).Command.Operation.GetType().Name;
+                        var operationName = DirectorSessionText.OperationName(((PreparationNext.Run)next).Command.Operation);
                         container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = operationName });
                         container.RecordAction(selectedTarget.Name, operationName, "Started");
                         var issued = preparation.Create(next, program, equipmentBinding, dispatch.Pending(next, () =>
@@ -1056,7 +1087,7 @@ public sealed partial class DirectorAcquisition
             if (!WeatherInterrupted()) await hooks.FinishAsync(progress, operations.Token);
             await EnsureSettledAsync(runtime, lifetime.Token);
             if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
-            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reconciling priority change before requesting work"
+            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reporting saved images before requesting updated work"
                 : "Allocation finished; awaiting assessment or a new reconciled plan", null);
 
             void QueueCheckIn(bool refreshPriority = true)
@@ -1102,19 +1133,7 @@ public sealed partial class DirectorAcquisition
                     } while (drain && (!result.CaughtUp || !operations.CaughtUp));
                     if (refreshPriority && !drain && result.CaughtUp && options.AutomaticWorkloads && options.CheckInMode == DirectorCheckInMode.Live)
                     {
-                        // Progress alone changes the preview revision. Compare
-                        // priority intent so ordinary saves cannot churn grants.
-                        CoordinatorProgramPreview preview;
-                        try { preview = await previews.ReadPreviewAsync(pairing.Binding, configuration, token: ct); }
-                        catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.NotReady)
-                        {
-                            Logger.Info("Director priority preview is not ready; retaining the current allocation.");
-                            return;
-                        }
-                        var changed = CoordinatorPriorityRefresh.Required(program, preview.Envelope.Program);
-                        if (changed && Volatile.Read(ref priorityRefresh) == 0)
-                            Logger.Info("Director priority update queued for the next settled exposure boundary.");
-                        Volatile.Write(ref priorityRefresh, changed ? 1 : 0);
+                        await RefreshWorkAsync(ct, waiting: false);
                     }
                 }
                 catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
@@ -1123,6 +1142,24 @@ public sealed partial class DirectorAcquisition
                     Logger.Info("Director check-in offline; local scheduling continues within the allocation.");
                 }
                 finally { checkpointDelivery.Release(); }
+            }
+            async Task RefreshWorkAsync(CancellationToken ct, bool waiting)
+            {
+                try
+                {
+                    var preview = await previews.ReadPreviewAsync(pairing.Binding, configuration, token: ct);
+                    var changed = waiting
+                        ? CoordinatorPriorityRefresh.RequiredWhileWaiting(program, preview.Envelope.Program)
+                        : CoordinatorPriorityRefresh.Required(program, preview.Envelope.Program);
+                    // Latch the handoff. A concurrent priority-only check must not
+                    // erase a newly activated plan detected by the waiting loop.
+                    if (changed && Interlocked.Exchange(ref priorityRefresh, 1) == 0)
+                        Logger.Info("Director plans changed. Updated work will be requested after saved images are reported.");
+                }
+                catch (CoordinatorIntakeException e) when (e.Failure == CoordinatorIntakeFailure.NotReady)
+                { Logger.Info("Director plan preview is not ready. Keeping the current assignment."); }
+                catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
+                { Logger.Info("Director could not check for plan changes. It will check again automatically."); }
             }
         }
         catch (Exception error)
@@ -1367,19 +1404,20 @@ public sealed partial class DirectorAcquisition
                 int.TryParse(display.QueueDepth, out var depth) && depth >= 0 ? depth : null, pointing,
                 Math.Clamp(options.StatusSeconds * 3000, 15000, 600000));
         }
-        void Report(string phase, string? connectivity)
+        void Report(string phase, string? connectivity, string? waitReason = null)
         {
             var safetyEvidence = interlock.Read();
             container.UpdateDisplay(d => d with
             {
                 Phase = phase,
+                WaitReason = waitReason ?? d.WaitReason,
                 Rig = rig,
                 Connectivity = connectivity ?? d.Connectivity,
                 Safety = interlock.Monitored ? safetyEvidence.Safety.ToString() : safetyEvidence.Reason
             });
             if (lastLoggedPhase != phase)
             {
-                container.RecordAction(target?.Name ?? "", "Planner", phase.Replace('_', ' '));
+                container.RecordAction(target?.Name ?? "", "Session", waitReason is not null and not "-" ? $"{phase}. {waitReason}" : phase);
                 lastLoggedPhase = phase;
             }
             try { progress.Report(new ApplicationStatus { Status = phase }); }

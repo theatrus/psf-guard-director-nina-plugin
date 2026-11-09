@@ -413,10 +413,17 @@ release leaves the rig parked with durable evidence for later batch check-in,
 not permission to replay the old grant. This conservative handoff includes a
 park/unpark cycle; uninterrupted tracking across grants is not implemented.
 
-New/removed goals, configuration changes, grade corrections and arbitrary
-weighted-policy edits are not live priority handoffs. Those remain part of
-broader reconciliation. A preview that is not ready leaves the held grant in
-place. Safety, expiry and enclosure policies retain authority over every step.
+While waiting for a target to become observable, **Automatic workloads** checks
+PSF Guard every 30 seconds for activated plan changes. Newly added or removed
+goals, changed image requirements, framing and exposure settings cause Director
+to report saved images, release the old assignment and request current work.
+This check also runs with **Deferred** capture delivery. Saved-image reports
+are delivered before the replacement assignment so its counts remain correct.
+Image progress and rolling observing windows alone do not restart an assignment.
+
+Equipment configuration changes and arbitrary weighted-policy edits still
+require broader reconciliation. A preview that is not ready leaves the held
+assignment in place. Safety, expiry and enclosure policies apply throughout.
 
 ## Legacy observing preferences
 
@@ -1284,7 +1291,9 @@ attended run with no safety monitor configured in the active N.I.N.A. profile,
 choose **Attended operation**, turn on **Enable acquisition**, and click
 **Run**. If the profile has a safety monitor configured, Director
 requires it connected and reporting fresh Safe readings. Attended runs
-still require enclosure clearance and mount checks. **Hold and resume**
+still require enclosure clearance and mount checks. Before starting,
+Director waits for a Safe reading or an open enclosure, as applicable,
+until the session reaches its maximum duration. **Hold and resume**
 and settled-night restart require **Require connected safety monitor**.
 Sequence-owned dithering uses native trigger configuration, not the Director
 dither interval. Sequence ownership means explicit native instructions/triggers,

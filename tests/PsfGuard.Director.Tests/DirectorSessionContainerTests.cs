@@ -246,6 +246,26 @@ public sealed class DirectorSessionContainerTests
     }
 
     [Fact]
+    public void TargetWaitExplainsWhatDirectorWillDoNext()
+    {
+        var message = DirectorSessionText.ForDecision(new(PlannerAction.Wait, "future_window"));
+        Assert.Equal("Waiting for a target to become observable", message.Phase);
+        Assert.Contains("check again automatically", message.Detail);
+    }
+
+    [Fact]
+    public void StartupWaitIdentifiesTheCurrentBlocker()
+    {
+        var monitor = new NinaSafetyEvidence(PlannerSafety.Unsafe, "Safety monitor reports unsafe", 0);
+        var roof = new NinaMotionEvidence(RecoveryMotion.Prohibited, "The enclosure is closed", 0);
+
+        Assert.Equal(("Waiting for the safety monitor to report Safe", "Safety monitor reports unsafe."),
+            DirectorSessionText.StartupWait(monitor, roof));
+        Assert.Equal(("Waiting for the enclosure to open", "The enclosure is closed."),
+            DirectorSessionText.StartupWait(monitor with { Safety = PlannerSafety.Safe }, roof));
+    }
+
+    [Fact]
     public void SessionIsExportedAsANativeContainerAndItem()
     {
         var exports = typeof(DirectorSessionContainer).GetCustomAttributes(typeof(ExportAttribute), false).Cast<ExportAttribute>();

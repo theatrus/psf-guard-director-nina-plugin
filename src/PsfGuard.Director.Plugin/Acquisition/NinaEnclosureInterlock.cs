@@ -98,10 +98,10 @@ internal sealed class NinaEnclosureInterlock : IDomeConsumer
                 var now = checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
                 if (policy == DirectorEnclosurePolicy.OpenAir)
                     return info.Connected ? Refuse("Open-air policy cannot use a connected enclosure")
-                        : new(RecoveryMotion.Permitted, "Commissioned open-air setup", checked(now + (ulong)maxAge.TotalMilliseconds));
+                        : new(RecoveryMotion.Permitted, "Open-air setup", checked(now + (ulong)maxAge.TotalMilliseconds));
                 if (!info.Connected || info.DeviceId != deviceId) return Refuse("Required enclosure disconnected or changed");
                 if (info.ShutterStatus != ShutterState.ShutterOpen)
-                    return Refuse("Enclosure is not fully open; mount motion blocked", RecoveryMotion.Prohibited);
+                    return Refuse("The enclosure must be fully open before the mount can move", RecoveryMotion.Prohibited);
                 var elapsed = observed is { } timestamp ? clock.GetElapsedTime(timestamp) : TimeSpan.MaxValue;
                 if (!open || observed is null || elapsed < TimeSpan.Zero || elapsed >= maxAge
                     || now < observedUtc || now - observedUtc >= (ulong)maxAge.TotalMilliseconds)

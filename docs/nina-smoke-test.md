@@ -1018,6 +1018,18 @@ All 775 plugin tests, package build, format and runtime-fetch regressions passed
 
 ## Ranked priority handoff
 
+To test newly activated plans during a target wait, run the server-plan harness
+with `-PublicAcquisition -LocalTargetScheduling -AutomaticWorkloads
+-WaitingPlanRefresh -WaitForSafeAtStartup`. The fixture starts unsafe, stays in
+one startup wait beyond the former timeout, then reports Safe. It saves two
+images and waits for a target below the horizon. After an unchanged refresh,
+it activates another plan through the server API. Director must request a new
+assignment within 45 seconds, save one image of the new target and preserve
+both earlier image counts and spent attempts. Another unchanged refresh must
+leave the second assignment in place. The harness then cancels the session,
+checks that the mount is parked, and verifies both histories against the server.
+Add `-DeferredCheckIn` to check the same handoff with deferred capture delivery.
+
 2026-10-03: the packaged plugin, runtime 0.10.0 / IPC 10 and native NINA
 3.3.0.1064 passed against isolated local PSF Guard with ASCOM OmniSim devices.
 No normal NINA profile, real equipment or live catalog was used.

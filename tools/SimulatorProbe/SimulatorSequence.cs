@@ -291,6 +291,8 @@ public sealed class SimulatorSequence : SequenceItem
             // waits through transit before issuing the ASCOM flip slew.
             if (coordinator?.ForceNativeFlip == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
+            if (coordinator?.WaitingPlanRefresh == true)
+                target = new Coordinates((telescope.GetInfo().SiderealTime + 0.25) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
                 Path.Combine(run, "journal"), TimeSpan.FromSeconds(30), TimeProvider.System);
@@ -346,7 +348,7 @@ public sealed class SimulatorSequence : SequenceItem
                         throw new InvalidDataException("Equipment report incorrectly enabled acquisition or retained ownership.");
                     if (coordinator.AutomaticWorkloads && coordinator.LocalTargetScheduling && !coordinator.NativeImaging && !coordinator.Attended
                         && coordinator.WeatherHoldScenario is null && coordinator.NightEndScenario is null && coordinator.QualityScenario is null
-                        && coordinator.RecoveryScenario is null && !coordinator.OfflineWorkloadRelease && !coordinator.PriorityRefresh)
+                        && coordinator.RecoveryScenario is null && !coordinator.OfflineWorkloadRelease && !coordinator.PriorityRefresh && !coordinator.WaitingPlanRefresh)
                     {
                         var failedStartup = (DirectorSessionContainer)sessionContainer.Clone();
                         failedStartup.Options.EnableAcquisition = true;
@@ -460,14 +462,41 @@ public sealed class SimulatorSequence : SequenceItem
                     nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
                 }
                 var startupHold = coordinator.WeatherHoldScenario is "safety-startup" or "roof-startup" or "roof-startup-night-end";
-                if (startupHold)
+                if (startupHold || coordinator.WaitForSafeAtStartup)
                 {
                     if (coordinator.UsesEnclosure) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close before startup."); }
-                    else safetySimulator.IsSafe = false;
+                    else
+                    {
+                        safetySimulator.IsSafe = false;
+                        if (coordinator.WaitForSafeAtStartup)
+                        {
+                            using var unsafeDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                            unsafeDeadline.CancelAfter(TimeSpan.FromSeconds(15));
+                            while (safety.GetInfo().IsSafe) await Task.Delay(100, unsafeDeadline.Token);
+                        }
+                    }
                 }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (coordinator.WaitForSafeAtStartup)
+                    {
+                        const string safetyWaitPhase = "Waiting for the safety monitor to report Safe";
+                        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        startupDeadline.CancelAfter(TimeSpan.FromSeconds(60));
+                        while (!executing.IsCompleted && sessionContainer.Display.Phase != safetyWaitPhase)
+                            await Task.Delay(100, startupDeadline.Token);
+                        // Stay unsafe longer than the previous 15-second timeout.
+                        await Task.Delay(TimeSpan.FromSeconds(18), startupDeadline.Token);
+                        if (executing.IsCompleted || sessionContainer.Display.Phase != safetyWaitPhase
+                            || service.LastLedger is not null || camera.GetInfo().IsExposing || telescope.GetInfo().TrackingEnabled
+                            || sessionContainer.ActionHistory.Count(item => item.Outcome.StartsWith(safetyWaitPhase, StringComparison.Ordinal)) != 1
+                            || sessionContainer.ActionHistory.Any(item => item.Outcome.Contains("try again", StringComparison.OrdinalIgnoreCase)))
+                            throw new InvalidDataException("Startup did not remain in one safety wait with equipment idle.");
+                        safetySimulator.IsSafe = true;
+                        await File.WriteAllTextAsync(Path.Combine(run, "startup-safety-verified.txt"), "One safety wait exceeded the former timeout.", lifetime.Token);
+                        Step("Startup waited for Safe without retrying or acquiring and resumed automatically");
+                    }
                     if (coordinator.QualityScenario is not null)
                     {
                         Exception? failure = null;
@@ -716,11 +745,47 @@ public sealed class SimulatorSequence : SequenceItem
                             : "Public unsafe monitor aborted exposure, parked and stayed stopped after recovery");
                         return;
                     }
-                    if (coordinator.MoonAvoidance)
+                    if (coordinator.WaitingPlanRefresh)
+                    {
+                        const string targetWait = "Waiting for a target to become observable";
+                        using var refreshDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        refreshDeadline.CancelAfter(TimeSpan.FromSeconds(210));
+                        while (!executing.IsCompleted && (sessionContainer.Display.Phase != targetWait || !telescope.GetInfo().AtPark))
+                            await Task.Delay(100, refreshDeadline.Token);
+                        var heldLedger = service.LastLedger;
+                        // Let an unchanged preview be polled before activating the
+                        // draft, so image progress cannot pass as a plan change.
+                        await Task.Delay(TimeSpan.FromSeconds(35), refreshDeadline.Token);
+                        if (executing.IsCompleted || heldLedger is null || service.LastLedger != heldLedger
+                            || camera.GetInfo().IsExposing || sessionContainer.Display.Phase != targetWait)
+                            throw new InvalidDataException("An unchanged plan did not remain parked in its original assignment.");
+                        await coordinator.ActivateWaitingPlanAsync(refreshDeadline.Token);
+                        var activatedAt = TimeProvider.System.GetTimestamp();
+                        while (!executing.IsCompleted && service.LastLedger == heldLedger)
+                            await Task.Delay(100, refreshDeadline.Token);
+                        if (executing.IsCompleted || TimeProvider.System.GetElapsedTime(activatedAt) > TimeSpan.FromSeconds(45))
+                            throw new InvalidDataException("Newly activated plan was not picked up within the waiting refresh interval.");
+                        while (!executing.IsCompleted && (sessionContainer.Display.Phase != targetWait || !telescope.GetInfo().AtPark
+                            || sessionHookEvents.Count(h => h == "AfterEachExposure") != 3))
+                            await Task.Delay(100, refreshDeadline.Token);
+                        var successorLedger = service.LastLedger;
+                        await Task.Delay(TimeSpan.FromSeconds(35), refreshDeadline.Token);
+                        if (executing.IsCompleted || service.LastLedger != successorLedger || camera.GetInfo().IsExposing
+                            || sessionHookEvents.Count(h => h == "AfterEachExposure") != 3)
+                            throw new InvalidDataException("Refreshed work churned assignments or repeated a saved exposure.");
+                        Step("New plan activated during the target wait was acquired automatically; unchanged plans kept their assignments");
+                        await SessionUiProbe.RenderAsync(run, sessionContainer.Display, sessionContainer);
+                        publicLifetime.Cancel();
+                        try { await executing; throw new InvalidDataException("Waiting refresh ignored cancellation."); }
+                        catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                        if (!telescope.GetInfo().AtPark || camera.GetInfo().IsExposing || AcquisitionLease.IsActive)
+                            throw new InvalidDataException("Waiting refresh did not stop safely.");
+                    }
+                    else if (coordinator.MoonAvoidance)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                         waitingDeadline.CancelAfter(TimeSpan.FromSeconds(90));
-                        while (!executing.IsCompleted && (sessionContainer.Display.Phase != "moon_avoidance"
+                        while (!executing.IsCompleted && (sessionContainer.Display.Phase != "Waiting for the Moon to clear"
                             || !telescope.GetInfo().AtPark || !sessionHookEvents.Contains("BeforeWait")))
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) throw new InvalidDataException("Moon avoidance did not retain a parked waiting session.");
@@ -737,7 +802,7 @@ public sealed class SimulatorSequence : SequenceItem
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                         waitingDeadline.CancelAfter(TimeSpan.FromSeconds(phd2 is not null ? 420 : coordinator.ForceNativeFlip ? 180 : 90));
-                        while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for eligible work or quality assessment")
+                        while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for PSF Guard to assign more images")
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
@@ -834,7 +899,7 @@ public sealed class SimulatorSequence : SequenceItem
                 if (startupAdmissionVerified && !Directory.GetFiles(Path.Combine(service.LocalStateRoot, "recovery-history", rigId), "recovery.sqlite", SearchOption.AllDirectories).Any())
                     throw new InvalidDataException("Automatic recovery did not preserve the interrupted night journal.");
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
-                var journalRoots = coordinator.PriorityRefresh
+                var journalRoots = coordinator.PriorityRefresh || coordinator.WaitingPlanRefresh
                     ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
                     : [Path.Combine(service.LastRunDirectory!, "journal")];
                 foreach (var file in journalRoots.SelectMany(d => Directory.GetFiles(d, "*.json", SearchOption.AllDirectories)))
@@ -857,6 +922,15 @@ public sealed class SimulatorSequence : SequenceItem
                     await coordinator.ReportStatusAsync(programTarget, "priority_refresh_complete", lifetime.Token);
                     await SessionUiProbe.RenderAsync(run, sessionContainer.Display);
                     Step("Priority handoff sealed two ledgers; successor preserved pending captures and spent attempts; batch replay changed nothing");
+                    return;
+                }
+                if (coordinator.WaitingPlanRefresh)
+                {
+                    var replay = await new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot }.RunAsync(null, lifetime.Token);
+                    if (replay.Runs != 2 || !replay.CaughtUp) throw new InvalidDataException("Both assignment histories were not checked in.");
+                    await coordinator.VerifyWaitingRefreshAsync(service.LocalStateRoot, equipment, captures, lifetime.Token);
+                    await coordinator.ReportStatusAsync(programTarget, "waiting_refresh_complete", lifetime.Token);
+                    Step("Waiting refresh preserved saved image counts and spent attempts across both assignments");
                     return;
                 }
                 await coordinator.EndOutageAsync(root, lifetime.Token);
@@ -1251,6 +1325,7 @@ public sealed class SimulatorSequence : SequenceItem
                 observingPreferencesVerified = coordinator is { ObservingPreferences: true, LocalTargetsVerified: true },
                 projectOrderVerified = coordinator is { ProjectOrder: true, LocalTargetsVerified: true },
                 priorityRefreshVerified = coordinator?.PriorityRefreshVerified ?? false,
+                waitingPlanRefreshVerified = coordinator?.WaitingPlanRefreshVerified ?? false,
                 steps,
                 evaluations,
                 operations,

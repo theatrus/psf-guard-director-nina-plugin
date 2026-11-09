@@ -26,6 +26,10 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
     internal bool Attended { get; private set; }
+    internal bool WaitForSafeAtStartup { get; private set; }
+    internal bool WaitingPlanRefresh { get; private set; }
+    private Guid waitingProject;
+    internal bool WaitingPlanRefreshVerified { get; private set; }
     internal bool PublicUnsafe { get; private init; }
     internal bool AbortWithoutPark { get; private init; }
     internal bool DeferredCheckIn { get; private init; }
@@ -201,6 +205,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
             probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
             probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
+            probe.WaitForSafeAtStartup = fixtureJson.RootElement.TryGetProperty("WaitForSafeAtStartup", out var startupSafety) && startupSafety.GetBoolean();
+            probe.WaitingPlanRefresh = fixtureJson.RootElement.TryGetProperty("WaitingPlanRefresh", out var waitingRefresh) && waitingRefresh.GetBoolean();
             probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
             return probe;
         }
@@ -321,11 +327,15 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 site_id = (Guid?)null,
                 overrides = new { weights = new { importance = 100, window_urgency = 0, altitude = 0, moon_opportunity = 0, completion = 0, efficiency = 0, continuity = 0 }, importance = (int?)null, minimum_dwell_ms = 600000, switch_margin = 500 }
             }, token);
-        for (var targetIndex = 0; targetIndex < (LocalTargetScheduling ? 2 : 1); targetIndex++)
+        for (var targetIndex = 0; targetIndex < (WaitingPlanRefresh ? 3 : LocalTargetScheduling ? 2 : 1); targetIndex++)
         {
             var frame = targetIndex == 0 ? target : target with { Name = "Higher priority remote target", IcrsRaMas = (target.IcrsRaMas + 1080000) % 1296000000 };
+            if (WaitingPlanRefresh && targetIndex == 1)
+                frame = target with { Name = "Target that rises later", IcrsRaMas = (target.IcrsRaMas + 324000000) % 1296000000 };
+            if (WaitingPlanRefresh && targetIndex == 2)
+                frame = target with { Name = "Newly activated target", IcrsRaMas = (target.IcrsRaMas + 1080000) % 1296000000 };
             var project = Guid.NewGuid();
-            projectIds.Add(project);
+            if (!WaitingPlanRefresh || targetIndex != 2) projectIds.Add(project);
             await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
             if (ObservingPreferences)
                 await OperatorAsync(HttpMethod.Put, $"preferences/project/{project:D}", new
@@ -376,7 +386,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     offset = (int?)null,
                     bin = 1,
                     readout_mode = 0,
-                    moon = MoonAvoidance && i == 2
+                    moon = WaitingPlanRefresh ? new DirectorMoonPolicy(false, 0, 14, 0, -15, 5, false) : MoonAvoidance && i == 2
                         ? new DirectorMoonPolicy(true, 180, 14, 0, -90, -89, true)
                         : new DirectorMoonPolicy(true, 0.25, 7, 0, -15, 5, false)
                 },
@@ -386,6 +396,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             }).ToArray();
             await OperatorAsync(HttpMethod.Put, $"projects/{project:D}/plan", new
             { project_id = project, revision = 0, updated_at_ms = 0, objectives, contributions }, token);
+            if (WaitingPlanRefresh && targetIndex == 2) { waitingProject = project; continue; }
             var preview = await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/preview", new { }, token);
             await OperatorAsync(HttpMethod.Post, $"projects/{project:D}/activation/apply",
                 new { preview_digest = preview.GetProperty("preview_digest").GetString() }, token);
@@ -465,7 +476,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                     profile_id = binding.ProfileId,
                     profile_revision = second.Envelope.Rig.ProfileRevision,
                     configuration_id = configuration.Id,
-                    project_ids = projectIds,
+                    project_ids = WaitingPlanRefresh ? new List<Guid>() : projectIds,
                     enabled = true,
                     revision = policyRevision + 1
                 }
@@ -536,6 +547,44 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     }
 
     internal Task ReverseProjectOrderAsync(CancellationToken token) => SetProjectOrderAsync(rankedProjects.AsEnumerable().Reverse().ToArray(), token);
+
+    internal async Task ActivateWaitingPlanAsync(CancellationToken token)
+    {
+        var preview = await OperatorAsync(HttpMethod.Post, $"projects/{waitingProject:D}/activation/preview", new { }, token);
+        await OperatorAsync(HttpMethod.Post, $"projects/{waitingProject:D}/activation/apply",
+            new { preview_digest = preview.GetProperty("preview_digest").GetString() }, token);
+    }
+
+    internal async Task VerifyWaitingRefreshAsync(string root, DirectorConfiguration configuration,
+        IReadOnlyList<PsfGuard.Director.Plugin.Acquisition.CaptureEvidence> captures, CancellationToken token)
+    {
+        var runs = Directory.EnumerateDirectories(Path.Combine(root, pairing.Binding.ProfileId.ToString("N")))
+            .Select(d => new CoordinatorRunArchive(d, endpoint, pairing.Binding, pairing.ClientId).Read())
+            .Where(r => r is not null).Select(r => r!).OrderBy(r => r.Allocation.AdmittedAtMs).ToArray();
+        if (runs.Length != 2 || !runs[0].Completed || !runs[0].Released || captures.Count != 3
+            || captures.Select(c => c.Intent.GoalId).Distinct().Count() != 3)
+            throw new InvalidDataException("Waiting refresh did not release the old assignment and save exactly three different goals.");
+        var original = runs[0].Allocation.Snapshot.Program;
+        var successor = runs[1].Allocation.Snapshot.Program;
+        var first = captures.Where(c => c.Intent.AssignmentId == original.Assignment.Id).OrderBy(c => c.StartedAt).ToArray();
+        var next = captures.Where(c => c.Intent.AssignmentId == successor.Assignment.Id).ToArray();
+        if (original.Assignment.Goals.Length != 3 || successor.Assignment.Goals.Length != 4
+            || first.Length != 2 || next.Length != 1 || next[0].Intent.TargetName != "Newly activated target"
+            || first[^1].UpdatedAt > next[0].StartedAt)
+            throw new InvalidDataException("Waiting refresh did not acquire the newly activated plan after preserving existing captures.");
+        foreach (var previous in original.Assignment.Goals)
+        {
+            var goal = successor.Assignment.Goals.Single(g => g.Id == previous.Id);
+            var spent = (uint)first.Count(c => c.Intent.GoalId == previous.Id);
+            if (goal.AttemptsRemaining != previous.AttemptsRemaining - spent || goal.Pending != spent || goal.Accepted != 0)
+                throw new InvalidDataException("Waiting refresh lost pending images or reset the attempt budget.");
+        }
+        using var client = new CoordinatorProgramClient(endpoint, Credential);
+        var latest = await client.ReadPreviewAsync(pairing.Binding, configuration, token: token);
+        if (latest.Envelope.Program.Assignment.Goals.Any(g => g.Pending != captures.Count(c => c.Intent.GoalId == g.Id) || g.Accepted != 0))
+            throw new InvalidDataException("Server image counts do not match the three saved images.");
+        LocalTargetsVerified = AutomaticWorkloadVerified = WaitingPlanRefreshVerified = true;
+    }
 
     internal async Task VerifyPriorityRefreshAsync(string root, DirectorConfiguration configuration,
         IReadOnlyList<PsfGuard.Director.Plugin.Acquisition.CaptureEvidence> captures, CancellationToken token)
