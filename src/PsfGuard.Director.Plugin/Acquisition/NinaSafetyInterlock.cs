@@ -116,7 +116,7 @@ internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
             var elapsed = observed is { } timestamp ? clock.GetElapsedTime(timestamp) : TimeSpan.MaxValue;
             if (!connected || !safe || observed is null || elapsed < TimeSpan.Zero || elapsed >= maxAge
                 || now < observedUtc || now - observedUtc >= (ulong)maxAge.TotalMilliseconds)
-                return Refuse("Safety-monitor evidence is missing or stale");
+                return Refuse("Waiting for a current reading from the safety monitor");
             if (!current && interrupted.IsCancellationRequested) return new(PlannerSafety.Unsafe, reason, 0);
             reason = "Safety monitor is safe";
             // Bound wall-clock validity by both clocks; moving the wall clock

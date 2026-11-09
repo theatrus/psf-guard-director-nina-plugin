@@ -460,14 +460,41 @@ public sealed class SimulatorSequence : SequenceItem
                     nightSequence.Add(new NightEndMarker(() => followingStepRan = true));
                 }
                 var startupHold = coordinator.WeatherHoldScenario is "safety-startup" or "roof-startup" or "roof-startup-night-end";
-                if (startupHold)
+                if (startupHold || coordinator.WaitForSafeAtStartup)
                 {
                     if (coordinator.UsesEnclosure) { if (!await dome.CloseShutter(lifetime.Token)) throw new IOException("Simulator roof did not close before startup."); }
-                    else safetySimulator.IsSafe = false;
+                    else
+                    {
+                        safetySimulator.IsSafe = false;
+                        if (coordinator.WaitForSafeAtStartup)
+                        {
+                            using var unsafeDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                            unsafeDeadline.CancelAfter(TimeSpan.FromSeconds(15));
+                            while (safety.GetInfo().IsSafe) await Task.Delay(100, unsafeDeadline.Token);
+                        }
+                    }
                 }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
                 try
                 {
+                    if (coordinator.WaitForSafeAtStartup)
+                    {
+                        const string safetyWaitPhase = "Waiting for the safety monitor to report Safe";
+                        using var startupDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                        startupDeadline.CancelAfter(TimeSpan.FromSeconds(60));
+                        while (!executing.IsCompleted && sessionContainer.Display.Phase != safetyWaitPhase)
+                            await Task.Delay(100, startupDeadline.Token);
+                        // Stay unsafe longer than the previous 15-second timeout.
+                        await Task.Delay(TimeSpan.FromSeconds(18), startupDeadline.Token);
+                        if (executing.IsCompleted || sessionContainer.Display.Phase != safetyWaitPhase
+                            || service.LastLedger is not null || camera.GetInfo().IsExposing || telescope.GetInfo().TrackingEnabled
+                            || sessionContainer.ActionHistory.Count(item => item.Outcome.StartsWith(safetyWaitPhase, StringComparison.Ordinal)) != 1
+                            || sessionContainer.ActionHistory.Any(item => item.Outcome.Contains("try again", StringComparison.OrdinalIgnoreCase)))
+                            throw new InvalidDataException("Startup did not remain in one safety wait with equipment idle.");
+                        safetySimulator.IsSafe = true;
+                        await File.WriteAllTextAsync(Path.Combine(run, "startup-safety-verified.txt"), "One safety wait exceeded the former timeout.", lifetime.Token);
+                        Step("Startup waited for Safe without retrying or acquiring and resumed automatically");
+                    }
                     if (coordinator.QualityScenario is not null)
                     {
                         Exception? failure = null;
@@ -737,7 +764,7 @@ public sealed class SimulatorSequence : SequenceItem
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                         waitingDeadline.CancelAfter(TimeSpan.FromSeconds(phd2 is not null ? 420 : coordinator.ForceNativeFlip ? 180 : 90));
-                        while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for eligible work or quality assessment")
+                        while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for PSF Guard to assign more images")
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");

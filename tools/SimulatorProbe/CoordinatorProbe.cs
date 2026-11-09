@@ -26,6 +26,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool ExerciseOutage { get; private init; }
     internal bool PublicAcquisition { get; private init; }
     internal bool Attended { get; private set; }
+    internal bool WaitForSafeAtStartup { get; private set; }
     internal bool PublicUnsafe { get; private init; }
     internal bool AbortWithoutPark { get; private init; }
     internal bool DeferredCheckIn { get; private init; }
@@ -201,6 +202,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
             probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
             probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
+            probe.WaitForSafeAtStartup = fixtureJson.RootElement.TryGetProperty("WaitForSafeAtStartup", out var startupSafety) && startupSafety.GetBoolean();
             probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
             return probe;
         }

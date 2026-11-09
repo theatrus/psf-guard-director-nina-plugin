@@ -1284,7 +1284,9 @@ attended run with no safety monitor configured in the active N.I.N.A. profile,
 choose **Attended operation**, turn on **Enable acquisition**, and click
 **Run**. If the profile has a safety monitor configured, Director
 requires it connected and reporting fresh Safe readings. Attended runs
-still require enclosure clearance and mount checks. **Hold and resume**
+still require enclosure clearance and mount checks. Before starting,
+Director waits for a Safe reading or an open enclosure, as applicable,
+until the session reaches its maximum duration. **Hold and resume**
 and settled-night restart require **Require connected safety monitor**.
 Sequence-owned dithering uses native trigger configuration, not the Director
 dither interval. Sequence ownership means explicit native instructions/triggers,
