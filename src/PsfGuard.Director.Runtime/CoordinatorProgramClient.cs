@@ -5,7 +5,7 @@ public enum CoordinatorIntakeFailure
     AuthenticationRequired, Forbidden, NotFound, NotReady, Busy, ServerUnavailable, UnexpectedStatus,
     RedirectRefused, UnexpectedNotModified, ResponseTooLarge, MalformedResponse, IdentityMismatch,
     ConfigurationMismatch, UnsupportedProgram, ExpiredOrFutureProgram, ChangedImmutableProgram, Timeout, Transport, CredentialUnavailable,
-    ReceiptConflict, InvalidAcknowledgement
+    ReceiptConflict, InvalidAcknowledgement, FutureProgramWindow
 }
 
 public sealed class CoordinatorIntakeException : Exception

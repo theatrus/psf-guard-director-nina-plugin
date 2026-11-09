@@ -8,6 +8,7 @@ using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
+using NINA.Sequencer.Interfaces.Mediator;
 using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.Plugin;
@@ -40,7 +41,10 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
     private string? starDetectionConnection;
 
     [ImportingConstructor]
-    public DirectorPlugin(IProfileService profileService)
+    public DirectorPlugin(IProfileService profileService, ISequenceMediator sequence)
+        : this(profileService) => this.sequence = sequence;
+
+    internal DirectorPlugin(IProfileService profileService)
     {
         profiles = profileService;
         settings = new PluginOptionsAccessor(profiles, PluginId);
@@ -128,12 +132,14 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         WatchStarDetectionSettings(profiles.ActiveProfile);
         starDetection.Enabled = SendStarDetectionSettings;
         starDetection.Start();
+        StartSequenceReporting();
         Refresh();
     }
 
     public override async Task Teardown()
     {
         initialized = false;
+        await StopSequenceReportingAsync();
         SetEquipmentSettingsVisible(false);
         checkInCancellation?.Cancel();
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
@@ -292,6 +298,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProfileName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CheckInStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReportSequenceActivity)));
         start.Refresh();
         stop.Refresh();
         checkIn.Refresh();

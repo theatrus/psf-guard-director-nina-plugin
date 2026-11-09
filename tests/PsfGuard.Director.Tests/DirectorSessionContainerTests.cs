@@ -5,6 +5,7 @@ using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Sequencer.Container;
 using NINA.Sequencer.Interfaces;
+using NINA.Sequencer.Interfaces.Mediator;
 using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.SequenceItem.Utility;
 using NINA.Sequencer.Utility;
@@ -17,6 +18,39 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class DirectorSessionContainerTests
 {
+    [Fact]
+    public void SessionWaitingItsTurnIsDistinctFromTheRunningSequence()
+    {
+        var root = new SequenceRootContainer();
+        var session = new DirectorSessionContainer();
+        session.Options.EnableAcquisition = true;
+        root.Add(session);
+        Assert.StartsWith("Director Session has not started.", session.SessionStatus);
+        var notifications = new List<string?>();
+        session.PropertyChanged += (_, args) => notifications.Add(args.PropertyName);
+        root.Status = SequenceEntityStatus.RUNNING;
+        Assert.Contains(nameof(session.SessionStatus), notifications);
+        Assert.Contains("waiting for its turn", session.SessionStatus);
+        session.Status = SequenceEntityStatus.RUNNING;
+        Assert.Equal("Director Session is starting.", session.SessionStatus);
+    }
+
+    [Fact]
+    public void SequenceActivityUsesRunningInstructionsAndTheirContainers()
+    {
+        var sequence = new Mock<ISequenceMediator>();
+        sequence.SetupGet(s => s.Initialized).Returns(true);
+        sequence.Setup(s => s.IsAdvancedSequenceRunning()).Returns(true);
+        var setup = new SequentialContainer { Name = "Start Sequence" };
+        var cooling = new WaitForTimeSpan { Name = "Cool Camera", Status = SequenceEntityStatus.RUNNING };
+        var connecting = new WaitForTimeSpan { Name = "Connect Equipment", Status = SequenceEntityStatus.RUNNING };
+        var done = new WaitForTimeSpan { Name = "Finished", Status = SequenceEntityStatus.FINISHED };
+        setup.Add(cooling); setup.Add(connecting); setup.Add(done);
+        sequence.Setup(s => s.GetAdvancedSequencerCurrentRunningItems()).Returns([cooling, connecting, done]);
+        Assert.Equal("Start Sequence › Connect Equipment · Start Sequence › Cool Camera", NinaSequenceActivity.Read(sequence.Object)!.Operation);
+        sequence.Setup(s => s.IsAdvancedSequenceRunning()).Returns(false);
+        Assert.Equal(new NinaSequenceActivity(false, null), NinaSequenceActivity.Read(sequence.Object));
+    }
     [Fact]
     public async Task StartupFailureIsVisibleInTheSessionAndActivity()
     {
@@ -62,7 +96,10 @@ public sealed class DirectorSessionContainerTests
         Assert.True(DirectorAcquisition.CanAutomaticallyRecover(new IOException("Interrupted camera transfer")));
         var stop = new InvalidOperationException("Stop for night");
         stop.Data["DirectorPolicyStop"] = true;
-        foreach (var terminal in new Exception[] { stop, new OperationCanceledException(), new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired) })
+        foreach (var terminal in new Exception[] { stop, new OperationCanceledException(),
+            new CoordinatorIntakeException(CoordinatorIntakeFailure.AuthenticationRequired),
+            new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse),
+            new CoordinatorIntakeException(CoordinatorIntakeFailure.FutureProgramWindow) })
         {
             Assert.False(DirectorAcquisition.CanAutomaticallyRecover(terminal));
             Assert.False(DirectorAcquisition.CanAutomaticallyRecover(new AggregateException(new IOException(), terminal)));
@@ -77,7 +114,7 @@ public sealed class DirectorSessionContainerTests
         session.PropertyChanged += (_, args) => changes.Add(args.PropertyName);
         Assert.Contains("Acquisition is off", session.SessionStatus);
         session.Options.EnableAcquisition = true;
-        Assert.Contains("when you start the sequence", session.SessionStatus);
+        Assert.Contains("when this session starts", session.SessionStatus);
         Assert.DoesNotContain("not armed", session.SessionStatus);
         Assert.Contains(nameof(session.SessionStatus), changes);
 
@@ -85,7 +122,7 @@ public sealed class DirectorSessionContainerTests
         session.Options.LocalTargetScheduling = true;
         Assert.Equal("Equipment reported; awaiting operator review", session.SessionStatus);
         session.ResetProgress();
-        Assert.Contains("when you start the sequence", session.SessionStatus);
+        Assert.Contains("when this session starts", session.SessionStatus);
         session.Options.EnableAcquisition = false;
         Assert.Contains("Acquisition is off", session.SessionStatus);
     }

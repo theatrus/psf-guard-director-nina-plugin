@@ -10,6 +10,66 @@ namespace PsfGuard.Director.Tests;
 
 public sealed class CoordinatorWorkloadTests
 {
+    [Theory]
+    [InlineData(80, 0)]
+    [InlineData(80, 40)]
+    [InlineData(35000, 35000)]
+    public async Task AClockDifferenceKeepsTheSameWorkloadRequest(int admissionLead, int windowLead)
+    {
+        var root = Root();
+        var calls = 0;
+        try
+        {
+            using var client = new CoordinatorWorkloadClient(root, Endpoint, Binding, Client, Configuration,
+                _ => ValueTask.FromResult<string?>("test-token"), new Handler(async request =>
+                {
+                    calls++;
+                    using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+                    var id = body.RootElement.GetProperty("request_id").GetGuid();
+                    var grant = Grant(id);
+                    var snapshot = grant.Snapshot;
+                    if (windowLead > 0)
+                    {
+                        var start = Now + (ulong)windowLead;
+                        snapshot = snapshot with
+                        {
+                            IssuedAtMs = start,
+                            Program = snapshot.Program with { Assignment = snapshot.Program.Assignment with { ValidFromMs = start } }
+                        };
+                    }
+                    return Response(new
+                    {
+                        request_id = id,
+                        state = "issued",
+                        retry_after_seconds = 0,
+                        workload = new
+                        {
+                            allocation = grant with { AdmittedAtMs = Now + (ulong)admissionLead, Snapshot = snapshot },
+                            released = false,
+                            ledger_id = (Guid?)null,
+                            terminal_sequence = (int?)null
+                        }
+                    });
+                }), new AdvancingClock());
+            if (windowLead > 30000)
+            {
+                var failure = await Assert.ThrowsAsync<CoordinatorIntakeException>(() => client.RequestAsync());
+                Assert.Equal(CoordinatorIntakeFailure.FutureProgramWindow, failure.Failure);
+            }
+            else
+                Assert.Equal(Now + (ulong)admissionLead, (await client.RequestAsync()).Allocation!.Envelope.AdmittedAtMs);
+            Assert.Equal(1, calls);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private sealed class AdvancingClock : TimeProvider
+    {
+        private int read;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds(
+            (long)Now + (Interlocked.Increment(ref read) == 1 ? 0 : 100));
+    }
+
     [Fact]
     public async Task ArchivedCleanReleaseAcknowledgementCanIncludeRetirementHistory()
     {

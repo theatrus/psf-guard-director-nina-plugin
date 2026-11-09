@@ -279,7 +279,12 @@ public sealed partial class DirectorAcquisition
     internal static bool CanAutomaticallyRecover(Exception error) => error is AggregateException aggregate
         ? aggregate.Flatten().InnerExceptions.All(CanAutomaticallyRecover)
         : error is not OperationCanceledException
-            && error is not CoordinatorIntakeException { Failure: CoordinatorIntakeFailure.AuthenticationRequired or CoordinatorIntakeFailure.Forbidden or CoordinatorIntakeFailure.CredentialUnavailable }
+            && error is not CoordinatorIntakeException
+            {
+                Failure: CoordinatorIntakeFailure.AuthenticationRequired or CoordinatorIntakeFailure.Forbidden
+                    or CoordinatorIntakeFailure.CredentialUnavailable or CoordinatorIntakeFailure.MalformedResponse
+                    or CoordinatorIntakeFailure.FutureProgramWindow
+            }
             && !error.Data.Contains("DirectorPolicyStop");
 
     private static InvalidOperationException PolicyStop(string message)

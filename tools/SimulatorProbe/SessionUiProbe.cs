@@ -89,9 +89,18 @@ internal static class SessionUiProbe
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Initial session status did not explain disabled acquisition.");
                 acquisition.IsChecked = true;
                 Layout();
-                if (!status.Text.Contains("when you start the sequence") || !summary.Text.Contains("Director selects targets")
+                if (!status.Text.Contains("when this session starts") || !summary.Text.Contains("Director selects targets")
                     || !summary.Text.Contains("requests work from PSF Guard automatically") || summary.Text.Contains("Before New Target"))
                     throw new InvalidOperationException("Session header did not follow the bound acquisition and workload settings.");
+                var root = new NINA.Sequencer.Container.SequenceRootContainer();
+                var item = (NINA.Sequencer.SequenceItem.ISequenceItem)session;
+                root.Add(item);
+                root.Status = NINA.Core.Enum.SequenceEntityStatus.RUNNING;
+                Layout();
+                if (!status.Text.Contains("waiting for its turn"))
+                    throw new InvalidOperationException("Session header did not reflect the running sequence.");
+                root.Status = NINA.Core.Enum.SequenceEntityStatus.CREATED;
+                root.Remove(item);
                 acquisition.IsChecked = false;
                 Layout();
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Session header did not follow acquisition being turned off.");

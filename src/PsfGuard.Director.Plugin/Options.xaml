@@ -72,6 +72,8 @@
             <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,8,0,0">
                 <CheckBox Content="Send star-detection settings to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4" />
                 <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />
+                <CheckBox Content="Report sequence activity to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding ReportSequenceActivity}" Margin="0,8,0,4" />
+                <TextBlock Text="Show the active Advanced Sequencer instructions when a Director Session is not running." TextWrapping="Wrap" />
             </StackPanel>
             <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
                 <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />

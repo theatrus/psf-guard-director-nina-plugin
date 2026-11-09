@@ -64,7 +64,9 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         var w = reply.Workload;
         // Released history can be expired. Validate its immutable scope at issuance;
         // it is never returned as an equipment permit.
-        var allocation = Validate(w.Allocation, w.Released ? w.Allocation.AdmittedAtMs : Now());
+        var validationTime = w.Released ? w.Allocation.AdmittedAtMs
+            : await WaitForProgramWindowAsync(w.Allocation.Snapshot, token).ConfigureAwait(false);
+        var allocation = Validate(w.Allocation, validationTime);
         if (pending.AllocationFingerprint is not null && pending.AllocationFingerprint != allocation.Fingerprint)
             throw new CoordinatorIntakeException(CoordinatorIntakeFailure.IdentityMismatch);
         if (w.Released)
@@ -202,6 +204,27 @@ public sealed class CoordinatorWorkloadClient : IDisposable
         || pendingMode is "local_sequence_v1" or "local_sequence_v2" && executionMode == "local_sequence_v3";
     private void Advance(Pending p) => file.Write(p with { RequestId = Guid.NewGuid(), Submitted = false, AllocationFingerprint = null });
     private ulong Now() => checked((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds());
+
+    private async Task<ulong> WaitForProgramWindowAsync(CoordinatorProgramEnvelope snapshot, CancellationToken token)
+    {
+        var assignment = snapshot?.Program?.Assignment
+            ?? throw new CoordinatorIntakeException(CoordinatorIntakeFailure.MalformedResponse);
+        var now = Now();
+        var startsAt = Math.Max(snapshot!.IssuedAtMs, assignment.ValidFromMs);
+        if (startsAt <= now) return now;
+        var ahead = startsAt - now;
+        // A freshly compiled program may start just ahead of the local clock.
+        // Keep the same reply and wait for its window before granting access.
+        if (ahead <= 30000)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(ahead + 25), clock, token).ConfigureAwait(false);
+            now = Now();
+        }
+        if (startsAt > now)
+            throw new CoordinatorIntakeException(CoordinatorIntakeFailure.FutureProgramWindow);
+        return now;
+    }
+
     private CoordinatorAllocation Validate(CoordinatorAllocationEnvelope a, ulong now) => CoordinatorAllocation.Read(
         CoordinatorAllocation.Wrap(a), transport.Endpoint.AbsoluteUri, binding, clientId, configuration, now);
     private async Task<byte[]> Send(string operation, object body, CancellationToken token)

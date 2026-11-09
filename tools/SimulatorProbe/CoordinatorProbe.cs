@@ -52,6 +52,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
+    internal bool SequenceActivity { get; private set; }
     internal async Task<JsonElement> ReadRigStatusAsync(CancellationToken token)
     {
         var rows = await OperatorAsync(HttpMethod.Get, "rigs/status", null, token);
@@ -71,6 +72,27 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 && payload.GetProperty("goal_id").ValueKind == JsonValueKind.String
                 && payload.GetProperty("pointing").GetProperty("ra_degrees").GetDouble() is >= 0 and < 360
                 && payload.GetProperty("fresh_for_ms").GetInt32() == 15000 && !row.GetProperty("status_stale").GetBoolean()) return;
+            await Task.Delay(250, deadline.Token);
+        }
+    }
+
+    internal async Task VerifySequenceActivityAsync(string instruction, CancellationToken token)
+    {
+        var since = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            var row = await ReadRigStatusAsync(deadline.Token);
+            var status = row.GetProperty("status");
+            if (status.ValueKind == JsonValueKind.Object && status.GetProperty("reported_at_ms").GetInt64() >= since)
+            {
+                var payload = status.GetProperty("payload");
+                if (payload.GetProperty("phase").GetString() == "N.I.N.A. sequence running"
+                    && payload.GetProperty("allocation_id").ValueKind == JsonValueKind.Null
+                    && payload.GetProperty("operation").GetString()?.Contains(instruction, StringComparison.Ordinal) == true
+                    && !row.GetProperty("status_stale").GetBoolean()) return;
+            }
             await Task.Delay(250, deadline.Token);
         }
     }
@@ -179,6 +201,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
             probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
             probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
+            probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
             return probe;
         }
         catch

@@ -27,15 +27,27 @@ public sealed class CoordinatorSessionReporter : IDisposable
 
     public async Task ReportAsync(CoordinatorAllocation allocation, string sessionId, CoordinatorLiveStatus status, CancellationToken token)
     {
+        if (allocation.Envelope.CoordinatorInstanceId != binding.CoordinatorInstanceId || allocation.Envelope.CatalogId != binding.CatalogId
+            || allocation.Envelope.RigId != binding.RigId || allocation.Envelope.ProfileId != binding.ProfileId)
+            throw new ArgumentException("Status must match the allocation binding.");
+        await SendAsync(sessionId, status, DateTimeOffset.UtcNow, allocation.Envelope.AllocationId,
+            allocation.Envelope.PreviewRevision, token).ConfigureAwait(false);
+    }
+
+    internal Task ReportSequenceAsync(string sessionId, bool running, string? operation, DateTimeOffset observedAt, CancellationToken token) =>
+        SendAsync(sessionId, new CoordinatorLiveStatus(running ? "N.I.N.A. sequence running" : "N.I.N.A. sequence stopped",
+            "", "", Operation: operation), observedAt, null, null, token);
+
+    private async Task SendAsync(string sessionId, CoordinatorLiveStatus status, DateTimeOffset observedAt,
+        Guid? allocationId, string? programRevision, CancellationToken token)
+    {
         ArgumentNullException.ThrowIfNull(status);
         if (status.FreshForMs is < 15000 or > 600000 || status.QueueDepth is < 0
             || status.Pointing is { } p && (!double.IsFinite(p.RaDegrees) || p.RaDegrees is < 0 or >= 360
                 || !double.IsFinite(p.DecDegrees) || p.DecDegrees is < -90 or > 90))
             throw new ArgumentException("Invalid live status observation.");
-        if (allocation.Envelope.CoordinatorInstanceId != binding.CoordinatorInstanceId || allocation.Envelope.CatalogId != binding.CatalogId
-            || allocation.Envelope.RigId != binding.RigId || allocation.Envelope.ProfileId != binding.ProfileId
-            || !Guid.TryParseExact(sessionId, "D", out var id) || id == Guid.Empty)
-            throw new ArgumentException("Status must match the allocation and session binding.");
+        if (!Guid.TryParseExact(sessionId, "D", out var id) || id == Guid.Empty)
+            throw new ArgumentException("Status requires a valid session ID.");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(10));
         try
@@ -45,13 +57,13 @@ public sealed class CoordinatorSessionReporter : IDisposable
                 coordinator_instance_id = binding.CoordinatorInstanceId,
                 catalog_id = binding.CatalogId,
                 session_id = sessionId,
-                reported_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                program_revision = allocation.Envelope.PreviewRevision,
+                reported_at_ms = observedAt.ToUnixTimeMilliseconds(),
+                program_revision = programRevision,
                 status = new
                 {
                     phase = status.Phase,
                     target_name = status.TargetName,
-                    allocation_id = allocation.Envelope.AllocationId,
+                    allocation_id = allocationId,
                     safety = status.Safety,
                     operation = status.Operation,
                     operation_started_ms = status.OperationStartedMs,
@@ -73,7 +85,7 @@ public sealed class CoordinatorSessionReporter : IDisposable
             var ack = root.GetProperty("data").Deserialize<Acknowledgement>(CoordinatorProgramContract.Options) ?? throw new InvalidDataException();
             if (!ack.Accepted || ack.ReceivedAtMs == 0
                 || ack.ProgramRevision is not null && (ack.ProgramRevision.Length != 64 || !ack.ProgramRevision.All(char.IsAsciiHexDigitLower))
-                || ack.ProgramChanged != (ack.ProgramRevision is not null && ack.ProgramRevision != allocation.Envelope.PreviewRevision))
+                || ack.ProgramChanged != (ack.ProgramRevision is not null && ack.ProgramRevision != programRevision))
                 throw new CoordinatorIntakeException(CoordinatorIntakeFailure.InvalidAcknowledgement);
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
