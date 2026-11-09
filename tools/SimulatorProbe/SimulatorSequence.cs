@@ -749,7 +749,7 @@ public sealed class SimulatorSequence : SequenceItem
                     {
                         const string targetWait = "Waiting for a target to become observable";
                         using var refreshDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                        refreshDeadline.CancelAfter(TimeSpan.FromSeconds(150));
+                        refreshDeadline.CancelAfter(TimeSpan.FromSeconds(210));
                         while (!executing.IsCompleted && (sessionContainer.Display.Phase != targetWait || !telescope.GetInfo().AtPark))
                             await Task.Delay(100, refreshDeadline.Token);
                         var heldLedger = service.LastLedger;
