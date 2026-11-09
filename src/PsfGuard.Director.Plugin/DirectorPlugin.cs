@@ -90,6 +90,8 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
             {
                 starDetectionConnection = connection;
                 starDetection.RequestSend();
+                // Pairing or a server change: ask again whether PSF Guard takes uploads.
+                CheckUploadState();
             }
         }
         finally { refreshingConnections = false; }
@@ -133,6 +135,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         starDetection.Enabled = SendStarDetectionSettings;
         starDetection.Start();
         StartSequenceReporting();
+        StartUploads();
         Refresh();
     }
 
@@ -140,6 +143,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
     {
         initialized = false;
         await StopSequenceReportingAsync();
+        await StopUploadsAsync();
         SetEquipmentSettingsVisible(false);
         checkInCancellation?.Cancel();
         if (checkInTask is not null) { try { await checkInTask; } catch (Exception error) { Logger.Error(error); } }
@@ -206,6 +210,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         WatchStarDetectionSettings(profiles.ActiveProfile);
         starDetection.Enabled = SendStarDetectionSettings;
         starDetection.RequestSend();
+        CheckUploadState();
         commandError = null;
         Refresh();
         try { await runtime.StopAsync(); }
@@ -299,6 +304,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CheckInStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReportSequenceActivity)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadCapturedFrames)));
         start.Refresh();
         stop.Refresh();
         checkIn.Refresh();

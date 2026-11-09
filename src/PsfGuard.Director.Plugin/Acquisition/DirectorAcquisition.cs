@@ -747,8 +747,15 @@ public sealed partial class DirectorAcquisition
             var hooks = new NinaSessionHooks(container, TimeProvider.System, native is null ? null : native.ConfigureTargetSetup);
             native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
+            // Only this adapter's own saved science lights reach the upload queue.
+            var uploadDestination = new DirectorUploadDestination(endpoint, profile, pairing.Binding.RigId, connection.AllowInsecureHttp);
+            void QueueUpload(CaptureEvidence saved)
+            {
+                if (settings.GetValueBoolean(DirectorImageUploads.SettingKey, true))
+                    DirectorImageUploads.Queue.Offer(uploadDestination, saved.SavedPath!, saved.Intent.CaptureId.ToString("D"));
+            }
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),
-                TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System)
+                TimeSpan.FromSeconds(options.SaveTimeoutSeconds), TimeProvider.System, QueueUpload)
             { CollectQuality = options.Quality != DirectorQualityPolicy.Off };
             var qualityStore = options.Quality == DirectorQualityPolicy.Off ? null : new QualityReferenceStore(Path.Combine(recoveryDirectory, "quality"), night, runtime);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);

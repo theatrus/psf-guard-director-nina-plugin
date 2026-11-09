@@ -888,6 +888,55 @@ It uses the same format as PSF Guard Sync, and the server stores both the same
 way. Hocus Focus's other settings, such as save paths and autofocus history,
 are not sent.
 
+### Image uploads
+
+After NINA saves a light that a Director Session captured, Director uploads the
+file to the paired PSF Guard database. PSF Guard stores it as it stores a PSF
+Guard Sync upload: the same receive folder, folder layout, header import and
+calibration matching. The database's **Image uploads** setting, under Rig setup
+› Plugins in PSF Guard, controls both plugins. Director does not upload flats,
+darks, quality probes or frames from other instructions. When the Sync
+plugin's upload instruction also runs, the server stores the file once and
+answers the second upload as already present.
+
+**Upload captured frames to PSF Guard** in Director's plugin settings controls
+this for the current NINA profile. It is on by default. When it is off, Director
+queues no new frames; frames already queued still upload.
+
+Each saved frame becomes a small job file below
+`%LOCALAPPDATA%\PSFGuardDirector\uploads`. The job names the saved file and
+holds no copy of it, so the queue survives a restart. One background worker
+uploads one frame at a time to
+`POST /api/director/v1/rigs/{rig}/images` with the pairing's credentials and
+`X-Content-SHA256`. It never runs on NINA's UI thread and never delays a
+capture, a check-in, the program pull or the sequence.
+
+Before uploading, Director asks `GET /api/director/v1/rigs/{rig}/uploads`
+whether the database takes uploads, at most once a minute. It also asks when
+NINA starts and after pairing. The settings page shows the answer, the number of
+queued frames and the number PSF Guard refused.
+
+- Uploads are off: queued frames wait. Director also skips new frames while
+  its latest answer, at most a minute old, says uploads are off.
+- An older PSF Guard (HTTP 403, 404 or 405, or an answer without
+  `data.enabled`): Director uploads nothing and queues nothing. It logs this
+  once and asks again only after pairing, a server or profile change, or a
+  NINA restart. Frames already queued stay on disk.
+- PSF Guard refuses a frame (HTTP 400, 410 or 413, a file name it would refuse,
+  or a file larger than `max_bytes`): Director moves the job to the `refused`
+  folder with the reason and does not retry it. **Retry refused uploads**
+  queues those frames again; **Forget refused uploads** removes the jobs. The
+  image files stay on disk.
+- HTTP 403 or 401 on an upload: Director keeps the frame and stops sending
+  until it reads the upload state again a minute later.
+- A timeout, a lost connection, HTTP 409 or a server error: Director keeps the
+  frame and retries after 5 seconds, doubling the wait up to 10 minutes. It logs
+  the first such failure.
+- A file gone from disk: Director drops its job and logs it.
+
+The upload sends the whole saved file, headers included, and its file name
+without folders.
+
 ### Capture checkpoint delivery
 
 `CoordinatorCheckpointClient.DeliverAsync` reads the already-open runtime's

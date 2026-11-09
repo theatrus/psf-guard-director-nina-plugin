@@ -111,6 +111,8 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(probe ? CapturePhase.ProbeMeasured : CapturePhase.Saved, evidence.Phase);
         Assert.Equal(probe, evidence.Intent.QualityProbe);
         Assert.Equal(evidence, f.Read());
+        // Only a saved science light is offered for upload; a probe never is.
+        Assert.Equal(probe ? [] : [evidence], f.SavedForUpload);
         if (probe)
         {
             Assert.Null(evidence.SavedPath);
@@ -147,6 +149,7 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(result, f.Read());
         Assert.Equal(string.Empty, f.Progress.Messages.Last());
         f.AssertDetached();
+        Assert.Equal([result], f.SavedForUpload);
     }
 
     [Fact]
@@ -302,6 +305,7 @@ public sealed partial class NinaCaptureTests
         Assert.Equal(CapturePhase.Failed, f.Read().Phase);
         Assert.Null(f.Read().SavedPath);
         f.AssertDetached();
+        Assert.Empty(f.SavedForUpload);
     }
 
     [Fact]
@@ -805,6 +809,8 @@ public sealed partial class NinaCaptureTests
         public NinaEquipmentSnapshot Equipment { get; private set; } = null!;
         public ImageMetaData Metadata { get; } = new();
         public TaskCompletionSource Enqueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>The saved frames the adapter offered for upload.</summary>
+        public List<CaptureEvidence> SavedForUpload { get; } = [];
         public IImageData? EnqueuedImage { get; private set; }
         private readonly NinaCaptureAdapter adapter;
 
@@ -874,7 +880,7 @@ public sealed partial class NinaCaptureTests
                     Enqueued.TrySetResult();
                 }).Returns(Task.CompletedTask);
             adapter = new(profiles.Object, camera.Object, Imaging.Object, Saves.Object, Mock.Of<IImageHistoryVM>(),
-                Root, timeout ?? TimeSpan.FromSeconds(5), Clock);
+                Root, timeout ?? TimeSpan.FromSeconds(5), Clock, SavedForUpload.Add);
             BoundCapture = new(Equipment, camera.Object, wheel.Object, adapter);
         }
 

@@ -18,7 +18,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // supply fresh core authorization before this adapter can be wired to dispatch.
 internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediator camera,
     IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
-    string journalRoot, TimeSpan saveTimeout, TimeProvider clock) : IDisposable
+    string journalRoot, TimeSpan saveTimeout, TimeProvider clock, Action<CaptureEvidence>? onSaved = null) : IDisposable
 {
     internal const string CaptureIdHeader = "PGCAPID";
     private readonly SemaphoreSlim captureGate = new(1, 1);
@@ -65,6 +65,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                         ProcessingAndSaveMs = clock.GetElapsedTime(interruptedDownloaded, saved.Timestamp).TotalMilliseconds,
                         TotalMs = clock.GetElapsedTime(interruptedStarted, saved.Timestamp).TotalMilliseconds
                     });
+                    NotifySaved(journal.Evidence);
                 }
                 catch (ImageSaveFailureException)
                 {
@@ -264,6 +265,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                 });
                 completed = journal.Evidence;
                 LastQuality = quality;
+                NotifySaved(completed);
                 return completed;
             }
             finally
@@ -327,6 +329,15 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         DetachSaveObservers();
         pendingSave = null;
         interrupted = null;
+    }
+
+    // Called once N.I.N.A. has saved one of Director's own science lights.
+    // Quality probes never reach Saved. A listener can never fail the capture.
+    private void NotifySaved(CaptureEvidence evidence)
+    {
+        if (onSaved is null || evidence.Phase != CapturePhase.Saved || evidence.Intent.QualityProbe || evidence.SavedPath is null) return;
+        try { onSaved(evidence); }
+        catch (Exception error) { System.Diagnostics.Trace.TraceError("Director saved-image listener failed: {0}", error.GetType().Name); }
     }
 
     private static void ObserveFault(Task task) => _ = task.ContinueWith(

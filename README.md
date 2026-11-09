@@ -178,9 +178,11 @@ and calibration provenance, with one reporting owner per rig/share. Remote
 verdicts would appear alongside local grades, not overwrite them. Raw captures
 would not be labeled calibrated without processing evidence.
 
-The current API draft does not define image upload routes. File submission and
-corrections to previously credited data need further protocol work; this
-roadmap does not promise those features today.
+A paired Director uploads the lights its sessions capture to the paired PSF
+Guard database when that database has **Image uploads** on; see
+[Image uploads](docs/native-capture.md#image-uploads). Corrections to previously
+credited data need further protocol work; this roadmap does not promise that
+feature today.
 
 ## Documentation and development
 
