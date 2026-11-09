@@ -44,7 +44,9 @@ public enum DirectorUploadOutcome
     Retry,
 }
 
-public sealed record DirectorUploadAnswer(DirectorUploadOutcome Outcome, string Detail, bool AlreadyPresent = false);
+/// <param name="RetryAfter">The server's Retry-After, for an answer to retry.</param>
+public sealed record DirectorUploadAnswer(DirectorUploadOutcome Outcome, string Detail, bool AlreadyPresent = false,
+    TimeSpan? RetryAfter = null);
 
 /// <summary>The PSF Guard calls the upload queue makes for one destination.</summary>
 public interface IDirectorUploadServer : IDisposable
@@ -62,10 +64,9 @@ public static class DirectorUploadPolicy
     public static DirectorUploadOutcome ForStatus(HttpStatusCode status) => status switch
     {
         HttpStatusCode.OK => DirectorUploadOutcome.Stored,
-        HttpStatusCode.BadRequest or HttpStatusCode.Gone or HttpStatusCode.RequestEntityTooLarge => DirectorUploadOutcome.Refused,
-        // The server also answers 409 while another import holds the database,
-        // which passes. Retry it with backoff rather than refusing the frame.
-        HttpStatusCode.Conflict => DirectorUploadOutcome.Retry,
+        // A busy database answers 503 with Retry-After, so 409 is always about this file.
+        HttpStatusCode.BadRequest or HttpStatusCode.Conflict or HttpStatusCode.Gone
+            or HttpStatusCode.RequestEntityTooLarge => DirectorUploadOutcome.Refused,
         HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized => DirectorUploadOutcome.Paused,
         HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed => DirectorUploadOutcome.Unsupported,
         _ => DirectorUploadOutcome.Retry,
@@ -86,9 +87,15 @@ public static class DirectorUploadPolicy
         return null;
     }
 
-    /// <summary>The wait before retry number <paramref name="attempts"/>: 5 seconds, doubling to 10 minutes.</summary>
-    public static TimeSpan RetryDelay(int attempts)
+    /// <summary>
+    /// The wait before retry number <paramref name="attempts"/>: the server's
+    /// Retry-After when it sent one, kept between 1 second and 10 minutes;
+    /// otherwise 5 seconds, doubling to 10 minutes.
+    /// </summary>
+    public static TimeSpan RetryDelay(int attempts, TimeSpan? retryAfter = null)
     {
+        if (retryAfter is { } requested)
+            return TimeSpan.FromSeconds(Math.Clamp(requested.TotalSeconds, 1, 600));
         var seconds = 5 * Math.Pow(2, Math.Clamp(attempts - 1, 0, 16));
         return TimeSpan.FromSeconds(Math.Min(seconds, 600));
     }
@@ -198,7 +205,8 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
         var outcome = DirectorUploadPolicy.ForStatus(answer.Status);
         var message = ErrorText(answer);
         if (outcome != DirectorUploadOutcome.Stored)
-            return new(outcome, message is null ? $"PSF Guard answered HTTP {(int)answer.Status}." : $"PSF Guard answered HTTP {(int)answer.Status}: {message}");
+            return new(outcome, message is null ? $"PSF Guard answered HTTP {(int)answer.Status}." : $"PSF Guard answered HTTP {(int)answer.Status}: {message}",
+                RetryAfter: outcome == DirectorUploadOutcome.Retry ? answer.RetryAfter : null);
         return new(DirectorUploadOutcome.Stored, "Stored", AlreadyPresent(answer));
     }
 

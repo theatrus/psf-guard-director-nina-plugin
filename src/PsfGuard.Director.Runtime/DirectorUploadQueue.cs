@@ -39,8 +39,8 @@ public sealed record DirectorUploadSummary(int Queued, int Refused, DirectorUplo
 /// or no <c>data.enabled</c>) gets no upload and no new jobs until
 /// <see cref="RequestRecheck"/> or a restart; its queued jobs stay on disk.
 /// A refused frame moves to the <c>refused</c> folder with the reason. A file
-/// gone from disk drops its job. Every other failure retries after 5 seconds,
-/// doubling to 10 minutes.
+/// gone from disk drops its job. Every other failure retries after the
+/// server's Retry-After, or else after 5 seconds, doubling to 10 minutes.
 /// </para>
 /// <para>Nothing here throws to a caller except cancellation and disposal.</para>
 /// </remarks>
@@ -329,7 +329,7 @@ public sealed class DirectorUploadQueue : IAsyncDisposable
                 default:
                     job.Attempts = job.Attempts == int.MaxValue ? job.Attempts : job.Attempts + 1;
                     job.LastError = answer.Detail;
-                    var delay = DirectorUploadPolicy.RetryDelay(job.Attempts);
+                    var delay = DirectorUploadPolicy.RetryDelay(job.Attempts, answer.RetryAfter);
                     job.NextAttemptAt = time.GetUtcNow() + delay;
                     await gate.WaitAsync(token).ConfigureAwait(false);
                     try { await WriteAsync(job, file, token).ConfigureAwait(false); }

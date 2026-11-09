@@ -4,7 +4,7 @@ using System.Net.Http.Headers;
 namespace PsfGuard.Director.Runtime;
 
 /// <summary>A response whose status the caller judges; <see cref="Json"/> is false for any other body or a cut one.</summary>
-internal sealed record CoordinatorExchange(HttpStatusCode Status, byte[] Bytes, bool Json);
+internal sealed record CoordinatorExchange(HttpStatusCode Status, byte[] Bytes, bool Json, TimeSpan? RetryAfter = null);
 
 internal sealed class CoordinatorTransport : IDisposable
 {
@@ -135,7 +135,13 @@ internal sealed class CoordinatorTransport : IDisposable
                 if (truncated) break;
             }
             token.ThrowIfCancellationRequested();
-            return new(response.StatusCode, bytes.ToArray(), json && !truncated);
+            TimeSpan? retryAfter = response.Headers.RetryAfter switch
+            {
+                { Delta: { } delta } => delta,
+                { Date: { } date } => date - clock.GetUtcNow(),
+                _ => null
+            };
+            return new(response.StatusCode, bytes.ToArray(), json && !truncated, retryAfter);
         }
         catch (Exception error) when (error is HttpRequestException or IOException)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Transport); }

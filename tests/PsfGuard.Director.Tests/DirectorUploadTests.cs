@@ -104,7 +104,7 @@ public sealed class DirectorUploadClientTests : IDisposable
     [InlineData(HttpStatusCode.BadRequest, DirectorUploadOutcome.Refused)]
     [InlineData(HttpStatusCode.Gone, DirectorUploadOutcome.Refused)]
     [InlineData(HttpStatusCode.RequestEntityTooLarge, DirectorUploadOutcome.Refused)]
-    [InlineData(HttpStatusCode.Conflict, DirectorUploadOutcome.Retry)]
+    [InlineData(HttpStatusCode.Conflict, DirectorUploadOutcome.Refused)]
     [InlineData(HttpStatusCode.Forbidden, DirectorUploadOutcome.Paused)]
     [InlineData(HttpStatusCode.Unauthorized, DirectorUploadOutcome.Paused)]
     [InlineData(HttpStatusCode.NotFound, DirectorUploadOutcome.Unsupported)]
@@ -122,6 +122,43 @@ public sealed class DirectorUploadClientTests : IDisposable
 
         Assert.Equal(expected, answer.Outcome);
         Assert.Contains($"HTTP {(int)status}: frame was removed on purpose", answer.Detail);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task ABusyServersRetryAfterIsKept(HttpStatusCode status)
+    {
+        var path = Path.Combine(root, "frame.fits");
+        await File.WriteAllTextAsync(path, "x");
+        using var delta = Client(_ =>
+        {
+            var response = Json(status, """{"success":false,"data":null,"error":"another image import is already running for this database"}""");
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+            return Task.FromResult(response);
+        });
+        var answer = await delta.UploadAsync(path, default);
+        Assert.Equal(DirectorUploadOutcome.Retry, answer.Outcome);
+        Assert.Equal(TimeSpan.FromSeconds(30), answer.RetryAfter);
+
+        using var none = Client(_ => Task.FromResult(Json(status, "")));
+        Assert.Null((await none.UploadAsync(path, default)).RetryAfter);
+    }
+
+    [Fact]
+    public async Task ARefusalCarriesNoRetryAfter()
+    {
+        var path = Path.Combine(root, "frame.fits");
+        await File.WriteAllTextAsync(path, "x");
+        using var client = Client(_ =>
+        {
+            var response = Json(HttpStatusCode.Conflict, """{"success":false,"data":null,"error":"frame.fits already exists in the receive directory with different content"}""");
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+            return Task.FromResult(response);
+        });
+        var answer = await client.UploadAsync(path, default);
+        Assert.Equal(DirectorUploadOutcome.Refused, answer.Outcome);
+        Assert.Null(answer.RetryAfter);
     }
 
     [Fact]
@@ -167,6 +204,9 @@ public sealed class DirectorUploadClientTests : IDisposable
         Assert.Equal(TimeSpan.FromSeconds(320), DirectorUploadPolicy.RetryDelay(7));
         Assert.Equal(TimeSpan.FromMinutes(10), DirectorUploadPolicy.RetryDelay(8));
         Assert.Equal(TimeSpan.FromMinutes(10), DirectorUploadPolicy.RetryDelay(int.MaxValue));
+        Assert.Equal(TimeSpan.FromSeconds(30), DirectorUploadPolicy.RetryDelay(9, TimeSpan.FromSeconds(30)));
+        Assert.Equal(TimeSpan.FromSeconds(1), DirectorUploadPolicy.RetryDelay(1, TimeSpan.FromSeconds(-5)));
+        Assert.Equal(TimeSpan.FromMinutes(10), DirectorUploadPolicy.RetryDelay(1, TimeSpan.FromHours(3)));
     }
 }
 
@@ -392,6 +432,24 @@ public sealed class DirectorUploadQueueTests : IDisposable
         Assert.Equal(0, Jobs());
         // Once for each queue instance, that is once per N.I.N.A. session.
         Assert.Equal(2, log.Count(line => line.Contains("tries again")));
+    }
+
+    [Fact]
+    public async Task ABusyServerIsAskedAgainWhenItsRetryAfterEnds()
+    {
+        server.Answers.Enqueue(new(DirectorUploadOutcome.Retry, "PSF Guard answered HTTP 503", RetryAfter: TimeSpan.FromSeconds(20)));
+        await using var queue = Queue();
+        await queue.EnqueueAsync(Destination, Frame(), null, default);
+
+        await queue.ProcessDueJobsAsync(default);
+        clock.Advance(TimeSpan.FromSeconds(19));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(server.Uploads);
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(0, Jobs());
     }
 
     [Fact]

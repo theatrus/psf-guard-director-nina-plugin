@@ -922,16 +922,18 @@ queued frames and the number PSF Guard refused.
   `data.enabled`): Director uploads nothing and queues nothing. It logs this
   once and asks again only after pairing, a server or profile change, or a
   NINA restart. Frames already queued stay on disk.
-- PSF Guard refuses a frame (HTTP 400, 410 or 413, a file name it would refuse,
-  or a file larger than `max_bytes`): Director moves the job to the `refused`
+- PSF Guard refuses a frame (HTTP 400, 409, 410 or 413, a file name it would
+  refuse, or a file larger than `max_bytes`): Director moves the job to the `refused`
   folder with the reason and does not retry it. **Retry refused uploads**
   queues those frames again; **Forget refused uploads** removes the jobs. The
   image files stay on disk.
 - HTTP 403 or 401 on an upload: Director keeps the frame and stops sending
   until it reads the upload state again a minute later.
-- A timeout, a lost connection, HTTP 409 or a server error: Director keeps the
-  frame and retries after 5 seconds, doubling the wait up to 10 minutes. It logs
-  the first such failure.
+- A timeout, a lost connection, HTTP 429 or a server error: Director keeps the
+  frame and retries. It waits as long as the server's `Retry-After` asks, kept
+  between 1 second and 10 minutes, or else 5 seconds, doubling up to 10
+  minutes. PSF Guard answers 503 with `Retry-After` while another upload
+  imports into the same database. Director logs the first such failure.
 - A file gone from disk: Director drops its job and logs it.
 
 The upload sends the whole saved file, headers included, and its file name
