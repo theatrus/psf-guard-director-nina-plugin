@@ -102,6 +102,23 @@ internal static class SessionUiProbe
                 var summary = Descendants(host).OfType<TextBlock>().Single(text =>
                     BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "Readiness");
                 var acquisition = Toggle("Enable acquisition");
+                var calibration = Toggle("Recalibrate before guiding");
+                if (!Descendants(host).OfType<TextBlock>().Any(text => text.Text == "Recalibrate before guiding"))
+                    throw new InvalidOperationException("Guide calibration needs a visible label in the NINA toggle theme.");
+                var guiding = Descendants(host).OfType<ComboBox>().Single(control =>
+                    System.Windows.Automation.AutomationProperties.GetName(control) == "Guiding");
+                var originalGuiding = guiding.SelectedValue;
+                calibration.IsChecked = true;
+                Layout();
+                var options = exportedType.GetProperty("Options")!.GetValue(session)!;
+                if (!(bool)options.GetType().GetProperty("ForceGuideCalibration")!.GetValue(options)! || !calibration.IsEnabled)
+                    throw new InvalidOperationException("Guide calibration checkbox did not update the session settings.");
+                guiding.SelectedValue = Enum.Parse(originalGuiding.GetType(), "Sequence");
+                Layout();
+                if (calibration.IsEnabled) throw new InvalidOperationException("Director calibration remained enabled with custom guiding instructions.");
+                guiding.SelectedValue = originalGuiding;
+                calibration.IsChecked = false;
+                Layout();
                 if (Descendants(host).OfType<CheckBox>().Any(control =>
                     System.Windows.Automation.AutomationProperties.GetName(control) is "Local target scheduling" or "Automatic workloads" or "I will supervise this attended run"))
                     throw new InvalidOperationException("Obsolete Director controls are still present in the session template.");
@@ -109,7 +126,7 @@ internal static class SessionUiProbe
                 acquisition.IsChecked = true;
                 Layout();
                 if (!status.Text.Contains("when this session starts") || !summary.Text.Contains("Director selects targets")
-                    || !summary.Text.Contains("requests work from PSF Guard automatically") || summary.Text.Contains("Before New Target"))
+                    || !summary.Text.Contains("gets the latest plans from PSF Guard") || summary.Text.Contains("Before New Target"))
                     throw new InvalidOperationException("Session header did not follow the bound acquisition and workload settings.");
                 var root = new NINA.Sequencer.Container.SequenceRootContainer();
                 var item = (NINA.Sequencer.SequenceItem.ISequenceItem)session;
@@ -142,7 +159,7 @@ internal static class SessionUiProbe
                 if (tab == 0)
                 {
                     if (controls.OfType<ComboBox>().Count() != 14 || controls.OfType<TextBox>().Count() != 19
-                        || controls.OfType<CheckBox>().Count() != 8)
+                        || controls.OfType<CheckBox>().Count() != 9)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())
                         if (combo.SelectedItem is null) throw new InvalidOperationException("Director policy selection is empty.");

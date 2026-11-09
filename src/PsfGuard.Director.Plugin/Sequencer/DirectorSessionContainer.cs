@@ -188,9 +188,9 @@ public sealed class DirectorSessionContainer : SequentialContainer
         }
     }
     public string Readiness =>
-        (Options.LocalTargetScheduling ? "Director selects targets from the workload." : "Each workload uses one prepared target.") + " " +
-        (Options.AutomaticWorkloads ? "Director requests work from PSF Guard automatically when this session starts." :
-            "Assign a workload in PSF Guard before starting the sequence.");
+        (Options.LocalTargetScheduling ? "Director selects targets and filters from your active plans." : "Director uses one prepared target at a time.") + " " +
+        (Options.AutomaticWorkloads ? "Director gets the latest plans from PSF Guard when this session starts." :
+            "Assign targets in PSF Guard before starting the sequence.");
     public IEnumerable<string> ConfigurationIssues => Issues.Where(issue => issue != AcquisitionGate);
 
     private bool CanReportEquipment()
@@ -217,6 +217,8 @@ public sealed class DirectorSessionContainer : SequentialContainer
         UpdateDisplay(_ => display);
     }
 
+    internal event Action<DirectorSessionDisplay>? DisplayChanged;
+
     internal void UpdateDisplay(Func<DirectorSessionDisplay, DirectorSessionDisplay> update)
     {
         ArgumentNullException.ThrowIfNull(update);
@@ -224,6 +226,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
         {
             Display = update(Display) ?? throw new InvalidOperationException("Missing Director status.");
             if (Display.Operation.Length == 0) activeActions.Clear();
+            DisplayChanged?.Invoke(Display);
         }
         RaisePropertyChanged(nameof(Display));
         RaisePropertyChanged(nameof(SessionStatus));
@@ -313,7 +316,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
                 "Director could not read the PSF Guard workload reply. Check the N.I.N.A. log before retrying.",
             CoordinatorIntakeException failure =>
                 $"PSF Guard could not authorize the work ({failure.Failure}). Check the rig's Director setup in PSF Guard.",
-            _ => primary.Message
+            _ => DirectorSessionText.Failure(primary)
         };
         UpdateDisplay(display => display with { Phase = $"Session stopped. {detail}", Operation = "", WaitReason = detail });
         RecordAction("", "Session", $"Failed. {detail}");

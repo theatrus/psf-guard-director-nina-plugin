@@ -25,6 +25,84 @@ public sealed class DirectorEquipmentReportingCollection;
 [Collection("Director equipment reporting")]
 public sealed class NinaNativeImagingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CalibrationSettingReachesNativeGuidingAndSurvivesCloning(bool force)
+    {
+        var f = new Fixture();
+        f.Options.Focus = DirectorOperationOwner.Sequence;
+        f.Options.ForceGuideCalibration = force;
+        f.GuiderInfo.CanClearCalibration = true;
+        var device = new Mock<NINA.Equipment.Interfaces.IGuider>();
+        device.SetupGet(g => g.Connected).Returns(true);
+        device.SetupGet(g => g.Id).Returns("guider");
+        f.Guider.Setup(g => g.GetDevice()).Returns(device.Object);
+        var stopped = false;
+        f.Guider.Setup(g => g.StopGuiding(It.IsAny<CancellationToken>())).ReturnsAsync(() => stopped = true);
+        f.Guider.Setup(g => g.StartGuiding(force, It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => { Assert.Equal(force, stopped); return true; });
+        f.Factory.Setup(x => x.GetItem<StartGuiding>()).Returns(() => new StartGuiding(f.Guider.Object));
+        using var native = f.Create();
+        native.CheckEquipment();
+        var slots = new NinaInstructionSlots();
+        native.ConfigureTargetSetup(slots);
+        var item = (SequenceItem)slots.Clone().BeforeNewTarget.Items[1];
+        await item.Execute(new Progress<ApplicationStatus>(), default);
+        f.Guider.Verify(g => g.StopGuiding(It.IsAny<CancellationToken>()), force ? Times.Once() : Times.Never());
+        f.Guider.Verify(g => g.StartGuiding(force, It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(force, Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>(
+            Newtonsoft.Json.JsonConvert.SerializeObject(f.Options))!.Clone().ForceGuideCalibration);
+    }
+
+    [Fact]
+    public void CustomGuidingKeepsCalibrationInstructionsWithoutAddingAnotherStart()
+    {
+        var f = new Fixture();
+        f.Options.Focus = f.Options.Guiding = DirectorOperationOwner.Sequence;
+        f.Options.ForceGuideCalibration = true; // A saved Director setting cannot override the user's instruction.
+        var session = new DirectorSessionContainer();
+        session.Options.Guiding = DirectorOperationOwner.Sequence;
+        session.BeforeNewTarget.Add(new StartGuiding(f.Guider.Object) { ForceCalibration = true });
+        NinaNativeImaging.ValidateOwnership(session, session.Options);
+        using var native = f.Create();
+        native.ConfigureTargetSetup(session.Slots);
+        var start = Assert.IsType<StartGuiding>(Assert.Single(session.Slots.Clone().BeforeNewTarget.Items));
+        Assert.True(start.ForceCalibration);
+        f.Factory.Verify(x => x.GetItem<StartGuiding>(), Times.Never);
+    }
+
+    [Fact]
+    public void RecalibrationRequiresAGuiderThatCanClearCalibration()
+    {
+        var f = new Fixture();
+        f.Options.ForceGuideCalibration = true;
+        using var native = f.Create();
+        Assert.Contains("cannot reset calibration", Assert.Throws<InvalidOperationException>(native.CheckEquipment).Message);
+    }
+
+    [Fact]
+    public async Task FailedStopCannotProceedToCalibrationOrGuideStart()
+    {
+        var f = new Fixture();
+        f.Options.Focus = DirectorOperationOwner.Sequence;
+        f.Options.ForceGuideCalibration = true;
+        f.GuiderInfo.CanClearCalibration = true;
+        var device = new Mock<NINA.Equipment.Interfaces.IGuider>();
+        device.SetupGet(g => g.Connected).Returns(true);
+        device.SetupGet(g => g.Id).Returns("guider");
+        f.Guider.Setup(g => g.GetDevice()).Returns(device.Object);
+        f.Guider.Setup(g => g.StopGuiding(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        f.Factory.Setup(x => x.GetItem<StartGuiding>()).Returns(() => new StartGuiding(f.Guider.Object));
+        using var native = f.Create();
+        var slots = new NinaInstructionSlots();
+        native.ConfigureTargetSetup(slots);
+        var item = (SequenceItem)slots.Clone().BeforeNewTarget.Items[1];
+        Assert.Contains("did not confirm stopping", (await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            item.Execute(new Progress<ApplicationStatus>(), default))).Message);
+        f.Guider.Verify(g => g.StartGuiding(It.IsAny<bool>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public void DisabledUserHookDoesNotDisableNativeDefaults()
     {

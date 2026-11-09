@@ -143,6 +143,81 @@ public sealed class NinaMountPreparationTests
         Assert.IsType<PreparationOutcome.Uncertain>(issued.Fence.Completion!.Outcome);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AlreadyUnparkedMountStartsSiderealBeforeCentering(bool alreadyTracking)
+    {
+        var f = new Fixture();
+        f.Info.AtPark = false;
+        f.Info.TrackingEnabled = alreadyTracking;
+        f.Info.TrackingRate = new() { TrackingMode = NINA.Equipment.Interfaces.TrackingMode.Lunar };
+        var centered = false;
+        var command = ((PreparationNext.Run)f.Next).Command with { Operation = new PreparationOperation.Center(false) };
+        var issued = f.Factory.Create(new PreparationNext.Run(command), f.Program, f.Native.Binding, NativeDispatchTest.Allow,
+            nativeImaging: (_, _, _) =>
+            {
+                Assert.True(f.Info.TrackingEnabled);
+                Assert.Equal(NINA.Equipment.Interfaces.TrackingMode.Sidereal, f.Info.TrackingRate.TrackingMode);
+                centered = true;
+                return Task.CompletedTask;
+            });
+        await issued.Item.Execute(Progress, default);
+        Assert.True(centered);
+        Assert.IsType<PreparationOutcome.Succeeded>(issued.Fence.Completion!.Outcome);
+        f.Mount.Verify(m => m.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal), Times.Once);
+        f.Mount.Verify(m => m.UnparkTelescope(It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("parked")]
+    [InlineData("slewing")]
+    [InlineData("refused")]
+    [InlineData("unconfirmed")]
+    [InlineData("wrong-rate")]
+    [InlineData("canceled")]
+    public async Task CenteringCannotStartWithoutConfirmedSiderealTracking(string fault)
+    {
+        var f = new Fixture();
+        f.Info.AtPark = fault == "parked";
+        f.Info.Slewing = fault == "slewing";
+        if (fault is "refused" or "unconfirmed" or "wrong-rate")
+            f.Mount.Setup(m => m.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal)).Returns(() =>
+            {
+                f.Info.TrackingEnabled = fault == "wrong-rate";
+                f.Info.TrackingRate = new() { TrackingMode = NINA.Equipment.Interfaces.TrackingMode.Lunar };
+                return fault != "refused";
+            });
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        if (fault == "canceled") deadline.Cancel();
+        var command = ((PreparationNext.Run)f.Next).Command with { Operation = new PreparationOperation.Center(false) };
+        var centered = false;
+        var issued = f.Factory.Create(new PreparationNext.Run(command), f.Program, f.Native.Binding, NativeDispatchTest.Allow,
+            nativeImaging: (_, _, _) => { centered = true; return Task.CompletedTask; });
+        await Assert.ThrowsAnyAsync<Exception>(() => issued.Item.Execute(Progress, deadline.Token));
+        Assert.False(centered);
+        Assert.IsNotType<PreparationOutcome.Succeeded>(issued.Fence.Completion!.Outcome);
+        if (fault is "parked" or "slewing" or "canceled")
+            f.Mount.Verify(m => m.SetTrackingMode(It.IsAny<NINA.Equipment.Interfaces.TrackingMode>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SiderealTrackingWaitsForEquipmentUpdatesEvenWhenTheImmediateReturnIsFalse()
+    {
+        var f = new Fixture();
+        f.Info.AtPark = false;
+        f.Mount.Setup(m => m.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal)).Returns(false);
+        var updates = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            f.Info.TrackingEnabled = true;
+            f.Info.TrackingRate = new() { TrackingMode = NINA.Equipment.Interfaces.TrackingMode.Sidereal };
+        });
+        await NinaMountTracking.StartSiderealAsync(f.Mount.Object, () => { }, Progress, default);
+        await updates;
+        f.Mount.Verify(m => m.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal), Times.Once);
+    }
+
     [Fact]
     public void UnparkNeedsExplicitLocalMountBinding()
     {
@@ -168,7 +243,12 @@ public sealed class NinaMountPreparationTests
             Native.Profile.SetupGet(x => x.TelescopeSettings).Returns(Settings.Object);
             Settings.SetupGet(x => x.Id).Returns("Mount");
             Mount.Setup(x => x.GetInfo()).Returns(Info);
-            Mount.Setup(x => x.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal)).Returns(() => { Info.TrackingEnabled = true; return true; });
+            Mount.Setup(x => x.SetTrackingMode(NINA.Equipment.Interfaces.TrackingMode.Sidereal)).Returns(() =>
+            {
+                Info.TrackingEnabled = true;
+                Info.TrackingRate = new() { TrackingMode = NINA.Equipment.Interfaces.TrackingMode.Sidereal };
+                return true;
+            });
             Reader = new(Native.Profiles.Object, Native.CameraMediator.Object, Native.WheelMediator.Object, Mount.Object);
             var config = Reader.Read(Native.Binding);
             Program = new(1, PlannerTests.Request().Assignment with { ConfigurationId = config.Id }, config,

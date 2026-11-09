@@ -103,7 +103,7 @@ public sealed partial class DirectorAcquisition
         var defaults = reader.ReadCameraDefaults(equipmentBinding, configuration);
         var report = new DirectorEquipmentReport(endpoint, pairing.Binding, pairing.ClientId, Guid.NewGuid(), configuration, names, defaults,
             checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-        container.UpdateDisplay(d => d with { Phase = "Reporting equipment", Operation = "Equipment report" });
+        container.UpdateDisplay(d => d with { Phase = "Sending equipment settings to PSF Guard", Operation = "" });
         var ack = await report.SubmitAsync(Credential, connection.AllowInsecureHttp, token);
         await Credential(token);
         if (constraints.Refresh(constraintBinding).Revision != equipmentBinding.ConstraintRevision || reader.Read(equipmentBinding).Id != configuration.Id
@@ -142,6 +142,8 @@ public sealed partial class DirectorAcquisition
 
     internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, bool attended, CancellationToken token)
     {
+        using var sessionProgress = new DirectorSessionProgress(container, progress);
+        progress = sessionProgress;
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         var profileAtStart = profiles.ActiveProfile;
@@ -170,7 +172,13 @@ public sealed partial class DirectorAcquisition
                     window = new(original.StartsAtMs, original.EndsAtMs, TimeProvider.System);
                     restartRequested = false;
                 }
-                else if (reconcile) await PrepareFreshSessionAsync(container, owner, progress, token);
+                else if (reconcile)
+                {
+                    await PrepareFreshSessionAsync(container, owner, token);
+                    // Fresh startup already delivered saved runs before retiring
+                    // the old assignment. Only explicit resume needs the later replay.
+                    firstAllocation = false;
+                }
                 var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, token);
                 firstAllocation = false;
                 reconcile = false;
@@ -181,8 +189,9 @@ public sealed partial class DirectorAcquisition
                 && CanAutomaticallyRecover(error))
             {
                 Logger.Error(error);
-                container.RecordAction("", "Session", $"Director will try again in 10 seconds. {error.Message}");
-                container.UpdateDisplay(display => display with { Phase = "Trying again in 10 seconds", Operation = "", WaitReason = error.Message });
+                var reason = DirectorSessionText.Failure(error);
+                container.RecordAction("", "Session", $"{reason} Director will try again in 10 seconds.");
+                container.UpdateDisplay(display => display with { Phase = $"{reason} Trying again in 10 seconds.", Operation = "", WaitReason = reason });
                 reconcile = true;
                 firstAllocation = true;
                 restartedNight = null;
@@ -193,36 +202,43 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task PrepareFreshSessionAsync(DirectorSessionContainer container, AcquisitionLease owner,
-        IProgress<ApplicationStatus> progress, CancellationToken token)
+        CancellationToken token)
     {
         owner.RequireIdle(LocalStateRoot);
         var profile = profiles.ActiveProfile.Id;
         var options = container.Options.Clone();
-        container.UpdateDisplay(display => display with { Phase = "Checking equipment before starting", Operation = "Confirming equipment is idle" });
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(options.SaveTimeoutSeconds));
-        while (camera.GetInfo().IsExposing)
+        await Stage("Waiting for the camera to finish", async () =>
         {
-            deadline.Token.ThrowIfCancellationRequested();
-            await Task.Delay(250, deadline.Token);
-        }
-        NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, profiles.ActiveProfile.CameraSettings.Id);
-        await NinaMountShutdown.StopAndConfirmAsync(profiles, profile, telescope, profiles.ActiveProfile.TelescopeSettings.Id, deadline.Token);
-        if (profiles.ActiveProfile.GuiderSettings.GuiderName != "No_Guider") await ConfirmGuiderStoppedAsync(deadline.Token);
-        while (focuser?.GetInfo() is { Connected: true, IsMoving: true }
-            || rotator?.GetInfo() is { Connected: true, IsMoving: true })
+            while (camera.GetInfo().IsExposing)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                await Task.Delay(250, deadline.Token);
+            }
+            NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, profiles.ActiveProfile.CameraSettings.Id);
+        });
+        await Stage("Stopping mount motion and tracking", () => NinaMountShutdown.StopAndConfirmAsync(profiles, profile,
+            telescope, profiles.ActiveProfile.TelescopeSettings.Id, deadline.Token));
+        if (profiles.ActiveProfile.GuiderSettings.GuiderName != "No_Guider")
+            await Stage("Stopping guiding", () => ConfirmGuiderStoppedAsync(deadline.Token));
+        await Stage("Waiting for the focuser and rotator to stop", async () =>
         {
-            deadline.Token.ThrowIfCancellationRequested();
-            if (profiles.ActiveProfile.Id != profile) throw new InvalidOperationException("The N.I.N.A. profile changed during session recovery.");
-            await Task.Delay(250, deadline.Token);
-        }
+            while (focuser?.GetInfo() is { Connected: true, IsMoving: true }
+                || rotator?.GetInfo() is { Connected: true, IsMoving: true })
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                if (profiles.ActiveProfile.Id != profile) throw new InvalidOperationException("The N.I.N.A. profile changed during session recovery.");
+                await Task.Delay(250, deadline.Token);
+            }
+        });
         if (options.CheckInAtStart)
         {
-            try { await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, null, deadline.Token); }
+            try { await Stage("Reporting previous captures to PSF Guard", () => DeliverSavedRunsAsync(container, owner, deadline.Token)); }
             catch (Exception error) when (HistoricalCheckInFailure(error))
-            { Logger.Error(error); container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation"); }
+            { Logger.Error(error); container.RecordAction("", "Previous captures", "Some saved image records could not be sent. Director will keep them and try again later."); }
         }
-        await ReportEquipmentCoreAsync(container, deadline.Token, owner);
+        await Stage("Reporting equipment to PSF Guard", () => ReportEquipmentCoreAsync(container, deadline.Token, owner));
         var settings = new PluginOptionsAccessor(profiles, PluginId);
         using var connection = new DirectorConnection(() => profiles.ActiveProfile.Id, () => false,
             () => settings.GetValueString("CoordinatorUrl", ""), _ => { },
@@ -241,12 +257,34 @@ public sealed partial class DirectorAcquisition
         var (_, _, configuration) = ReadNativeEquipment(options, profile, pairing.Binding.RigId.ToString("D"), reader);
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId,
             configuration, Credential, connection.AllowInsecureHttp, options.LocalTargetScheduling, NinaNativeImaging.Required(options));
-        await workloads.ReconcileSessionAsync(deadline.Token);
+        await Stage("Closing the previous assignment in PSF Guard", () => workloads.ReconcileSessionAsync(deadline.Token));
         await Credential(deadline.Token);
         owner.RequireIdle(LocalStateRoot);
         CoordinatorRecoveryHistory.Archive(LocalStateRoot, pairing.Binding.RigId);
         container.RecordAction("", "Session", "Ready to request new work using the latest image counts.");
         container.UpdateDisplay(display => display with { Phase = "Requesting fresh work from PSF Guard", Operation = "", WaitReason = "-" });
+
+        async Task Stage(string action, Func<Task> run)
+        {
+            container.UpdateDisplay(d => d with { Phase = action, Operation = "", Target = "-", WaitReason = "-" });
+            container.RecordAction("", action, "Started");
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var outcome = "Finished";
+            try { await run(); }
+            catch { outcome = "Failed or interrupted"; throw; }
+            finally { container.RecordAction("", action, outcome, (ulong)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds); }
+        }
+    }
+
+    private Task<CoordinatorRunCheckInProgress> DeliverSavedRunsAsync(DirectorSessionContainer container, AcquisitionLease owner, CancellationToken token)
+    {
+        container.UpdateDisplay(d => d with { Phase = "Reporting previous captures to PSF Guard", Operation = "", Target = "-" });
+        var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
+        {
+            Operation = $"Reporting previous captures: {p.Runs} runs checked; {p.DeliveredEvents} updates sent",
+            QueueDepth = p.CaughtUp ? "0" : "Pending"
+        }));
+        return new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, updates, token);
     }
 
     private async Task CheckInSavedRunsAsync(DirectorSessionContainer container, NinaNightWindow window, AcquisitionLease owner, CancellationToken token)
@@ -257,17 +295,14 @@ public sealed partial class DirectorAcquisition
             checkInDeadline.CancelAfter(window.Remaining(TimeSpan.FromHours(24)));
             try
             {
-                container.UpdateDisplay(d => d with { Phase = "Checking in saved runs" });
-                var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
-                { QueueDepth = $"{p.Runs} runs; {p.DeliveredEvents} events; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}" }));
-                await new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, updates, checkInDeadline.Token);
+                await DeliverSavedRunsAsync(container, owner, checkInDeadline.Token);
             }
             catch (CoordinatorIntakeException e) when (container.Options.AllowOffline && OfflineFailure(e.Failure))
             { Logger.Info("Director saved-run check-in offline; evidence retained."); }
             catch (Exception error) when (HistoricalCheckInFailure(error))
             {
                 Logger.Error(error);
-                container.RecordAction("", "Previous captures", "Saved evidence retained for later reconciliation; requesting fresh work from current image counts");
+                container.RecordAction("", "Previous captures", "Some saved image records could not be sent. Director will keep them and request targets using the latest image counts.");
             }
             catch (OperationCanceledException) when (checkInDeadline.IsCancellationRequested && !token.IsCancellationRequested && window.Ended)
             { Logger.Info("Director night ended during saved-run check-in; undelivered evidence retained."); }
@@ -500,7 +535,8 @@ public sealed partial class DirectorAcquisition
                         catch (Exception recordError) { errors.Add(recordError); }
                 }
             }
-            Report("Could not start the assigned work", null);
+            Report(error is OperationCanceledException && token.IsCancellationRequested && errors.Count == 1
+                ? "Session stopped" : $"Could not start the assigned work. {DirectorSessionText.Failure(error)}", null);
             if (errors.Count > 1) throw new AggregateException("Workload admission and shutdown failed.", errors);
             throw;
         }
@@ -825,7 +861,7 @@ public sealed partial class DirectorAcquisition
                             reselect = true;
                             break;
                         }
-                        if (next is not PreparationNext.Run) throw new InvalidOperationException("Preparation requires reconciliation.");
+                        if (next is not PreparationNext.Run) throw new InvalidOperationException("Target setup could not finish. Director must check equipment before retrying.");
                         var block = TargetBlock();
                         var operationName = DirectorSessionText.OperationName(((PreparationNext.Run)next).Command.Operation);
                         container.UpdateDisplay(d => d with { Phase = "Preparing target", Target = selectedTarget.Name, Goal = decision.GoalId, Operation = operationName });
@@ -887,7 +923,14 @@ public sealed partial class DirectorAcquisition
                         if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
                             throw new InvalidOperationException("Mount is not tracking and ready to expose.");
                     }));
-                    container.UpdateDisplay(d => d with { Phase = "Acquiring", Target = target.Name, Goal = decision.GoalId, Operation = "Exposure" });
+                    var filterName = equipmentBinding.Filters.Single(f => f.Id == binding.Recipe.FilterId).ExpectedName ?? "Light";
+                    container.UpdateDisplay(d => d with
+                    {
+                        Phase = "Acquiring",
+                        Target = target.Name,
+                        Goal = decision.GoalId,
+                        Operation = $"{filterName} · {binding.Recipe.ExposureMs / 1000d:g} s exposure"
+                    });
                     container.RecordAction(target.Name, "Exposure", "Started");
                     using var captureDeadline = CancellationTokenSource.CreateLinkedTokenSource(operations.Token);
                     captureDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds)
@@ -898,11 +941,11 @@ public sealed partial class DirectorAcquisition
                         // If the adapter did not report the failure, a native
                         // trigger may have been interrupted before/after it.
                         interruptedSequenceTrigger = exposure.ExecutionError is null;
-                        container.RecordAction(target.Name, "Exposure", "Failed or interrupted; reconcile");
+                        container.RecordAction(target.Name, "Exposure", "Exposure failed or was interrupted. Saved images will be checked before retrying.");
                         throw;
                     }
                     var evidence = exposure.Evidence;
-                    if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("Capture requires reconciliation.");
+                    if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("The image save could not be confirmed. Director must check saved images before retrying.");
                     Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
                     container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
                     filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
@@ -1035,13 +1078,13 @@ public sealed partial class DirectorAcquisition
                     QueueCheckIn(refreshPriority: false);
                     if (settled.Phase == CapturePhase.Saved) lateSavedCapture = unresolved.CaptureId;
                     container.RecordAction(target?.Name ?? "", "Exposure", settled.Phase == CapturePhase.Saved
-                        ? "Late save confirmed; pending assessment" : "Interrupted; attempt consumed without saved image");
+                        ? "Image saved after interruption; waiting for grading" : "Exposure interrupted; no saved image confirmed");
                 }
                 var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
                 if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
                 await EnsureSettledAsync(runtime, lifetime.Token);
                 if (!mountShutdown.CanResumeWeather || !hooks.CanResumeWeather || interruptedSequenceTrigger || camera.GetInfo().IsExposing || telescope.GetInfo().Slewing || telescope.GetInfo().TrackingEnabled)
-                    throw new InvalidOperationException("Weather interruption requires operation or sequence-hook reconciliation; automatic resume is blocked.");
+                    throw new InvalidOperationException("Weather interrupted target setup or a sequence instruction. Director must check equipment before retrying.");
                 if (options.OnAbort == DirectorAbortPolicy.ParkMount && enclosure.Read().Motion == RecoveryMotion.Permitted)
                     await Park(lifetime.Token);
                 var safetyRevision = interlock.RefusalRevision;
@@ -1088,7 +1131,7 @@ public sealed partial class DirectorAcquisition
             await EnsureSettledAsync(runtime, lifetime.Token);
             if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
             Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reporting saved images before requesting updated work"
-                : "Allocation finished; awaiting assessment or a new reconciled plan", null);
+                : "Finished the current targets; waiting for image grades or updated plans", null);
 
             void QueueCheckIn(bool refreshPriority = true)
             {
@@ -1166,7 +1209,7 @@ public sealed partial class DirectorAcquisition
         {
             executionError = Volatile.Read(ref constraintError) is { } changed
                 ? new InvalidOperationException("Rig constraints changed or became unavailable; review and re-arm the session.", changed) : error;
-            Report(launched ? "Stopped; allocation consumed, reconciliation required" : "Acquisition admission failed", null);
+            Report($"Stopping. {DirectorSessionText.Failure(executionError)}", null, DirectorSessionText.Failure(executionError));
             if (!ReferenceEquals(executionError, error)) throw executionError;
             throw;
         }
@@ -1255,9 +1298,9 @@ public sealed partial class DirectorAcquisition
                             released = true;
                         }
                         catch (CoordinatorIntakeException e) when (options.AllowOffline && OfflineFailure(e.Failure))
-                        { Report("Parked; terminal check-in pending; no successor authorized", "Offline"); }
+                        { Report("Mount parked; waiting to send saved image records before requesting more targets", "Offline"); }
                         catch (OperationCanceledException) when (options.AllowOffline && window.Ended && cleanup.IsCancellationRequested && !lifetime.IsCancellationRequested)
-                        { Report("Night ended; parked; terminal check-in pending", "Offline"); }
+                        { Report("Session ended; mount parked; saved image records will be sent later", "Offline"); }
                     }
                 }
                 catch (Exception error) when (executionError is not null)
@@ -1265,14 +1308,15 @@ public sealed partial class DirectorAcquisition
                 catch { terminalFailed = true; throw; }
                 finally
                 {
-                    var phase = stopped ? !aborted && weatherHolds && window.Ended ? "Night ended; tracking off; enclosure blocks parking" : "Stopped; tracking off; reconciliation required"
+                    var phase = stopped ? !aborted && weatherHolds && window.Ended ? "Session ended; tracking off; enclosure blocks parking" : "Mount motion and tracking stopped."
                         : !parked ? enclosure.Read().Motion != RecoveryMotion.Permitted ? "Stopped; enclosure blocks parking" : "Shutdown failed"
                         : Volatile.Read(ref constraintError) is not null ? "Stopped; parked; rig constraints changed; review required"
-                        : terminalFailed || aborted ? "Stopped; parked; reconciliation required"
-                        : window.Ended ? released || !options.AutomaticWorkloads ? "Night ended; parked" : "Night ended; parked; check-in pending"
-                        : options.AutomaticWorkloads ? released ? "Workload released; parked" : "Parked; terminal check-in pending" : "Finished; parked";
+                        : terminalFailed || aborted ? "Mount parked."
+                        : window.Ended ? released || !options.AutomaticWorkloads ? "Session ended; mount parked" : "Session ended; mount parked; saved image records will be sent later"
+                        : options.AutomaticWorkloads ? released ? "Mount parked; ready to request the next targets" : "Mount parked; waiting to send saved image records" : "Finished; mount parked";
                     container.UpdateDisplay(d => d with { Operation = "", WaitReason = "-" });
-                    Report(phase, null);
+                    Report(executionError is null ? phase : $"{DirectorSessionText.Failure(executionError)} {phase}", null,
+                        executionError is null ? "-" : DirectorSessionText.Failure(executionError));
                     if (options.LiveStatus && telemetry is not null && LastLedger is not null)
                     {
                         try { await telemetry.ReportAsync(allocation, LastLedger.LedgerId, LiveSnapshot(), cleanup.Token); }
@@ -1285,8 +1329,8 @@ public sealed partial class DirectorAcquisition
             }
             else { telemetry?.Dispose(); checkpoint?.Dispose(); operationCheckpoint?.Dispose(); }
         }
-        if (reportingError is not null) throw new InvalidOperationException("Director check-in failed.", reportingError);
-        if (shutdownError is not null) throw new InvalidOperationException("Director guider shutdown failed; reconciliation required.", shutdownError);
+        if (reportingError is not null) throw new InvalidOperationException($"Could not send image records to PSF Guard. {reportingError.Message}", reportingError);
+        if (shutdownError is not null) throw new InvalidOperationException($"Could not stop guiding. {shutdownError.Message}", shutdownError);
         token.ThrowIfCancellationRequested();
         return released && !window.Ended;
 
@@ -1328,11 +1372,18 @@ public sealed partial class DirectorAcquisition
         async Task RunItem(NinaTargetContainer block, NINA.Sequencer.SequenceItem.SequenceItem item, CancellationToken ct)
         {
             block.Add(item);
+            // Target setup runs in a sibling target context beneath the session,
+            // not beneath the temporary block that holds the issued operation.
+            using var failure = new NinaSequenceFailure(container);
             try
             {
                 await block.Run(progress, ct);
-                if (item.Status != SequenceEntityStatus.FINISHED) throw new InvalidOperationException("Native Director instruction did not finish.");
+                if (item.Status != SequenceEntityStatus.FINISHED)
+                    throw failure.Failure ?? (item as NinaExposureItem)?.ExecutionError
+                        ?? new InvalidOperationException($"{item.Name} did not finish. Check the N.I.N.A. log for the failed instruction.");
             }
+            catch (Exception error) when (failure.Failure is { } original && !ReferenceEquals(error, original))
+            { throw original; }
             finally { block.Remove(item); block.AttachNewParent(null); block.NighttimeData.Ticker.Stop(); }
         }
         Task Park(CancellationToken ct) => mountShutdown.ParkAsync(profiles, profile, telescope,
@@ -1410,6 +1461,7 @@ public sealed partial class DirectorAcquisition
             container.UpdateDisplay(d => d with
             {
                 Phase = phase,
+                Operation = "",
                 WaitReason = waitReason ?? d.WaitReason,
                 Rig = rig,
                 Connectivity = connectivity ?? d.Connectivity,
@@ -1417,11 +1469,10 @@ public sealed partial class DirectorAcquisition
             });
             if (lastLoggedPhase != phase)
             {
-                container.RecordAction(target?.Name ?? "", "Session", waitReason is not null and not "-" ? $"{phase}. {waitReason}" : phase);
+                container.RecordAction(target?.Name ?? "", "Session", waitReason is not null and not "-" && !phase.Contains(waitReason, StringComparison.Ordinal)
+                    ? $"{phase.TrimEnd('.')}. {waitReason}" : phase);
                 lastLoggedPhase = phase;
             }
-            try { progress.Report(new ApplicationStatus { Status = phase }); }
-            catch (Exception error) { Logger.Error(error); }
         }
     }
 

@@ -70,6 +70,8 @@ internal sealed class NativeImagingProbe
             .ReturnsAsync(() =>
             {
                 Operations.Add("Center");
+                if (!telescope.GetInfo().TrackingEnabled || telescope.GetInfo().TrackingRate.TrackingMode != TrackingMode.Sidereal)
+                    throw new InvalidOperationException("Native centering began without sidereal tracking.");
                 if (failure == "center") FailureInjected = true;
                 return new PlateSolveResult
                 {
@@ -100,7 +102,19 @@ internal sealed class NativeImagingProbe
         factory.Setup(f => f.GetItem<CenterAndRotate>()).Returns(() => new CenterAndRotate(profiles, telescope, imaging,
             rotator ?? throw new InvalidOperationException("No simulator rotator"), wheel, guider, dome, follower, plates.Object, centeringWindows));
         factory.Setup(f => f.GetItem<RunAutofocus>()).Returns(() => new RunAutofocus(profiles, history, camera, wheel, focuser, focusFactory.Object) { WindowServiceFactory = windows.Object });
-        factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>());
+        var failedGuider = new Mock<IGuiderMediator>();
+        failedGuider.Setup(g => g.GetInfo()).Returns(() => guider.GetInfo());
+        failedGuider.Setup(g => g.StartGuiding(It.IsAny<bool>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
+            .Returns((bool force, IProgress<ApplicationStatus> progress, CancellationToken ct) =>
+            {
+                Operations.Add("Guiding");
+                FailureInjected = true;
+                progress.Report(new ApplicationStatus { Status = "Waiting for a guide star" });
+                return Task.FromResult(false);
+            });
+        factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>()).Returns(() => failure == "guiding"
+            ? new NINA.Sequencer.SequenceItem.Guider.StartGuiding(failedGuider.Object)
+            : original.GetItem<NINA.Sequencer.SequenceItem.Guider.StartGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.StopGuiding>());
         factory.Setup(f => f.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>()).Returns(() => original.GetItem<NINA.Sequencer.SequenceItem.Guider.Dither>());
         factory.Setup(f => f.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>()).Returns(() => Flip?.Trigger ?? original.GetTrigger<NINA.Sequencer.Trigger.MeridianFlip.MeridianFlipTrigger>());

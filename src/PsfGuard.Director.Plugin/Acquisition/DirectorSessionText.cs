@@ -6,6 +6,13 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // show what Director is waiting for or doing next.
 internal static class DirectorSessionText
 {
+    internal static string Failure(Exception error)
+    {
+        if (error is AggregateException aggregate) error = aggregate.Flatten().InnerExceptions[0];
+        if (error is OperationCanceledException) return "The operation was canceled or timed out.";
+        return error.Message.TrimEnd('.') + ".";
+    }
+
     internal static (string Phase, string Detail) StartupWait(NinaSafetyEvidence monitor, NinaMotionEvidence roof)
     {
         if (monitor.Safety != PlannerSafety.Safe)

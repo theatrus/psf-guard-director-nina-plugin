@@ -75,7 +75,23 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
         });
         item = command.Operation switch
         {
-            PreparationOperation.Center or PreparationOperation.Dither when nativeImaging is not null =>
+            PreparationOperation.Center when nativeImaging is not null && telescope is not null && local.TelescopeDeviceId is not null =>
+                new IssuedBeforeTarget(fence, async (p, ct) =>
+                {
+                    // Startup stops tracking even when the mount was already
+                    // unparked, in which case the core issues no Unpark command.
+                    // Start tracking inside the authorized centering operation.
+                    await NinaMountTracking.StartSiderealAsync(telescope, () =>
+                    {
+                        var mount = telescope.GetInfo();
+                        if (JsonSerializer.Serialize(equipment.Read(local)) != JsonSerializer.Serialize(program.Configuration)
+                            || !mount.Connected || mount.DeviceId != local.TelescopeDeviceId || mount.AtPark || mount.Slewing)
+                            throw new InvalidOperationException("The configured mount must be connected, unparked and idle before starting sidereal tracking.");
+                    }, p, ct);
+                    await nativeImaging(command.Operation, p, ct);
+                })
+                { Name = "Director slew and center" },
+            PreparationOperation.Dither when nativeImaging is not null =>
                 new IssuedBeforeTarget(fence, (p, ct) => nativeImaging(command.Operation, p, ct)) { Name = $"Director {command.Operation.GetType().Name}" },
             PreparationOperation.BeforeTarget when beforeTarget is not null =>
                 new IssuedBeforeTarget(fence, beforeTarget) { Name = "Director target setup" },
@@ -136,14 +152,7 @@ internal sealed class NinaPreparationItems(IProfileService profiles, ICameraMedi
                 await base.Execute(progress, token);
                 token.ThrowIfCancellationRequested();
                 checkContext();
-                await new SetTracking(telescope).Execute(progress, token);
-                using var confirmation = CancellationTokenSource.CreateLinkedTokenSource(token);
-                confirmation.CancelAfter(TimeSpan.FromSeconds(5));
-                while (!telescope.GetInfo().TrackingEnabled)
-                {
-                    checkContext();
-                    await Task.Delay(100, confirmation.Token);
-                }
+                await NinaMountTracking.StartSiderealAsync(telescope, checkContext, progress, token);
             }, token);
     }
 

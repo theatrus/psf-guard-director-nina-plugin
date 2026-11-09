@@ -9,6 +9,7 @@ param(
     [switch]$SequenceActivity,
     [switch]$Attended,
     [switch]$WaitForSafeAtStartup,
+    [switch]$StartUnparked,
     [switch]$WaitingPlanRefresh,
     [switch]$PublicUnsafe,
     [switch]$DeferredCheckIn,
@@ -29,13 +30,14 @@ param(
     [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'roof-startup-night-end', 'safety-workload')][string]$WeatherHoldScenario,
     [switch]$ForceNativeFlip,
     [string]$Phd2Executable,
-    [ValidateSet('center', 'autofocus', 'meridian')][string]$NativeImagingFailure,
+    [ValidateSet('center', 'autofocus', 'meridian', 'guiding')][string]$NativeImagingFailure,
     [ValidateSet('horizon', 'site', 'meridian')][string]$ConstraintChange,
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
 if ($WaitingPlanRefresh -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $PriorityRefresh -or $ProjectOrder -or $ObservingPreferences -or $MoonAvoidance -or $NightEndScenario -or $WeatherHoldScenario -or $NativeImaging -or $OfflineWorkloadRelease -or $Attended)) { throw 'WaitingPlanRefresh requires the normal public automatic workload fixture.' }
 if ($WaitForSafeAtStartup -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $Attended -or $WeatherHoldScenario -or $PublicUnsafe -or $EnclosureClosure)) { throw 'WaitForSafeAtStartup requires public local scheduling with a safety monitor.' }
+if ($StartUnparked -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or !$NativeImaging -or $WaitForSafeAtStartup -or $WeatherHoldScenario -or $PublicUnsafe -or $EnclosureClosure -or $RestartAdmission)) { throw 'StartUnparked requires native automatic workloads without a startup safety hold.' }
 if ($SequenceActivity -and (!$PublicAcquisition -or !$AutomaticWorkloads)) { throw 'SequenceActivity requires public automatic workloads.' }
 if ($Attended -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $EnclosureClosure -or $WeatherHoldScenario -or $RestartAdmission -or $NightEndScenario -or $QualityScenario -or $PriorityRefresh -or $OfflineWorkloadRelease)) { throw 'Attended requires the normal public automatic workload fixture.' }
 if ($RestartAdmission -and (!$NativeImaging -or !$AutomaticWorkloads -or !$PublicAcquisition -or !$LocalTargetScheduling -or $RecoveryScenario -or $QualityScenario -or $NativeImagingFailure -or $WeatherHoldScenario)) { throw 'RestartAdmission requires safe native automatic workloads.' }
@@ -117,7 +119,7 @@ try {
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
         ForEach-Object { $_.WeatherHoldScenario=$(if ($WeatherHoldScenario) { $WeatherHoldScenario } else { $null }); $_.NightEndScenario=$(if ($NightEndScenario) { $NightEndScenario } else { $null }); $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
-        ForEach-Object { if ($WaitingPlanRefresh) { $_.WaitingPlanRefresh=$true }; if ($Attended) { $_.Attended=$true }; if ($SequenceActivity) { $_.SequenceActivity=$true }; if ($WaitForSafeAtStartup) { $_.WaitForSafeAtStartup=$true }; if ($RestartAdmission) { $_.RestartAdmission=$true }; if ($QualityScenario) { $_.QualityScenario=$QualityScenario; $_.ExerciseOutage=$false }; if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
+        ForEach-Object { if ($StartUnparked) { $_.StartUnparked=$true }; if ($WaitingPlanRefresh) { $_.WaitingPlanRefresh=$true }; if ($Attended) { $_.Attended=$true }; if ($SequenceActivity) { $_.SequenceActivity=$true }; if ($WaitForSafeAtStartup) { $_.WaitForSafeAtStartup=$true }; if ($RestartAdmission) { $_.RestartAdmission=$true }; if ($QualityScenario) { $_.QualityScenario=$QualityScenario; $_.ExerciseOutage=$false }; if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
@@ -153,6 +155,7 @@ try {
     if ($PublicAcquisition -and !$evidence.equipment_review_verified) { throw 'Public acquisition did not verify staged equipment review.' }
     if ($NightEndScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'night-end-verified.txt'))) { throw 'Normal night end and following native sequence step were not verified.' }
     if ($WaitForSafeAtStartup -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'startup-safety-verified.txt'))) { throw 'Startup safety wait was not verified.' }
+    if ($StartUnparked -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'sidereal-tracking-verified.txt'))) { throw 'Sidereal tracking from an unparked startup was not verified.' }
     if ($WaitingPlanRefresh -and !$evidence.waiting_plan_refresh_verified) { throw 'New plan activation while waiting was not verified.' }
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
     if ($QualityScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'quality-verified.txt'))) { throw 'Quality policy was not verified.' }

@@ -283,6 +283,14 @@ public sealed class SimulatorSequence : SequenceItem
             Step("Parking simulator for Rust-issued unpark");
             if (!await telescope.ParkTelescope(progress, lifetime.Token) || !telescope.GetInfo().AtPark)
                 throw new IOException("Fixture could not establish parked simulator state.");
+            if (coordinator?.StartUnparked == true)
+            {
+                Step("Starting with the simulator already unparked and tracking off");
+                if (!await telescope.UnparkTelescope(progress, lifetime.Token))
+                    throw new IOException("Fixture could not unpark.");
+                await NinaMountShutdown.StopAndConfirmAsync(profiles, profiles.ActiveProfile.Id, telescope, "ASCOM.OmniSim.Telescope", lifetime.Token);
+                while (telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled) await Task.Delay(100, lifetime.Token);
+            }
             // This fixture tests program dispatch, not pointing/plate-solving. Use
             // the simulator's current coordinates without requesting a slew.
             var current = telescope.GetCurrentPosition();
@@ -476,7 +484,13 @@ public sealed class SimulatorSequence : SequenceItem
                         }
                     }
                 }
-                var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
+                var directorStatuses = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                var sessionProgress = new InlineProgress<ApplicationStatus>(status =>
+                {
+                    if (status.Source == DirectorSessionProgress.Source) directorStatuses.Enqueue(status.Status);
+                    progress.Report(status); // Exercise the actual NINA status bar as well as capturing evidence.
+                });
+                var executing = nightSequence is null ? sessionContainer.Execute(sessionProgress, publicLifetime.Token) : nightSequence.Run(sessionProgress, publicLifetime.Token);
                 try
                 {
                     if (coordinator.WaitForSafeAtStartup)
@@ -565,12 +579,15 @@ public sealed class SimulatorSequence : SequenceItem
                             Step("Native flip failure blocked the next exposure, parked and retained the two earlier saves");
                             return;
                         }
-                        if (failure is null || nativeProbe?.FailureInjected != true || !nativeProbe.Operations.Contains(fault == "center" ? "Center" : "Autofocus")
+                        if (failure is null || nativeProbe?.FailureInjected != true || !nativeProbe.Operations.Contains(fault == "center" ? "Center" : fault == "guiding" ? "Guiding" : "Autofocus")
                             || camera.GetInfo().IsExposing || !telescope.GetInfo().AtPark || AcquisitionLease.IsActive
                             || sessionHookEvents.Contains("AfterEachExposure")
                             || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Any())
                             throw new InvalidDataException("Failed native preparation did not stop before capture and park.", failure);
                         nativeFailureVerified = true;
+                        if (fault == "guiding" && (!sessionContainer.SessionStatus.Contains("Failed to start guiding", StringComparison.Ordinal)
+                            || !sessionContainer.ActionHistory.Any(a => a.Outcome.Contains("Failed to start guiding", StringComparison.Ordinal))))
+                            throw new InvalidDataException("The original guiding failure was lost during shutdown.");
                         if (coordinator.RecoveryScenario == "focus-always" && nativeProbe.Operations.Count(x => x == "Autofocus") != 2)
                             throw new InvalidDataException("Recovery did not stop after exactly one failed autofocus retry.");
                         Step($"Native {fault} failure prevented capture, parked and released local ownership without restarting");
@@ -813,6 +830,9 @@ public sealed class SimulatorSequence : SequenceItem
                             publicLifetime.Cancel();
                             try { await executing; throw new InvalidDataException("Automatic session ignored cancellation."); }
                             catch (OperationCanceledException) when (publicLifetime.IsCancellationRequested) { }
+                            if (sessionContainer.Display.Phase != "Session canceled"
+                                || directorStatuses.Any(s => s.StartsWith("Could not start the assigned work", StringComparison.Ordinal)))
+                                throw new InvalidDataException("Stopping while waiting for more targets was reported as a startup failure.");
                         }
                         if (!coordinator.PriorityRefresh) await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
                         if (coordinator.RestartAdmission)
@@ -827,6 +847,24 @@ public sealed class SimulatorSequence : SequenceItem
                 finally
                 {
                     if (!executing.IsCompleted) { lifetime.Cancel(); try { await executing; } catch (OperationCanceledException) { } }
+                    var statusEvidence = directorStatuses.ToArray();
+                    await File.WriteAllLinesAsync(Path.Combine(run, "director-status-bar.txt"), statusEvidence, CancellationToken.None);
+                    if (statusEvidence.Length == 0 || statusEvidence[^1] != ""
+                        || !coordinator.RestartAdmission && !statusEvidence.Any(s => s.StartsWith("Stopping mount motion and tracking", StringComparison.Ordinal))
+                        || statusEvidence.Any(s => s.Contains("Exposing and downloading", StringComparison.Ordinal)))
+                        throw new InvalidDataException("Director status bar did not show startup actions, avoid duplicate camera status, or clear after the session.");
+                    // Long quality scenarios can evict startup from the bounded Activity history.
+                    if (!coordinator.RestartAdmission && sessionContainer.ActionHistory.Count < 200
+                        && sessionContainer.ActionHistory.Count(a => a.Action == "Reporting previous captures to PSF Guard" && a.Outcome == "Started") != 1)
+                        throw new InvalidDataException("Fresh startup did not report previous captures exactly once.");
+                    if (coordinator.StartUnparked)
+                    {
+                        if (!statusEvidence.Any(s => s.StartsWith("Starting sidereal tracking", StringComparison.Ordinal))
+                            || sessionContainer.ActionHistory.Any(a => a.Action == DirectorSessionText.OperationName(new PreparationOperation.Unpark())))
+                            throw new InvalidDataException("Already-unparked target setup did not start tracking independently of unpark.");
+                        await File.WriteAllTextAsync(Path.Combine(run, "sidereal-tracking-verified.txt"),
+                            "Started unparked with tracking off; explicitly started sidereal tracking before native centering; no unpark operation issued", CancellationToken.None);
+                    }
                     if (nightSequence is not null) { nightSequence.Remove(sessionContainer); nightSequence.AttachNewParent(null); }
                 }
                 async Task VerifyNightEnd()
