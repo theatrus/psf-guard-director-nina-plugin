@@ -11,6 +11,7 @@ namespace PsfGuard.Director.Plugin;
 internal static class DirectorImageUploads
 {
     internal const string SettingKey = "UploadCapturedFrames";
+    internal const bool DefaultEnabled = false;
 
     internal static string Root => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PSFGuardDirector", "uploads");
@@ -28,7 +29,7 @@ internal static class DirectorImageUploads
     internal static IDirectorUploadServer? Connect(DirectorUploadDestination destination)
     {
         var pairing = DirectorCredentialStore.Read(destination.Endpoint, destination.ProfileId);
-        if (pairing is null || pairing.Binding.RigId != destination.RigId || pairing.Binding.ProfileId != destination.ProfileId) return null;
+        if (pairing is null || pairing.Binding != destination.Binding) return null;
         ValueTask<string?> Credential(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();

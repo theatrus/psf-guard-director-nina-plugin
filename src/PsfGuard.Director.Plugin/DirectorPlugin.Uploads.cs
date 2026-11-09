@@ -15,14 +15,15 @@ public sealed partial class DirectorPlugin
     private string uploadQueueStatus = "No frames are queued.";
     private int refusedUploads;
 
-    /// <summary>Per profile, on by default. Off, Director Sessions queue no new frames.</summary>
+    /// <summary>Per profile, off by default. Independent of Live image record delivery.</summary>
     public bool UploadCapturedFrames
     {
-        get => settings.GetValueBoolean(DirectorImageUploads.SettingKey, true);
+        get => settings.GetValueBoolean(DirectorImageUploads.SettingKey, DirectorImageUploads.DefaultEnabled);
         set
         {
             if (value == UploadCapturedFrames) return;
             settings.SetValueBoolean(DirectorImageUploads.SettingKey, value);
+            CheckUploadState();
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadCapturedFrames)));
         }
     }
@@ -34,11 +35,11 @@ public sealed partial class DirectorPlugin
     public string UploadQueueStatus => uploadQueueStatus;
 
     public ICommand RetryRefusedUploadsCommand => retryRefusedUploads ??= new(
-        async () => { await DirectorImageUploads.Queue.RetryRefusedAsync(CancellationToken.None); RefreshUploads(); },
+        async () => { await DirectorImageUploads.Queue.RetryRefusedAsync(CurrentUploadDestination(), CancellationToken.None); RefreshUploads(); },
         () => initialized && refusedUploads > 0, ReportError);
 
     public ICommand ForgetRefusedUploadsCommand => forgetRefusedUploads ??= new(
-        async () => { await DirectorImageUploads.Queue.ForgetRefusedAsync(CancellationToken.None); RefreshUploads(); },
+        async () => { await DirectorImageUploads.Queue.ForgetRefusedAsync(CurrentUploadDestination(), CancellationToken.None); RefreshUploads(); },
         () => initialized && refusedUploads > 0, ReportError);
 
     private DirectorUploadDestination? CurrentUploadDestination()
@@ -48,7 +49,7 @@ public sealed partial class DirectorPlugin
             if (ConnectionModel.ResolvedEndpoint is not { } endpoint) return null;
             var pairing = ConnectionModel.ReadPairing();
             return pairing is null ? null
-                : new(endpoint, profiles.ActiveProfile.Id, pairing.Binding.RigId, ConnectionModel.AllowInsecureHttp);
+                : new(endpoint, pairing.Binding, ConnectionModel.AllowInsecureHttp);
         }
         catch (Exception) { return null; }
     }
@@ -84,9 +85,10 @@ public sealed partial class DirectorPlugin
     private void CheckUploadState()
     {
         if (!uploadsStarted) return;
-        DirectorImageUploads.Queue.RequestRecheck();
         var destination = CurrentUploadDestination();
-        if (destination is not null)
+        DirectorImageUploads.Queue.SetDestination(UploadCapturedFrames ? destination : null);
+        DirectorImageUploads.Queue.RequestRecheck();
+        if (UploadCapturedFrames && destination is not null)
             _ = Task.Run(() => DirectorImageUploads.Queue.RefreshStateAsync(destination, CancellationToken.None));
         RefreshUploads();
     }
@@ -103,15 +105,16 @@ public sealed partial class DirectorPlugin
         }
         var destination = initialized ? CurrentUploadDestination() : null;
         var summary = DirectorImageUploads.Queue.Summarize(destination);
-        uploadStatus = destination is null ? "Pair with PSF Guard to upload frames." : summary.State switch
-        {
-            null => "Checking whether PSF Guard takes uploads.",
-            { Kind: DirectorUploadStateKind.Enabled } => "PSF Guard takes uploads from this rig.",
-            { Kind: DirectorUploadStateKind.Disabled, Reason: { } reason } => reason,
-            { Kind: DirectorUploadStateKind.Disabled } => "Image uploads are off for this database.",
-            { Kind: DirectorUploadStateKind.Unsupported } => "This PSF Guard server does not take uploads from Director. Frames stay on disk.",
-            _ => "PSF Guard could not be reached. Queued frames wait and upload later.",
-        };
+        uploadStatus = !UploadCapturedFrames ? "File uploads are off. Queued files wait; image record delivery is unchanged."
+            : destination is null ? "Pair with PSF Guard to upload frames." : summary.State switch
+            {
+                null => "Checking whether PSF Guard takes uploads.",
+                { Kind: DirectorUploadStateKind.Enabled } => "PSF Guard takes uploads from this rig.",
+                { Kind: DirectorUploadStateKind.Disabled, Reason: { } reason } => reason,
+                { Kind: DirectorUploadStateKind.Disabled } => "Image uploads are off for this database.",
+                { Kind: DirectorUploadStateKind.Unsupported } => "This PSF Guard server does not take uploads from Director. Frames stay on disk.",
+                _ => "PSF Guard could not be reached. Queued frames wait and upload later.",
+            };
         refusedUploads = summary.Refused;
         uploadQueueStatus = (summary.Queued, summary.Refused) switch
         {

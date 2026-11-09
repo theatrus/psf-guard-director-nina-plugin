@@ -90,7 +90,7 @@ public sealed class SettingsViewTests
                     Assert.True(header.ActualWidth > 0 && header.ActualHeight > 0);
                     Assert.False(collaboration.IsExpanded);
                     var buttons = Descendants(host).OfType<Button>().ToArray();
-                    Assert.Equal(6, buttons.Length);
+                    Assert.Equal(8, buttons.Length);
                     Assert.Equal(state != "Ready", buttons[0].IsEnabled);
                     Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
                     foreach (var button in buttons)
@@ -104,8 +104,14 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard" },
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard", "Upload captured frames to PSF Guard" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
+                    var uploads = options.Single(option => (string)option.Content == "Upload captured frames to PSF Guard");
+                    Assert.False(uploads.IsChecked);
+                    uploads.SetCurrentValue(CheckBox.IsCheckedProperty, true);
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                    Assert.True(model.UploadCapturedFrames);
+                    uploads.SetCurrentValue(CheckBox.IsCheckedProperty, false);
                     foreach (var option in options)
                     {
                         var label = Assert.Single(Descendants(option).OfType<TextBlock>(), text => text.Text == (string)option.Content);
@@ -264,6 +270,11 @@ public sealed class SettingsViewTests
         public string CheckInStatus => "Checked in 128 runs; 16000 events; 4 workloads released";
         public bool SendStarDetectionSettings { get; set; } = true;
         public bool ReportSequenceActivity { get; set; } = true;
+        public bool UploadCapturedFrames { get; set; }
+        public string UploadStatus => "File uploads are off. Queued files wait; image record delivery is unchanged.";
+        public string UploadQueueStatus => "2 frames are queued; PSF Guard refused 1 frame.";
+        public ICommand RetryRefusedUploadsCommand { get; } = new StubCommand(true);
+        public ICommand ForgetRefusedUploadsCommand { get; } = new StubCommand(true);
     }
 
     public sealed class ConnectionViewModel

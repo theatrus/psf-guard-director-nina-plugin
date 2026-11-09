@@ -75,7 +75,8 @@
                 <CheckBox Content="Report sequence activity to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding ReportSequenceActivity}" Margin="0,8,0,4" />
                 <TextBlock Text="Show the active Advanced Sequencer instructions when a Director Session is not running." TextWrapping="Wrap" />
                 <CheckBox Content="Upload captured frames to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding UploadCapturedFrames}" Margin="0,8,0,4" />
-                <TextBlock Text="After N.I.N.A. saves a frame that a Director Session captured, Director uploads it to the paired PSF Guard database. Turn on Image uploads for that database in PSF Guard." TextWrapping="Wrap" />
+                <TextBlock Text="Off by default. When on, upload the light frames saved by a Director Session. Also turn on Image uploads for the database in PSF Guard. Live image record delivery works with this switch off." TextWrapping="Wrap" />
+                <TextBlock Text="Turning this off pauses queued files and cancels the current transfer. Turning it back on resumes the queue for this profile and connection. Files saved while off are not added later; you can copy them another way." TextWrapping="Wrap" />
                 <TextBlock Text="{Binding UploadStatus}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 <TextBlock Text="{Binding UploadQueueStatus}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 <TextBlock Text="PSF Guard refuses a frame it cannot take, such as one it removed on purpose or one larger than it accepts. Director holds refused frames without retrying them. Retry refused uploads queues them again; Forget refused uploads removes them from the queue. The image files stay on disk."

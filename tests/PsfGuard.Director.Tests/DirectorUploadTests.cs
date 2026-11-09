@@ -12,7 +12,7 @@ public sealed class DirectorUploadClientTests : IDisposable
 {
     private static readonly Guid Profile = Guid.Parse("11111111-2222-4333-8444-555555555555");
     private static readonly Guid Rig = Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
-    private static readonly DirectorUploadDestination Destination = new(new Uri("https://psf.example/base/"), Profile, Rig);
+    private static readonly DirectorUploadDestination Destination = new(new Uri("https://psf.example/base/"), new(Guid.NewGuid(), Guid.NewGuid(), Rig, Profile));
     private readonly string root = Directory.CreateTempSubdirectory("director-upload-client-").FullName;
 
     public void Dispose() => Directory.Delete(root, recursive: true);
@@ -27,6 +27,20 @@ public sealed class DirectorUploadClientTests : IDisposable
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) =>
         new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Theory]
+    [InlineData("<html>Sign in</html>")]
+    [InlineData("{}")]
+    [InlineData("{\"success\":false,\"data\":null}")]
+    [InlineData("{\"success\":true,\"data\":{\"filename\":\"other.fits\",\"already_present\":false}}")]
+    [InlineData("{\"success\":true,\"data\":{\"filename\":\"frame.fits\"}}")]
+    public async Task AnUnconfirmedSuccessRetainsTheUpload(string reply)
+    {
+        var path = Path.Combine(root, "frame.fits");
+        await File.WriteAllTextAsync(path, "x");
+        using var client = Client(_ => Task.FromResult(Json(HttpStatusCode.OK, reply)));
+        Assert.Equal(DirectorUploadOutcome.Retry, (await client.UploadAsync(path, default)).Outcome);
+    }
 
     [Fact]
     public async Task StateReadsEnabledReasonAndLimitWithTheRigPairingHeaders()
@@ -49,7 +63,7 @@ public sealed class DirectorUploadClientTests : IDisposable
 
     [Theory]
     [InlineData(HttpStatusCode.OK, """{"success":true,"data":{"enabled":true,"max_bytes":100},"error":null}""", DirectorUploadStateKind.Enabled)]
-    [InlineData(HttpStatusCode.Forbidden, """{"success":false,"data":null,"error":"no"}""", DirectorUploadStateKind.Unsupported)]
+    [InlineData(HttpStatusCode.Forbidden, """{"success":false,"data":null,"error":"no"}""", DirectorUploadStateKind.Unavailable)]
     [InlineData(HttpStatusCode.NotFound, "", DirectorUploadStateKind.Unsupported)]
     [InlineData(HttpStatusCode.MethodNotAllowed, "", DirectorUploadStateKind.Unsupported)]
     [InlineData(HttpStatusCode.OK, """{"success":true,"data":{"rig":"x"},"error":null}""", DirectorUploadStateKind.Unsupported)]
@@ -213,7 +227,7 @@ public sealed class DirectorUploadClientTests : IDisposable
 public sealed class DirectorUploadQueueTests : IDisposable
 {
     private static readonly DirectorUploadDestination Destination = new(new Uri("https://psf.example/"),
-        Guid.Parse("11111111-2222-4333-8444-555555555555"), Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"));
+        new(Guid.NewGuid(), Guid.NewGuid(), Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), Guid.Parse("11111111-2222-4333-8444-555555555555")));
     private readonly string root = Directory.CreateTempSubdirectory("director-upload-queue-").FullName;
     private readonly FakeClock clock = new();
     private readonly FakeServer server = new();
@@ -223,8 +237,12 @@ public sealed class DirectorUploadQueueTests : IDisposable
 
     private string QueueRoot => Path.Combine(root, "queue");
 
-    private DirectorUploadQueue Queue(Func<DirectorUploadDestination, IDirectorUploadServer?>? connect = null) =>
-        new(QueueRoot, connect ?? (_ => server), log.Add, clock);
+    private DirectorUploadQueue Queue(Func<DirectorUploadDestination, IDirectorUploadServer?>? connect = null)
+    {
+        var queue = new DirectorUploadQueue(QueueRoot, connect ?? (_ => server), log.Add, clock);
+        queue.SetDestination(Destination);
+        return queue;
+    }
 
     private string Frame(string name = "frame.fits", int bytes = 10)
     {
@@ -235,6 +253,94 @@ public sealed class DirectorUploadQueueTests : IDisposable
 
     private int Jobs(string? folder = null) => Directory.Exists(Path.Combine(QueueRoot, folder ?? ""))
         ? Directory.GetFiles(Path.Combine(QueueRoot, folder ?? ""), "*.json").Length : 0;
+
+    [Fact]
+    public async Task OffIsTheDefaultAndPersistsAcrossWorkerRestart()
+    {
+        var frame = Frame();
+        await using (var queue = new DirectorUploadQueue(QueueRoot, _ => server, log.Add, clock))
+        {
+            Assert.False(await queue.EnqueueAsync(Destination, frame, null, default));
+            queue.SetDestination(Destination);
+            Assert.True(await queue.EnqueueAsync(Destination, frame, null, default));
+            queue.SetDestination(null);
+            await queue.ProcessDueJobsAsync(default);
+            Assert.Null(await queue.RefreshStateAsync(Destination, default));
+            Assert.False(await queue.EnqueueAsync(Destination, Frame("off.fits"), null, default));
+        }
+        await using var restarted = new DirectorUploadQueue(QueueRoot, _ => server, log.Add, clock);
+        await restarted.ProcessDueJobsAsync(default);
+        Assert.Empty(server.Uploads);
+        Assert.Equal(0, server.StateCalls);
+        Assert.Equal(1, Jobs());
+        restarted.SetDestination(Destination);
+        await restarted.ProcessDueJobsAsync(default);
+        Assert.Equal([frame], server.Uploads);
+        Assert.Equal(0, Jobs());
+    }
+
+    [Fact]
+    public async Task SwitchingOffCancelsTheTransferAndKeepsTheFileForLater()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.OnUpload = async token =>
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("Cancellation did not stop the upload.");
+        };
+        await using var queue = Queue();
+        var frame = Frame();
+        await queue.EnqueueAsync(Destination, frame, null, default);
+        var processing = queue.ProcessDueJobsAsync(default);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        queue.SetDestination(null);
+        await processing.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, Jobs());
+        Assert.True(File.Exists(frame));
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Single(server.Uploads);
+        server.OnUpload = null;
+        queue.SetDestination(Destination);
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Equal(2, server.Uploads.Count);
+        Assert.Equal(0, Jobs());
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("catalog")]
+    [InlineData("server")]
+    [InlineData("endpoint")]
+    public async Task AChangedConnectionCannotSendOrRemoveThePreviousConnectionsFiles(string change)
+    {
+        var other = Destination with
+        {
+            Endpoint = change == "endpoint" ? new Uri("https://other.example/") : Destination.Endpoint,
+            Binding = Destination.Binding with
+            {
+                ProfileId = change == "profile" ? Guid.NewGuid() : Destination.ProfileId,
+                CatalogId = change == "catalog" ? Guid.NewGuid() : Destination.Binding.CatalogId,
+                CoordinatorInstanceId = change == "server" ? Guid.NewGuid() : Destination.Binding.CoordinatorInstanceId,
+            }
+        };
+        await using var queue = Queue();
+        await queue.EnqueueAsync(Destination, Frame(), null, default);
+        queue.SetDestination(other);
+        await queue.ProcessDueJobsAsync(default);
+        Assert.Empty(server.Uploads);
+        Assert.Equal(0, queue.Summarize(other).Queued);
+        Assert.Equal(1, queue.Summarize(Destination).Queued);
+
+        queue.SetDestination(Destination);
+        server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "refused"));
+        await queue.ProcessDueJobsAsync(default);
+        queue.SetDestination(other);
+        Assert.Equal(0, await queue.RetryRefusedAsync(other, default));
+        Assert.Equal(0, await queue.ForgetRefusedAsync(other, default));
+        Assert.Equal(1, queue.Summarize(Destination).Refused);
+        Assert.Equal(1, await queue.ForgetRefusedAsync(Destination, default));
+    }
 
     [Fact]
     public async Task AQueuedFrameUploadsAndItsJobIsRemoved()
@@ -351,7 +457,7 @@ public sealed class DirectorUploadQueueTests : IDisposable
         Assert.Equal(new DirectorUploadSummary(0, 1, new(DirectorUploadStateKind.Enabled, null, null)), queue.Summarize(Destination));
         Assert.Contains(log, line => line.Contains("refused frame.fits"));
 
-        Assert.Equal(1, await queue.RetryRefusedAsync(default));
+        Assert.Equal(1, await queue.RetryRefusedAsync(Destination, default));
         await queue.ProcessDueJobsAsync(default);
         Assert.Equal(2, server.Uploads.Count);
         Assert.Equal(0, Jobs());
@@ -359,7 +465,7 @@ public sealed class DirectorUploadQueueTests : IDisposable
         server.Answers.Enqueue(new(DirectorUploadOutcome.Refused, "bad name"));
         await queue.EnqueueAsync(Destination, frame, null, default);
         await queue.ProcessDueJobsAsync(default);
-        Assert.Equal(1, await queue.ForgetRefusedAsync(default));
+        Assert.Equal(1, await queue.ForgetRefusedAsync(Destination, default));
         Assert.Equal(0, Jobs(DirectorUploadQueue.RefusedFolderName));
         Assert.True(File.Exists(frame));
     }
@@ -528,6 +634,7 @@ public sealed class DirectorUploadQueueTests : IDisposable
         public Queue<DirectorUploadAnswer> Answers { get; } = new();
         public List<string> Uploads { get; } = [];
         public int StateCalls { get; private set; }
+        public Func<CancellationToken, Task<DirectorUploadAnswer>>? OnUpload { get; set; }
 
         public Task<DirectorUploadState> GetStateAsync(CancellationToken token)
         {
@@ -538,6 +645,7 @@ public sealed class DirectorUploadQueueTests : IDisposable
         public Task<DirectorUploadAnswer> UploadAsync(string path, CancellationToken token)
         {
             Uploads.Add(path);
+            if (OnUpload is not null) return OnUpload(token);
             return Task.FromResult(Answers.Count > 0 ? Answers.Dequeue() : new DirectorUploadAnswer(DirectorUploadOutcome.Stored, "Stored"));
         }
 

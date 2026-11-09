@@ -890,8 +890,8 @@ are not sent.
 
 ### Image uploads
 
-After NINA saves a light that a Director Session captured, Director uploads the
-file to the paired PSF Guard database. PSF Guard stores it as it stores a PSF
+When **Upload captured frames to PSF Guard** is on, Director uploads each light
+file saved by a Director Session to the paired PSF Guard database. PSF Guard stores it as it stores a PSF
 Guard Sync upload: the same receive folder, folder layout, header import and
 calibration matching. The database's **Image uploads** setting, under Rig setup
 › Plugins in PSF Guard, controls both plugins. Director does not upload flats,
@@ -900,8 +900,16 @@ plugin's upload instruction also runs, the server stores the file once and
 answers the second upload as already present.
 
 **Upload captured frames to PSF Guard** in Director's plugin settings controls
-this for the current NINA profile. It is on by default. When it is off, Director
-queues no new frames; frames already queued still upload.
+this for the current NINA profile. It is **off by default**, including for existing
+setups. Live and Deferred **Image record delivery** continue to send capture
+records without transferring files. Turn uploads on only if Director should also
+send the files; leave it off when using another file transfer method.
+
+Turning uploads off pauses queued files and cancels any transfer in progress.
+A file the server already received may still finish importing. Turning uploads
+back on resumes the queue for the active profile and its exact server, catalog
+and rig. Files saved while uploads were off are not added later. Switching
+profiles or changing the pairing pauses the previous connection's files.
 
 Each saved frame becomes a small job file below
 `%LOCALAPPDATA%\PSFGuardDirector\uploads`. The job names the saved file and
@@ -912,13 +920,13 @@ uploads one frame at a time to
 capture, a check-in, the program pull or the sequence.
 
 Before uploading, Director asks `GET /api/director/v1/rigs/{rig}/uploads`
-whether the database takes uploads, at most once a minute. It also asks when
-NINA starts and after pairing. The settings page shows the answer, the number of
-queued frames and the number PSF Guard refused.
+whether the database takes uploads, at most once a minute while uploads are on.
+It also asks when you enable uploads and after pairing. The settings page shows the answer and the queued and refused counts for the
+current connection. Retry and Forget apply only to that connection.
 
 - Uploads are off: queued frames wait. Director also skips new frames while
   its latest answer, at most a minute old, says uploads are off.
-- An older PSF Guard (HTTP 403, 404 or 405, or an answer without
+- An older PSF Guard (HTTP 404 or 405, or an answer without
   `data.enabled`): Director uploads nothing and queues nothing. It logs this
   once and asks again only after pairing, a server or profile change, or a
   NINA restart. Frames already queued stay on disk.
@@ -927,13 +935,15 @@ queued frames and the number PSF Guard refused.
   folder with the reason and does not retry it. **Retry refused uploads**
   queues those frames again; **Forget refused uploads** removes the jobs. The
   image files stay on disk.
-- HTTP 403 or 401 on an upload: Director keeps the frame and stops sending
+- HTTP 403 or 401: Director keeps the frame and stops sending
   until it reads the upload state again a minute later.
 - A timeout, a lost connection, HTTP 429 or a server error: Director keeps the
   frame and retries. It waits as long as the server's `Retry-After` asks, kept
   between 1 second and 10 minutes, or else 5 seconds, doubling up to 10
   minutes. PSF Guard answers 503 with `Retry-After` while another upload
   imports into the same database. Director logs the first such failure.
+- A successful HTTP response without a matching upload receipt: Director keeps
+  the job and retries instead of assuming the file arrived.
 - A file gone from disk: Director drops its job and logs it.
 
 The upload sends the whole saved file, headers included, and its file name

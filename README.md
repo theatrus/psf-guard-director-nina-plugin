@@ -179,7 +179,9 @@ verdicts would appear alongside local grades, not overwrite them. Raw captures
 would not be labeled calibrated without processing evidence.
 
 A paired Director uploads the lights its sessions capture to the paired PSF
-Guard database when that database has **Image uploads** on; see
+Guard database when you enable **Upload captured frames to PSF Guard** (off by
+default) and the database has **Image uploads** on. Live image record delivery
+works independently of file uploads; see
 [Image uploads](docs/native-capture.md#image-uploads). Corrections to previously
 credited data need further protocol work; this roadmap does not promise that
 feature today.

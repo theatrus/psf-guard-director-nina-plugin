@@ -6,7 +6,11 @@ using System.Text.Json;
 namespace PsfGuard.Director.Runtime;
 
 /// <summary>Where a captured frame goes: the paired server, profile and rig.</summary>
-public sealed record DirectorUploadDestination(Uri Endpoint, Guid ProfileId, Guid RigId, bool AllowInsecureHttp = false);
+public sealed record DirectorUploadDestination(Uri Endpoint, CoordinatorBinding Binding, bool AllowInsecureHttp = false)
+{
+    public Guid ProfileId => Binding.ProfileId;
+    public Guid RigId => Binding.RigId;
+}
 
 public enum DirectorUploadStateKind
 {
@@ -119,7 +123,8 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
         HttpMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        if (destination.ProfileId == Guid.Empty || destination.RigId == Guid.Empty)
+        if (destination.ProfileId == Guid.Empty || destination.RigId == Guid.Empty
+            || destination.Binding.CoordinatorInstanceId == Guid.Empty || destination.Binding.CatalogId == Guid.Empty)
             throw new ArgumentException("An upload destination needs a profile and a rig.", nameof(destination));
         this.destination = destination;
         transport = new(destination.Endpoint, credential, handler, destination.AllowInsecureHttp);
@@ -148,7 +153,7 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
     {
         switch (answer.Status)
         {
-            case HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed:
+            case HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed:
                 return new(DirectorUploadStateKind.Unsupported);
             case not HttpStatusCode.OK:
                 return new(DirectorUploadStateKind.Unavailable, $"PSF Guard answered HTTP {(int)answer.Status}.");
@@ -207,7 +212,10 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
         if (outcome != DirectorUploadOutcome.Stored)
             return new(outcome, message is null ? $"PSF Guard answered HTTP {(int)answer.Status}." : $"PSF Guard answered HTTP {(int)answer.Status}: {message}",
                 RetryAfter: outcome == DirectorUploadOutcome.Retry ? answer.RetryAfter : null);
-        return new(DirectorUploadOutcome.Stored, "Stored", AlreadyPresent(answer));
+        // A proxy's HTML login page or an incomplete reply is not a receipt.
+        if (!TryReadReceipt(answer, fileName, out var alreadyPresent))
+            return new(DirectorUploadOutcome.Retry, "PSF Guard did not confirm that it stored the image.");
+        return new(DirectorUploadOutcome.Stored, "Stored", alreadyPresent);
     }
 
     private static string? ErrorText(CoordinatorExchange answer)
@@ -223,15 +231,23 @@ public sealed class DirectorUploadClient : IDirectorUploadServer
         catch (JsonException) { return null; }
     }
 
-    private static bool AlreadyPresent(CoordinatorExchange answer)
+    private static bool TryReadReceipt(CoordinatorExchange answer, string fileName, out bool alreadyPresent)
     {
+        alreadyPresent = false;
         if (!answer.Json) return false;
         try
         {
             using var body = JsonDocument.Parse(answer.Bytes);
-            return body.RootElement.ValueKind == JsonValueKind.Object
+            if (body.RootElement.ValueKind == JsonValueKind.Object
+                && body.RootElement.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True
                 && body.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
-                && data.TryGetProperty("already_present", out var present) && present.ValueKind == JsonValueKind.True;
+                && data.TryGetProperty("filename", out var name) && name.ValueKind == JsonValueKind.String && name.GetString() == fileName
+                && data.TryGetProperty("already_present", out var present) && present.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                alreadyPresent = present.GetBoolean();
+                return true;
+            }
+            return false;
         }
         catch (JsonException) { return false; }
     }

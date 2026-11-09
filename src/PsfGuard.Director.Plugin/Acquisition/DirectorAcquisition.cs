@@ -748,10 +748,11 @@ public sealed partial class DirectorAcquisition
             native?.Install(container);
             if (options.CheckInAtStart) await CheckIn();
             // Only this adapter's own saved science lights reach the upload queue.
-            var uploadDestination = new DirectorUploadDestination(endpoint, profile, pairing.Binding.RigId, connection.AllowInsecureHttp);
+            var uploadDestination = new DirectorUploadDestination(endpoint, pairing.Binding, connection.AllowInsecureHttp);
             void QueueUpload(CaptureEvidence saved)
             {
-                if (settings.GetValueBoolean(DirectorImageUploads.SettingKey, true))
+                if (profiles.ActiveProfile.Id == profile
+                    && settings.GetValueBoolean(DirectorImageUploads.SettingKey, DirectorImageUploads.DefaultEnabled))
                     DirectorImageUploads.Queue.Offer(uploadDestination, saved.SavedPath!, saved.Intent.CaptureId.ToString("D"));
             }
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history, Path.Combine(runRoot, "journal"),

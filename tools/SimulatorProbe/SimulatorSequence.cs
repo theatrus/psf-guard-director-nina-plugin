@@ -99,6 +99,7 @@ public sealed class SimulatorSequence : SequenceItem
         if (camera.GetInfo().Connected || telescope.GetInfo().Connected || filters.GetInfo().Connected || safety.GetInfo().Connected || dome.GetInfo().Connected)
             throw new InvalidOperationException("Start the probe with all simulator devices disconnected.");
         var profileId = profiles.ActiveProfile.Id;
+        await using var uploadProbe = new UploadProbe(profiles);
         var run = Path.Combine(root, "probe", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(run);
         var steps = new List<string>();
@@ -327,6 +328,8 @@ public sealed class SimulatorSequence : SequenceItem
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueBoolean("ReportSequenceActivity", coordinator.SequenceActivity);
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
+                    if (coordinator.ImageUploads is not null)
+                        await uploadProbe.ConfigureAsync(coordinator, lifetime.Token);
                     if (coordinator.SequenceActivity)
                     {
                         await coordinator.VerifySequenceActivityAsync(Name, lifetime.Token);
@@ -949,6 +952,8 @@ public sealed class SimulatorSequence : SequenceItem
                         && h.Value.Trim() == capture.Intent.CaptureId.ToString("D"))) throw new InvalidDataException("Public FITS capture identity missing.");
                     captures.Add(capture);
                 }
+                if (coordinator.ImageUploads is not null)
+                    await uploadProbe.VerifyAsync(coordinator, captures, run, lifetime.Token);
                 if (coordinator.PriorityRefresh)
                 {
                     await coordinator.VerifyPriorityRefreshAsync(service.LocalStateRoot, equipment, captures, lifetime.Token);
