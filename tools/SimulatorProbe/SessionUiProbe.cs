@@ -84,8 +84,8 @@ internal static class SessionUiProbe
                     BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "Readiness");
                 var acquisition = Toggle("Enable acquisition");
                 if (Descendants(host).OfType<CheckBox>().Any(control =>
-                    System.Windows.Automation.AutomationProperties.GetName(control) is "Local target scheduling" or "Automatic workloads"))
-                    throw new InvalidOperationException("Obsolete workload mode controls are still visible.");
+                    System.Windows.Automation.AutomationProperties.GetName(control) is "Local target scheduling" or "Automatic workloads" or "I will supervise this attended run"))
+                    throw new InvalidOperationException("Obsolete Director controls are still present in the session template.");
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Initial session status did not explain disabled acquisition.");
                 acquisition.IsChecked = true;
                 Layout();

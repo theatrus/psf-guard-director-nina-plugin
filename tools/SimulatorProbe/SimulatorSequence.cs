@@ -395,12 +395,6 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer ??= new DirectorSessionContainer(service);
                 await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer);
                 sessionContainer.Options.EnableAcquisition = true;
-                if (coordinator.Attended)
-                {
-                    if (sessionContainer.Validate() || !sessionContainer.ConfigurationIssues.Any(issue => issue.Contains("supervise", StringComparison.Ordinal)))
-                        throw new InvalidDataException("Attended acquisition was available before confirmation.");
-                    sessionContainer.ConfirmAttendedRun = true;
-                }
                 sessionContainer.Options.Enclosure = coordinator.UsesEnclosure ? DirectorEnclosurePolicy.RequireOpenShutter : DirectorEnclosurePolicy.OpenAir;
                 sessionContainer.Options.OnAbort = coordinator.AbortWithoutPark ? DirectorAbortPolicy.StopMount : DirectorAbortPolicy.ParkMount;
                 if (coordinator.DeferredCheckIn)
@@ -472,8 +466,6 @@ public sealed class SimulatorSequence : SequenceItem
                     else safetySimulator.IsSafe = false;
                 }
                 var executing = nightSequence is null ? sessionContainer.Execute(progress, publicLifetime.Token) : nightSequence.Run(progress, publicLifetime.Token);
-                if (coordinator.Attended && sessionContainer.ConfirmAttendedRun)
-                    throw new InvalidDataException("Attended confirmation was not consumed.");
                 try
                 {
                     if (coordinator.QualityScenario is not null)
@@ -916,10 +908,7 @@ public sealed class SimulatorSequence : SequenceItem
                 retry.Options.LocalTargetScheduling = coordinator.LocalTargetScheduling;
                 ConfigureImaging(retry.Options);
                 if (coordinator.Attended)
-                {
                     retry.Options.Safety = DirectorSafetyPolicy.Attended;
-                    retry.ConfirmAttendedRun = true;
-                }
                 if (coordinator.RestartAdmission)
                 {
                     retry = (DirectorSessionContainer)sessionContainer.Clone();

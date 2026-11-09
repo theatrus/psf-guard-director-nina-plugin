@@ -96,20 +96,6 @@
                     <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
                         ToolTip="Update connected equipment details in PSF Guard. Director also reports automatically at session start. Reporting does not start acquisition."
                         HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6" />
-                    <DockPanel Margin="0,0,0,8">
-                        <DockPanel.Style>
-                            <Style TargetType="DockPanel">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Options.Safety}" Value="{x:Static local:DirectorSafetyPolicy.Attended}">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </DockPanel.Style>
-                        <CheckBox DockPanel.Dock="Right" IsChecked="{Binding ConfirmAttendedRun}" AutomationProperties.Name="I will supervise this attended run" Margin="8,0,0,0" />
-                        <TextBlock Text="I will supervise this attended run" Foreground="{DynamicResource PrimaryBrush}" TextWrapping="Wrap" />
-                    </DockPanel>
                     <ItemsControl ItemsSource="{Binding ConfigurationIssues}" Margin="0,0,0,8">
                         <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>

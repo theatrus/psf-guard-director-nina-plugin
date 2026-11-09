@@ -8,7 +8,7 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 
 internal sealed record NinaSafetyEvidence(PlannerSafety Safety, string Reason, ulong ValidUntilMs);
 
-// Only a locally confirmed attended run can admit a profile without a monitor.
+// The attended safety policy can admit a profile with no monitor configured.
 // A configured monitor always supplies fresh native evidence.
 internal sealed class NinaSafetyInterlock : ISafetyMonitorConsumer
 {
