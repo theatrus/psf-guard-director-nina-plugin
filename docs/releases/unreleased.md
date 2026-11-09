@@ -1,6 +1,3 @@
 # Unreleased
 
-- Director explicitly starts sidereal tracking before slewing and centering, including when your mount is already unparked. It confirms tracking before continuing and shows a clear error if the mount refuses or does not respond.
-- Director shows its current action and elapsed time in N.I.N.A.'s status bar, with target and filter context during capture. Startup steps report their durations and saved images are checked once per start.
 - Director uploads the lights a Director Session captures to the paired PSF Guard database once N.I.N.A. saves them. Turn on **Image uploads** for the database under Rig setup › Plugins in PSF Guard. Director keeps frames in a queue on disk while PSF Guard is unreachable, and does nothing with a PSF Guard version that cannot take them. Turn off **Upload captured frames to PSF Guard** in Director's plugin settings to stop uploads. The settings show whether PSF Guard takes uploads and how many frames are queued or refused.
-- Choose **Recalibrate before guiding** to reset guider calibration for each target and retry, or use your own instructions in **Before New Target**. Guiding and exposure failures keep their original error visible through shutdown and retry, with clearer messages about images and targets.
