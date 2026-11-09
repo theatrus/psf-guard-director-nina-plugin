@@ -58,6 +58,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal Uri Endpoint => endpoint;
     internal bool LiveStatusVerified { get; private set; }
     internal bool SequenceActivity { get; private set; }
+    internal string? ImageUploads { get; private set; }
+    internal string? UploadDirectory { get; private set; }
+    internal DirectorUploadDestination UploadDestination => new(endpoint, pairing.Binding);
     internal async Task<JsonElement> ReadRigStatusAsync(CancellationToken token)
     {
         var rows = await OperatorAsync(HttpMethod.Get, "rigs/status", null, token);
@@ -210,6 +213,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             probe.StartUnparked = fixtureJson.RootElement.TryGetProperty("StartUnparked", out var startUnparked) && startUnparked.GetBoolean();
             probe.WaitingPlanRefresh = fixtureJson.RootElement.TryGetProperty("WaitingPlanRefresh", out var waitingRefresh) && waitingRefresh.GetBoolean();
             probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
+            probe.ImageUploads = fixtureJson.RootElement.TryGetProperty("ImageUploads", out var uploads) ? uploads.GetString() : null;
+            probe.UploadDirectory = fixtureJson.RootElement.TryGetProperty("UploadDirectory", out var receive) ? receive.GetString() : null;
             return probe;
         }
         catch

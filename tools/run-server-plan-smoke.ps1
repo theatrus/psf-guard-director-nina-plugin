@@ -7,6 +7,7 @@ param(
     [string]$Python = 'python',
     [switch]$PublicAcquisition,
     [switch]$SequenceActivity,
+    [ValidateSet('on', 'off')][string]$ImageUploads,
     [switch]$Attended,
     [switch]$WaitForSafeAtStartup,
     [switch]$StartUnparked,
@@ -69,6 +70,7 @@ if ($AbortWithoutPark -and !$PublicUnsafe) { throw 'AbortWithoutPark requires Pu
 if ($LocalTargetScheduling -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'LocalTargetScheduling requires a safe public acquisition run.' }
 if ($AutomaticWorkloads -and (!$PublicAcquisition -or $PublicUnsafe)) { throw 'AutomaticWorkloads requires a safe PublicAcquisition run.' }
 $root = Join-Path $env:TEMP "director-server-plan-$([Guid]::NewGuid().ToString('N'))"
+if ($ImageUploads -and (!$PublicAcquisition -or !$NativeImaging -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $DeferredCheckIn)) { throw 'ImageUploads requires a native Live automatic session.' }
 New-Item -ItemType Directory -Path $root, "$root/images" | Out-Null
 $exe = Join-Path $root 'psf-guard-cli.exe'
 Copy-Item -LiteralPath (Resolve-Path -LiteralPath $PsfGuardExe).Path -Destination $exe
@@ -114,12 +116,17 @@ try {
     $catalog = [Guid]::NewGuid().ToString('D')
     $preview = Json-Request Post "director/v1/catalogs/$slug/rig/preview" @{catalog_id=$catalog}
     $applied = Json-Request Post "director/v1/catalogs/$slug/rig/apply" @{plan=@{catalog_id=$catalog};preview_digest=$preview.data.preview_digest}
+    if ($ImageUploads) {
+        New-Item -ItemType Directory -Path "$root/received" | Out-Null
+        Json-Request Put "databases/$slug" @{image_dirs=@("$root/images", "$root/received");remote_image_upload=@{enabled=$true;image_directory="$root/received";placement='flat'}} | Out-Null
+    }
     if ($Phd2Executable) { $phd2 = & "$PSScriptRoot/start-phd2-simulator.ps1" -Executable $Phd2Executable -ArtifactDirectory $root }
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
         ForEach-Object { $_.WeatherHoldScenario=$(if ($WeatherHoldScenario) { $WeatherHoldScenario } else { $null }); $_.NightEndScenario=$(if ($NightEndScenario) { $NightEndScenario } else { $null }); $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
         ForEach-Object { if ($StartUnparked) { $_.StartUnparked=$true }; if ($WaitingPlanRefresh) { $_.WaitingPlanRefresh=$true }; if ($Attended) { $_.Attended=$true }; if ($SequenceActivity) { $_.SequenceActivity=$true }; if ($WaitForSafeAtStartup) { $_.WaitForSafeAtStartup=$true }; if ($RestartAdmission) { $_.RestartAdmission=$true }; if ($QualityScenario) { $_.QualityScenario=$QualityScenario; $_.ExerciseOutage=$false }; if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
+        ForEach-Object { if ($ImageUploads) { $_.ImageUploads=$ImageUploads; $_.UploadDirectory="$root/received" }; $_ } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture
     $started = & "$PSScriptRoot/start-nina-smoke.ps1" -NinaDirectory $NinaDirectory -PluginZip $PluginZip -AscomSequence -CoordinatorFixture $fixture -ArtifactDirectory $ArtifactDirectory
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
