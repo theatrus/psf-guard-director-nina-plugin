@@ -56,8 +56,8 @@ jobs:
         with:
           name: director-preview-release
           path: |
-            artifacts/PSFGuardDirector-0.1.0.15.zip
-            artifacts/PSFGuardDirector-0.1.0.15.manifest.json
+            artifacts/PSFGuardDirector-0.1.0.16.zip
+            artifacts/PSFGuardDirector-0.1.0.16.manifest.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: always()
