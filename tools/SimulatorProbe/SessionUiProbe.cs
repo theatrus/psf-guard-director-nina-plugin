@@ -105,6 +105,22 @@ internal static class SessionUiProbe
             var host = new Border { Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
             System.Windows.Documents.TextElement.SetForeground(host, (Brush)Application.Current.FindResource("PrimaryBrush"));
             Layout();
+            var operationLine = Descendants(host).OfType<TextBlock>().Single(text =>
+                BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path?.Path == "CurrentDisplay.Operation");
+            var targetLine = Descendants(host).OfType<TextBlock>().Single(text =>
+                BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path?.Path == "CurrentDisplay.Target");
+            if (display is null && (operationLine.Visibility != Visibility.Collapsed || targetLine.Visibility != Visibility.Collapsed))
+                throw new InvalidOperationException("An idle session should not show empty action or target placeholders.");
+            var triggerStatus = exportedType.GetMethod("SetTriggerActivity", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            triggerStatus.Invoke(session, ["Injected autofocus (simulator)"]);
+            Layout();
+            if (operationLine.Visibility != Visibility.Collapsed || !Descendants(host).OfType<TextBlock>().Any(text =>
+                text.Text == "Running N.I.N.A. trigger: Injected autofocus (simulator)"))
+                throw new InvalidOperationException("A global trigger must appear once in the status header.");
+            triggerStatus.Invoke(session, [null]);
+            Layout();
+            if (display is { Operation: not ("" or "-") } && operationLine.Visibility != Visibility.Visible)
+                throw new InvalidOperationException("The current action must return to the header after a trigger ends.");
             var tabs = Descendants(host).OfType<TabControl>().Single();
             if (!Equals(((TabItem)tabs.SelectedItem).Header, "Overview"))
                 throw new InvalidOperationException("Director must open on its current status.");
@@ -181,11 +197,27 @@ internal static class SessionUiProbe
             }
             tabs.SelectedItem = tabs.Items.Cast<TabItem>().Single(t => Equals(t.Header, "Overview"));
             Layout();
-            var reportButton = Descendants(host).OfType<Button>().SingleOrDefault(button => Equals(button.Content, "Report equipment"))
+            var diagnostics = Descendants(tabs).OfType<Expander>().Single(expander => Equals(expander.Header, "Diagnostics"));
+            if (diagnostics.IsExpanded) throw new InvalidOperationException("Session diagnostics should not crowd the overview.");
+            var diagnosticElements = Descendants(diagnostics).ToHashSet();
+            var overviewFields = Descendants(tabs).OfType<TextBlock>()
+                .Where(text => !diagnosticElements.Contains(text))
+                .Select(text => BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path?.Path)
+                .Where(path => !string.IsNullOrEmpty(path)).ToArray();
+            if (!overviewFields.SequenceEqual(new[] { "Safety", "Quality", "Connectivity" }))
+                throw new InvalidOperationException($"Overview should only add safety, quality and connection context to the session header; found {string.Join(", ", overviewFields)}.");
+            diagnostics.IsExpanded = true;
+            Layout();
+            var reportButton = Descendants(host).OfType<Button>().SingleOrDefault(button => button.Content is TextBlock { Text: "Report equipment" })
                 ?? throw new InvalidOperationException("Director equipment report button was not rendered.");
             if (reportButton.Command is null || reportButton.IsEnabled || reportButton.Style != Application.Current.FindResource("StandardButton")
                 || reportButton.ActualWidth < 80)
                 throw new InvalidOperationException("Equipment report button lost its native style, binding or idle-service guard.");
+            if (!Descendants(diagnostics).OfType<TextBlock>().Any(text =>
+                BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path?.Path == "ProgramRevision"))
+                throw new InvalidOperationException("Technical session details must remain accessible in diagnostics.");
+            diagnostics.IsExpanded = false;
+            Layout();
             for (var tab = 0; tab < tabs.Items.Count; tab++)
             {
                 tabs.SelectedIndex = tab;

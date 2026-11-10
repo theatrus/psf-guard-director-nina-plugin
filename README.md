@@ -108,6 +108,10 @@ also shows instructions running before or after Director Session, even with
 server activity reporting switched off. Running local or inherited N.I.N.A.
 triggers take precedence over the upcoming exposure in the session, toolbar,
 and live PSF Guard status, including triggers that do not send progress messages.
+The session header shows the current action and target. **Overview** adds only
+safety, image quality, and connection status. Technical identifiers, saved-record
+details, and the manual equipment-report action are under its collapsed
+**Diagnostics** section; equipment is reported automatically at session start.
 
 Under **Settings → Autofocus**, choose **Autofocus when starting a target** and
 **Autofocus after a filter change** independently. Both stay enabled for existing

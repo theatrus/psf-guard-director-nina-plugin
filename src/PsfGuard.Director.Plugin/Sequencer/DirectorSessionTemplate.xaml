@@ -96,44 +96,64 @@
                     <Border Background="{DynamicResource SecondaryBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12" Margin="0,0,0,12" CornerRadius="3">
                         <StackPanel>
                             <TextBlock Text="{Binding SessionStatus}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
-                            <TextBlock Text="{Binding CurrentDisplay.Operation}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                            <TextBlock Text="{Binding CurrentDisplay.Target, StringFormat=Target: {0}}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding CurrentDisplay.Operation}" TextWrapping="Wrap" Margin="0,8,0,0">
+                                <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentDisplay.Operation}" Value="-"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding CurrentDisplay.Operation}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding CurrentDisplay.Phase}" Value="Running N.I.N.A. trigger"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                </Style.Triggers></Style></TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding CurrentDisplay.Target, StringFormat=Target: {0}}" TextWrapping="Wrap" Margin="0,4,0,0">
+                                <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentDisplay.Target}" Value="-"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding CurrentDisplay.Target}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                </Style.Triggers></Style></TextBlock.Style>
+                            </TextBlock>
                         </StackPanel>
                     </Border>
-                    <TextBlock Text="{Binding Readiness}" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <ItemsControl ItemsSource="{Binding ConfigurationIssues}" Margin="0,0,0,8">
                         <ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <TabControl>
                         <TabItem Header="Overview">
-                            <StackPanel>
-                    <Button Content="Report equipment" Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
-                        ToolTip="Update connected equipment details in PSF Guard. Director also reports automatically at session start. Reporting does not start acquisition."
-                        HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6" />
-                            <Grid Margin="8" DataContext="{Binding CurrentDisplay}">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="Rig database" Margin="0,5" /><TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Rig}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="1" Text="Project" Margin="0,5" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Project}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="2" Text="Target" Margin="0,5" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Target}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="3" Text="Goal" Margin="0,5" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Goal}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="4" Text="Operation" Margin="0,5" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Operation}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="5" Text="Program revision" Margin="0,5" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ProgramRevision}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="6" Text="PSF Guard" Margin="0,5" /><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Connectivity}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="7" Text="Local safety" Margin="0,5" /><TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Safety}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="8" Text="Pending records" Margin="0,5" /><TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding QueueDepth}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="9" Text="Last report" Margin="0,5" /><TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding LastCheckIn}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="10" Text="Wait reason" Margin="0,5" /><TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding WaitReason}" TextWrapping="Wrap" Margin="0,5" />
-                                <TextBlock Grid.Row="11" Text="Image quality" Margin="0,5" /><TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding Quality}" TextWrapping="Wrap" Margin="0,5" />
-                            </Grid>
+                            <StackPanel Margin="8" MaxWidth="720" HorizontalAlignment="Left">
+                                <Grid DataContext="{Binding CurrentDisplay}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                    <TextBlock Text="Safety" Margin="0,5,24,5" /><TextBlock Grid.Column="1" Text="{Binding Safety}" TextWrapping="Wrap" Margin="0,5" />
+                                    <TextBlock Grid.Row="1" Text="Image quality" Margin="0,5,24,5" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Quality}" TextWrapping="Wrap" Margin="0,5" />
+                                    <TextBlock Grid.Row="2" Text="PSF Guard" Margin="0,5,24,5" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Connectivity}" TextWrapping="Wrap" Margin="0,5" />
+                                </Grid>
+                                <Expander Header="Diagnostics" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,12,0,0">
+                                    <StackPanel Margin="8">
+                                        <Grid DataContext="{Binding CurrentDisplay}">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Text="Rig database" Margin="0,5,24,5" /><TextBlock Grid.Column="1" Text="{Binding Rig}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="1" Text="Project" Margin="0,5,24,5" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Project}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="2" Text="Goal" Margin="0,5,24,5" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Goal}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="3" Text="Program revision" Margin="0,5,24,5" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ProgramRevision}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="4" Text="Pending records" Margin="0,5,24,5" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding QueueDepth}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="5" Text="Last report" Margin="0,5,24,5" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding LastCheckIn}" TextWrapping="Wrap" Margin="0,5" />
+                                            <TextBlock Grid.Row="6" Text="Wait details" Margin="0,5,24,5" /><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding WaitReason}" TextWrapping="Wrap" Margin="0,5" />
+                                        </Grid>
+                                        <TextBlock Text="Equipment is reported automatically when this session starts." TextWrapping="Wrap" Margin="0,12,0,6" />
+                                        <Button Command="{Binding ReportEquipmentCommand}" Style="{DynamicResource StandardButton}"
+                                            ToolTip="Refresh equipment details in PSF Guard without starting acquisition."
+                                            HorizontalAlignment="Left" Margin="0,0,0,6" Padding="12,6">
+                                            <TextBlock Text="Report equipment" Foreground="{DynamicResource ButtonForegroundBrush}" />
+                                        </Button>
+                                    </StackPanel>
+                                </Expander>
                             </StackPanel>
                         </TabItem>
                         <TabItem Header="Settings">
                             <StackPanel Margin="8" DataContext="{Binding Options}">
+                                <TextBlock DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=TabControl}}"
+                                    Text="{Binding Readiness}" TextWrapping="Wrap" Margin="8,0,8,12" />
                                 <Grid Margin="8,0,8,10">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Enable acquisition" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
