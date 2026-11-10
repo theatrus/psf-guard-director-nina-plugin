@@ -140,7 +140,8 @@ internal sealed class NinaSessionHooks
         {
             var result = await slots.CreateInvocation(slot).RunAsync(context, progress, deadline.Token).ConfigureAwait(false);
             deadline.Token.ThrowIfCancellationRequested();
-            if (!result.Completed) throw new InvalidOperationException($"Director {slot} instructions did not complete.");
+            if (!result.Completed)
+                throw new InvalidOperationException($"Director {slots[slot].Name} did not complete: {string.Join("; ", result.Issues.Distinct().Select(issue => issue.Description))}.");
             completed = true;
         }
         finally { receipts.Add(new(slot, clock.GetElapsedTime(started).TotalMilliseconds, completed)); }

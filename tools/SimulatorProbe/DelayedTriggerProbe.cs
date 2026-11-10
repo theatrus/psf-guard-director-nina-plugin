@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem;
@@ -14,6 +15,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
 {
     private readonly SequenceContainer parent;
+    private readonly HistoricalFailure history = new();
     private int entered;
     private NinaExposureItem? exposure;
     internal bool Completed { get; private set; }
@@ -27,7 +29,12 @@ internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
     internal static async Task<DelayedTriggerProbe> InstallAsync(ISequenceContainer parent)
     {
         var trigger = new DelayedTriggerProbe((SequenceContainer)parent);
-        await Application.Current.Dispatcher.InvokeAsync(() => trigger.parent.Add(trigger));
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            trigger.parent.Add(trigger.history);
+            trigger.history.Status = SequenceEntityStatus.FAILED;
+            trigger.parent.Add(trigger);
+        });
         return trigger;
     }
 
@@ -51,7 +58,24 @@ internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
         if (!Completed) throw new InvalidDataException("The delayed global trigger did not finish before capture.");
         if (exposure is not { ExecutionError: null, Evidence.Phase: CapturePhase.Saved })
             throw new InvalidDataException("The original exposure after the delayed trigger did not save successfully.");
+        if (history.Status != SequenceEntityStatus.FAILED)
+            throw new InvalidDataException("Historical trigger evidence was changed by a later hook.");
     }
 
-    public async ValueTask DisposeAsync() => await Application.Current.Dispatcher.InvokeAsync(() => parent.Remove(this));
+    public async ValueTask DisposeAsync() => await Application.Current.Dispatcher.InvokeAsync(() =>
+    {
+        parent.Remove(this);
+        parent.Remove(history);
+    });
+
+    // Reproduce the stale failed global-autofocus status in Ultracat's log.
+    // It did not run during this session and must not fail target setup/waits.
+    private sealed class HistoricalFailure : SequenceTrigger
+    {
+        internal HistoricalFailure() => Name = "Earlier global autofocus failure fixture";
+        public override object Clone() => throw new NotSupportedException("Test-only transient trigger.");
+        public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => false;
+        public override Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) =>
+            throw new InvalidOperationException("The historical trigger must not execute.");
+    }
 }

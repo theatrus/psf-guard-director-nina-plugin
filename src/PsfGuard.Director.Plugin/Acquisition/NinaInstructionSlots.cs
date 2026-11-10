@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using System.ComponentModel;
 using System.Runtime.Serialization;
 using NINA.Core.Enum;
 using NINA.Core.Model;
@@ -145,7 +146,17 @@ internal sealed class NinaInstructionSlots
     }
 }
 
-internal sealed record NinaInstructionIssue(string Name, SequenceEntityStatus Status);
+internal sealed record NinaInstructionIssue(string Name, SequenceEntityStatus Status)
+{
+    internal string Description => $"{(string.IsNullOrWhiteSpace(Name) ? "An instruction" : Name)} {Status switch
+    {
+        SequenceEntityStatus.FAILED => "failed",
+        SequenceEntityStatus.RUNNING => "is still running",
+        SequenceEntityStatus.SKIPPED => "was skipped",
+        SequenceEntityStatus.CREATED => "did not run",
+        _ => "did not finish"
+    }}";
+}
 internal sealed record NinaInstructionResult(IReadOnlyList<NinaInstructionIssue> Issues)
 {
     internal bool Completed => Issues.Count == 0;
@@ -170,6 +181,7 @@ internal sealed class NinaInstructionInvocation(SequentialContainer block, Actio
         {
             token.ThrowIfCancellationRequested();
             block.AttachNewParent(parent);
+            using var inherited = new InheritedTriggerRuns(parent);
             foreach (var entity in LifecycleEntities(block))
             {
                 initialized.Add(entity);
@@ -181,8 +193,10 @@ internal sealed class NinaInstructionInvocation(SequentialContainer block, Actio
             CollectItems(block, issues);
             // A trigger's task can return after NINA swallowed its failure.
             // Do not turn that into successful hook evidence for the session.
+            // Ancestor triggers retain old outcomes across Director retries;
+            // only a trigger involved in this invocation can fail this hook.
             for (ISequenceContainer? current = parent; current is not null; current = current.Parent)
-                CollectTriggers(current, issues);
+                CollectTriggers(current, issues, inherited.Includes);
             return new(issues.AsReadOnly());
         }
         catch (Exception error)
@@ -230,15 +244,68 @@ internal sealed class NinaInstructionInvocation(SequentialContainer block, Actio
         CollectTriggers(container, issues);
     }
 
-    private static void CollectTriggers(ISequenceContainer container, List<NinaInstructionIssue> issues)
+    private static void CollectTriggers(ISequenceContainer container, List<NinaInstructionIssue> issues,
+        Func<ISequenceTrigger, bool>? include = null)
     {
         if (container is not NINA.Sequencer.Trigger.ITriggerable triggerable) return;
         foreach (var trigger in triggerable.GetTriggersSnapshot())
         {
+            if (include is not null && !include(trigger)) continue;
             if (trigger.Status is SequenceEntityStatus.FAILED or SequenceEntityStatus.RUNNING or SequenceEntityStatus.SKIPPED)
                 issues.Add(new(trigger.Name, trigger.Status));
             if (trigger is SequenceTrigger native && trigger.Status == SequenceEntityStatus.FINISHED)
                 foreach (var item in native.TriggerRunner.GetItemsSnapshot()) CollectItems(item, issues);
+        }
+    }
+
+    private sealed class InheritedTriggerRuns : IDisposable
+    {
+        private readonly Dictionary<ISequenceTrigger, Observation> observations = new(ReferenceEqualityComparer.Instance);
+
+        internal InheritedTriggerRuns(ISequenceContainer parent)
+        {
+            for (ISequenceContainer? current = parent; current is not null; current = current.Parent)
+                if (current is ITriggerable triggers)
+                    foreach (var trigger in triggers.GetTriggersSnapshot())
+                        if (!observations.ContainsKey(trigger)) observations.Add(trigger, new(trigger));
+        }
+
+        // A trigger added mid-invocation has no known historical outcome.
+        internal bool Includes(ISequenceTrigger trigger) => !observations.TryGetValue(trigger, out var observed) || observed.Involved;
+        public void Dispose() { foreach (var observation in observations.Values) observation.Dispose(); }
+
+        private sealed class Observation : IDisposable
+        {
+            private readonly ISequenceTrigger trigger;
+            private readonly INotifyPropertyChanged? notifications;
+            private readonly SequenceEntityStatus initialStatus;
+            private int lastStatus, changed;
+
+            internal Observation(ISequenceTrigger trigger)
+            {
+                this.trigger = trigger;
+                initialStatus = trigger.Status;
+                lastStatus = (int)initialStatus;
+                notifications = trigger as INotifyPropertyChanged;
+                // Direct notification subscription is thread-neutral. WPF weak
+                // event managers must not be created on the acquisition thread.
+                if (notifications is not null) notifications.PropertyChanged += StatusChanged;
+            }
+
+            // FAILED -> RUNNING -> FAILED is a new failure even though the final
+            // status matches the old one. Unobservable custom triggers retain
+            // the conservative check rather than hiding a possible new failure.
+            internal bool Involved => notifications is null || initialStatus == SequenceEntityStatus.RUNNING
+                || Volatile.Read(ref changed) != 0 || trigger.Status != initialStatus;
+
+            private void StatusChanged(object? sender, PropertyChangedEventArgs args)
+            {
+                if (!string.IsNullOrEmpty(args.PropertyName) && args.PropertyName != nameof(ISequenceTrigger.Status)) return;
+                var status = (int)trigger.Status;
+                if (Interlocked.Exchange(ref lastStatus, status) != status) Volatile.Write(ref changed, 1);
+            }
+
+            public void Dispose() { if (notifications is not null) notifications.PropertyChanged -= StatusChanged; }
         }
     }
 }

@@ -192,6 +192,83 @@ public sealed class NinaInstructionSlotTests
         Assert.Contains(result.Issues, issue => issue.Name == "nested failure" && issue.Status == SequenceEntityStatus.FAILED);
     }
 
+    [Theory]
+    [InlineData(SequenceEntityStatus.FAILED)]
+    [InlineData(SequenceEntityStatus.SKIPPED)]
+    [InlineData(SequenceEntityStatus.FINISHED)]
+    public async Task InactiveAncestorTriggerHistoryDoesNotFailNewTargetOrWait(SequenceEntityStatus historicalStatus)
+    {
+        var slots = new NinaInstructionSlots();
+        slots.BeforeNewTarget.Add(new ProbeItem());
+        slots.BeforeWait.Add(new ProbeItem());
+        var root = new SequentialContainer();
+        var parent = new SequentialContainer();
+        root.Add(parent);
+        var trigger = new ConditionalFailureTrigger();
+        root.Add(trigger);
+        trigger.Status = historicalStatus;
+        trigger.TriggerRunner.Add(new ProbeItem { Name = "Earlier autofocus", Status = SequenceEntityStatus.FAILED });
+
+        // Reproduce the twenty target-setup/wait attempts in the Ultracat log.
+        for (var visit = 0; visit < 20; visit++)
+        {
+            Assert.True((await slots.CreateInvocation(NinaInstructionSlot.BeforeNewTarget).RunAsync(parent, Progress, default)).Completed);
+            Assert.True((await slots.CreateInvocation(NinaInstructionSlot.BeforeWait).RunAsync(parent, Progress, default)).Completed);
+        }
+        Assert.Equal(0, trigger.Runs);
+        Assert.Equal(historicalStatus, trigger.Status);
+        Assert.Equal(SequenceEntityStatus.FAILED, trigger.TriggerRunner.Items[0].Status);
+    }
+
+    [Fact]
+    public async Task AncestorTriggerFailingAgainWithTheSameFinalStatusStillFailsCurrentHook()
+    {
+        var slots = new NinaInstructionSlots();
+        slots.BeforeNewTarget.Add(new ProbeItem());
+        var parent = new SequentialContainer();
+        var trigger = new ConditionalFailureTrigger { ShouldRun = true };
+        parent.Add(trigger);
+        trigger.Status = SequenceEntityStatus.FAILED;
+
+        var result = await slots.CreateInvocation(NinaInstructionSlot.BeforeNewTarget).RunAsync(parent, Progress, default);
+
+        Assert.Equal(1, trigger.Runs);
+        Assert.False(result.Completed);
+        Assert.Contains(result.Issues, issue => issue.Name == trigger.Name && issue.Status == SequenceEntityStatus.FAILED);
+    }
+
+    [Fact]
+    public async Task AncestorTriggerAlreadyRunningCannotBeIgnoredAsHistory()
+    {
+        var slots = new NinaInstructionSlots();
+        slots.BeforeWait.Add(new ProbeItem());
+        var parent = new SequentialContainer();
+        var trigger = new ConditionalFailureTrigger();
+        parent.Add(trigger);
+        trigger.Status = SequenceEntityStatus.RUNNING;
+        var result = await slots.CreateInvocation(NinaInstructionSlot.BeforeWait).RunAsync(parent, Progress, default);
+        Assert.False(result.Completed);
+        Assert.Contains(result.Issues, issue => issue.Status == SequenceEntityStatus.RUNNING);
+    }
+
+    [Fact]
+    public async Task AncestorTriggerRerunningItsPreviouslyFailedChildStillFailsCurrentHook()
+    {
+        var slots = new NinaInstructionSlots();
+        slots.BeforeNewTarget.Add(new ProbeItem());
+        var parent = new SequentialContainer();
+        var trigger = new NestedFailureTrigger();
+        parent.Add(trigger);
+        trigger.Status = SequenceEntityStatus.FINISHED;
+        var child = ((SequentialContainer)trigger.TriggerRunner.Items[0]).Items[0];
+        child.Status = SequenceEntityStatus.FAILED;
+
+        var result = await slots.CreateInvocation(NinaInstructionSlot.BeforeNewTarget).RunAsync(parent, Progress, default);
+
+        Assert.False(result.Completed);
+        Assert.Contains(result.Issues, issue => issue.Name == "nested failure" && issue.Status == SequenceEntityStatus.FAILED);
+    }
+
     [Fact]
     public async Task TriggerOwnedRunnerLifecycleIsNotInitializedOrTornDownTwice()
     {
@@ -278,6 +355,20 @@ public sealed class NinaInstructionSlotTests
         public override object Clone() => new FailureTrigger();
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => true;
         public override Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) => throw new InvalidOperationException("hook failed");
+    }
+
+    private sealed class ConditionalFailureTrigger : SequenceTrigger
+    {
+        internal bool ShouldRun;
+        internal int Runs;
+        internal ConditionalFailureTrigger() => Name = "Autofocus after HFR increase";
+        public override object Clone() => new ConditionalFailureTrigger { ShouldRun = ShouldRun };
+        public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => ShouldRun && nextItem is ProbeItem;
+        public override Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token)
+        {
+            Runs++;
+            throw new InvalidOperationException("Autofocus failed");
+        }
     }
 
     private sealed class NestedFailureTrigger : SequenceTrigger
