@@ -19,6 +19,7 @@ internal static class SessionUiProbe
 {
     internal static async Task<IAsyncDisposable> ObserveLiveAsync(DirectorSessionContainer session, bool verifyLifecycle)
     {
+        if (verifyLifecycle) await VerifyGlobalTriggerStatusAsync();
         return await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             var chart = new NINA.WPF.Base.View.AltitudeChart { Height = 220 };
@@ -95,8 +96,15 @@ internal static class SessionUiProbe
             var host = new Border { Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
             System.Windows.Documents.TextElement.SetForeground(host, (Brush)Application.Current.FindResource("PrimaryBrush"));
             Layout();
+            var tabs = Descendants(host).OfType<TabControl>().Single();
+            if (!Equals(((TabItem)tabs.SelectedItem).Header, "Overview"))
+                throw new InvalidOperationException("Director must open on its current status.");
             if (display is null)
             {
+                tabs.SelectedItem = tabs.Items.Cast<TabItem>().Single(t => Equals(t.Header, "Settings"));
+                Layout();
+                foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = true;
+                Layout();
                 var status = Descendants(host).OfType<TextBlock>().Single(text =>
                     BindingOperations.GetBinding(text, TextBlock.TextProperty)?.Path.Path == "SessionStatus");
                 var summary = Descendants(host).OfType<TextBlock>().Single(text =>
@@ -141,30 +149,54 @@ internal static class SessionUiProbe
                 Layout();
                 if (!status.Text.Contains("Acquisition is off")) throw new InvalidOperationException("Session header did not follow acquisition being turned off.");
 
+                var targetFocus = Toggle("Autofocus when starting a target");
+                var filterFocus = Toggle("Autofocus after a filter change");
+                if (targetFocus.IsChecked != true || filterFocus.IsChecked != true)
+                    throw new InvalidOperationException("Autofocus defaults were not preserved.");
+                targetFocus.IsChecked = false;
+                filterFocus.IsChecked = false;
+                Layout();
+                if ((bool)options.GetType().GetProperty("AutofocusOnTargetStart")!.GetValue(options)!
+                    || (bool)options.GetType().GetProperty("AutofocusOnFilterChange")!.GetValue(options)!)
+                    throw new InvalidOperationException("Autofocus switches did not update the session.");
+                var focusOwner = Descendants(host).OfType<ComboBox>().Single(control => System.Windows.Automation.AutomationProperties.GetName(control) == "Autofocus");
+                var originalFocus = focusOwner.SelectedValue;
+                focusOwner.SelectedValue = Enum.Parse(originalFocus.GetType(), "Sequence");
+                Layout();
+                if (targetFocus.IsEnabled || filterFocus.IsEnabled) throw new InvalidOperationException("Director focus switches must defer to custom sequence ownership.");
+                focusOwner.SelectedValue = originalFocus;
+                targetFocus.IsChecked = filterFocus.IsChecked = true;
+
                 CheckBox Toggle(string name) => Descendants(host).OfType<CheckBox>().Single(control =>
                     System.Windows.Automation.AutomationProperties.GetName(control) == name);
             }
+            tabs.SelectedItem = tabs.Items.Cast<TabItem>().Single(t => Equals(t.Header, "Overview"));
+            Layout();
             var reportButton = Descendants(host).OfType<Button>().SingleOrDefault(button => Equals(button.Content, "Report equipment"))
                 ?? throw new InvalidOperationException("Director equipment report button was not rendered.");
             if (reportButton.Command is null || reportButton.IsEnabled || reportButton.Style != Application.Current.FindResource("StandardButton")
                 || reportButton.ActualWidth < 80)
                 throw new InvalidOperationException("Equipment report button lost its native style, binding or idle-service guard.");
-            var tabs = Descendants(host).OfType<TabControl>().Single();
             for (var tab = 0; tab < tabs.Items.Count; tab++)
             {
                 tabs.SelectedIndex = tab;
                 Layout();
+                if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
+                {
+                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = true;
+                    Layout();
+                }
                 var controls = Descendants(tabs).OfType<Control>()
                     .Where(control => !string.IsNullOrEmpty(System.Windows.Automation.AutomationProperties.GetName(control))).ToArray();
-                if (tab == 0)
+                if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
                 {
                     if (controls.OfType<ComboBox>().Count() != 14 || controls.OfType<TextBox>().Count() != 19
-                        || controls.OfType<CheckBox>().Count() != 9)
+                        || controls.OfType<CheckBox>().Count() != 11)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())
                         if (combo.SelectedItem is null) throw new InvalidOperationException("Director policy selection is empty.");
                 }
-                if (tab == 1 && Descendants(host).OfType<Expander>().Count(expander => expander.DataContext is NINA.Sequencer.Container.SequentialContainer) < 7)
+                if (Equals(((TabItem)tabs.SelectedItem).Header, "Instructions") && Descendants(host).OfType<Expander>().Count(expander => expander.DataContext is NINA.Sequencer.Container.SequentialContainer) < 7)
                     throw new InvalidOperationException("Director did not render all seven native instruction editors.");
                 if (tab == 5 && Descendants(host).OfType<DataGrid>().Single().Columns.Any(column => column.ActualWidth < 65))
                     throw new InvalidOperationException("Activity columns collapsed below readable widths.");
@@ -172,6 +204,11 @@ internal static class SessionUiProbe
                 {
                     var rect = field.TransformToAncestor(host).TransformBounds(new Rect(field.RenderSize));
                     if (rect.Left < 0 || rect.Right > width + 1) throw new InvalidOperationException("Director editor escaped its layout.");
+                }
+                if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
+                {
+                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = Equals(section.Header, "Safety and visibility");
+                    Layout();
                 }
                 var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
                 bitmap.Render(host);
@@ -195,6 +232,45 @@ internal static class SessionUiProbe
             }
         }
     }).Task;
+
+    private static async Task VerifyGlobalTriggerStatusAsync()
+    {
+        var (session, trigger) = await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var root = new SequenceRootContainer();
+            var session = new DirectorSessionContainer { Status = NINA.Core.Enum.SequenceEntityStatus.RUNNING };
+            root.Add(session);
+            var trigger = new SilentGlobalTrigger { Name = "Injected autofocus (simulator)" };
+            root.Add(trigger);
+            session.UpdateDisplay(d => d with { Phase = "Acquiring", Target = "Simulator", Operation = "HA · 120 s exposure" });
+            return (session, trigger);
+        });
+        using var observation = new NinaTriggerActivity(session);
+        using var progress = new PsfGuard.Director.Plugin.Acquisition.DirectorSessionProgress(session, new Progress<NINA.Core.Model.ApplicationStatus>());
+        var running = Task.Run(() => trigger.Run(session, progress, CancellationToken.None));
+        try
+        {
+            await WaitFor(() => session.TelemetrySnapshot().Operation == trigger.Name);
+            if (!session.SessionStatus.Contains("Injected autofocus")) throw new InvalidOperationException("Global trigger status did not reach the session display.");
+        }
+        finally { trigger.Complete.TrySetResult(); await running; }
+        await WaitFor(() => !session.IsTriggerRunning);
+        if (session.CurrentDisplay.Operation != "HA · 120 s exposure") throw new InvalidOperationException("Finished global trigger left a stale status.");
+
+        static async Task WaitFor(Func<bool> ready)
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!ready()) await Task.Delay(50, deadline.Token);
+        }
+    }
+
+    private sealed class SilentGlobalTrigger : NINA.Sequencer.Trigger.SequenceTrigger
+    {
+        internal TaskCompletionSource Complete { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override object Clone() => new SilentGlobalTrigger { Name = Name };
+        public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => true;
+        public override Task Execute(ISequenceContainer context, IProgress<NINA.Core.Model.ApplicationStatus> progress, CancellationToken token) => Complete.Task.WaitAsync(token);
+    }
 
     private static IEnumerable<DataTemplate> Templates(ResourceDictionary dictionary)
     {

@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PsfGuard.Director.Plugin;
+using PsfGuard.Director.Plugin.Sequencer;
 using PsfGuard.Director.Runtime;
 using Xunit;
 
@@ -82,17 +83,15 @@ public sealed class SettingsViewTests
                     Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
                     host.UpdateLayout();
                     Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
-                    var collaboration = Assert.Single(Descendants(host).OfType<Expander>());
+                    var advanced = Descendants(host).OfType<Expander>().Single(e => Equals(e.Header, "Advanced and diagnostics"));
+                    Assert.False(advanced.IsExpanded);
                     Assert.Contains(Descendants(host).OfType<TextBlock>(), text => text.Text == model.EquipmentReportStatus);
-                    var header = Assert.IsType<TextBlock>(collaboration.Header);
-                    Assert.Equal("Standalone collaboration", header.Text);
-                    Assert.Same(resources["PrimaryBrush"], header.Foreground);
-                    Assert.True(header.ActualWidth > 0 && header.ActualHeight > 0);
-                    Assert.False(collaboration.IsExpanded);
+                    var status = Assert.Single(Descendants(host).OfType<TextBlock>(), text => text.Text == model.Overview.Phase);
+                    Assert.True(status.FontSize >= 18);
+                    Assert.DoesNotContain(Descendants(host).OfType<TextBlock>(), text => text.Text == "Not armed");
                     var buttons = Descendants(host).OfType<Button>().ToArray();
-                    Assert.Equal(8, buttons.Length);
-                    Assert.Equal(state != "Ready", buttons[0].IsEnabled);
-                    Assert.Equal(state != "Stopped", buttons[1].IsEnabled);
+                    Assert.Equal(4, buttons.Length);
+                    Assert.DoesNotContain(buttons, button => button.Content is TextBlock { Text: "Start runtime" });
                     foreach (var button in buttons)
                     {
                         Assert.NotNull(button.Command);
@@ -137,6 +136,16 @@ public sealed class SettingsViewTests
                     using var file = File.Create(path);
                     encoder.Save(file);
 
+                    advanced.IsExpanded = true;
+                    host.Measure(new Size(width, double.PositiveInfinity));
+                    host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                    var collaboration = Descendants(advanced).OfType<Expander>().Single();
+                    Assert.False(collaboration.IsExpanded);
+                    var diagnosticButtons = Descendants(advanced).OfType<Button>().ToArray();
+                    Assert.Equal(2, diagnosticButtons.Length);
+                    Assert.Equal(state != "Ready", diagnosticButtons[0].IsEnabled);
+                    Assert.Equal(state != "Stopped", diagnosticButtons[1].IsEnabled);
                     collaboration.IsExpanded = true;
                     host.Measure(new Size(width, double.PositiveInfinity));
                     host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
@@ -264,6 +273,14 @@ public sealed class SettingsViewTests
         public string RuntimeStatus => state;
         public string EngineVersion => "0.2.0";
         public string AcquisitionStatus => "Not armed";
+        public DirectorSessionDisplay Overview => DirectorSessionDisplay.Empty with
+        {
+            Phase = state == "Ready" ? "Running N.I.N.A. trigger: Inject Autofocus" : state == "Stopped" ? "No sequence running" : "Waiting for the safety monitor",
+            Operation = state == "Ready" ? "Inject Autofocus" : "Waiting for the next instruction",
+            Target = "M31 — Andromeda galaxy",
+            Safety = state == "Ready" ? "Safe" : "Monitor disconnected",
+            WaitReason = state.Length > 10 ? "Connect the configured safety monitor, or choose attended operation with no monitor selected." : "-"
+        };
         public ICommand StartRuntimeCommand { get; } = new StubCommand(state != "Ready");
         public ICommand StopRuntimeCommand { get; } = new StubCommand(state != "Stopped");
         public ICommand CheckInCommand { get; } = new StubCommand(state != "Ready");

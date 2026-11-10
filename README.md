@@ -97,11 +97,25 @@ When the current authorization expires, Director needs fresh server approval.
 The seven slots are **Before Wait**, **After Wait**, **Before New Target**,
 **After Each Exposure**, **After New Target**, **After Each Target**, and
 **After Target Complete**. Use the native editors to add NINA instructions and
-compatible plugin actions. Under **Session → Operation ownership**, choose
+compatible plugin actions. Under **Settings → Operation ownership**, choose
 **Sequence instructions / triggers** for each operation you want your own
 instructions or triggers to run. N.I.N.A. also evaluates triggers from
 enclosing instruction sets. When acquisition is enabled, Director shows the
 location of any overlapping instruction or trigger before the session runs.
+
+Both the plugin page and the session open with current status. The plugin page
+also shows instructions running before or after Director Session, even with
+server activity reporting switched off. Running local or inherited N.I.N.A.
+triggers take precedence over the upcoming exposure in the session, toolbar,
+and live PSF Guard status, including triggers that do not send progress messages.
+
+Under **Settings → Autofocus**, choose **Autofocus when starting a target** and
+**Autofocus after a filter change** independently. Both stay enabled for existing
+sequences. These settings apply to Director-owned autofocus; choose **Sequence
+instructions / triggers** for custom autofocus, including Inject Autofocus.
+The trigger editors use N.I.N.A.'s full Advanced Sequencer controls. Runtime
+start/stop controls are under **Advanced and diagnostics** on the plugin page;
+normal sequences start the planner automatically.
 
 ![Director's instruction slots in the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
 

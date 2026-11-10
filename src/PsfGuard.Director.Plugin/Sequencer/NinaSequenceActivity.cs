@@ -11,9 +11,13 @@ internal sealed record NinaSequenceActivity(bool Running, string? Operation)
     {
         if (!sequence.Initialized) return null;
         if (!sequence.IsAdvancedSequenceRunning()) return new(false, null);
+        var running = (sequence.GetAdvancedSequencerCurrentRunningItems() ?? [])
+            .Where(item => item.Status == SequenceEntityStatus.RUNNING).ToArray();
+        var triggers = running.Select(item => item as ISequenceContainer ?? item.Parent)
+            .OfType<ISequenceContainer>().Select(NinaTriggerActivity.Read).OfType<string>().Distinct().Take(4).ToArray();
+        if (triggers.Length != 0) return new(true, "N.I.N.A. trigger: " + string.Join(" · ", triggers));
         const int limit = 4;
-        var paths = (sequence.GetAdvancedSequencerCurrentRunningItems() ?? [])
-            .Where(item => item.Status == SequenceEntityStatus.RUNNING)
+        var paths = running
             .Select(PathOf).OfType<string>().Distinct().Order(StringComparer.Ordinal).Take(limit + 1).ToArray();
         var operation = paths.Length == 0 ? null : string.Join(" · ", paths.Take(limit));
         return new(true, paths.Length > limit ? operation + " · More instructions running" : operation);

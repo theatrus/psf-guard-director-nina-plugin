@@ -31,6 +31,9 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
     [JsonProperty] public DirectorAbortPolicy OnAbort { get => onAbort; set => Set(ref onAbort, value); }
     private bool retryFocusAndGuiding;
     private bool forceGuideCalibration;
+    private bool autofocusOnTargetStart = true, autofocusOnFilterChange = true;
+    [JsonProperty] public bool AutofocusOnTargetStart { get => autofocusOnTargetStart; set => Set(ref autofocusOnTargetStart, value); }
+    [JsonProperty] public bool AutofocusOnFilterChange { get => autofocusOnFilterChange; set => Set(ref autofocusOnFilterChange, value); }
     [JsonProperty] public bool ForceGuideCalibration { get => forceGuideCalibration; set => Set(ref forceGuideCalibration, value); }
     private DirectorQualityPolicy quality;
     private int poorQualityFrames = 3, goodQualityProbes = 2, maximumOperationFailures = 3;

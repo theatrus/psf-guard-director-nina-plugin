@@ -130,6 +130,27 @@ public sealed class DirectorSessionContainer : SequentialContainer
     public SequentialContainer AfterTargetComplete => slots.AfterTargetComplete;
     public IReadOnlyList<SequentialContainer> InstructionBlocks => Enum.GetValues<NinaInstructionSlot>().Select(slot => slots[slot]).ToArray();
     public DirectorSessionDisplay Display { get; private set; } = DirectorSessionDisplay.Empty;
+    private string? triggerActivity;
+    private long triggerStarted, triggerStartedMs;
+    public DirectorSessionDisplay CurrentDisplay
+    {
+        get { lock (displayLock) return triggerActivity is null ? Display : Display with { Phase = "Running N.I.N.A. trigger", Operation = triggerActivity }; }
+    }
+    internal bool IsTriggerRunning { get { lock (displayLock) return triggerActivity is not null; } }
+
+    internal void SetTriggerActivity(string? activity)
+    {
+        lock (displayLock)
+        {
+            if (activity == triggerActivity) return;
+            triggerActivity = activity;
+            triggerStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            triggerStartedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            DisplayChanged?.Invoke(CurrentDisplay);
+        }
+        RaisePropertyChanged(nameof(CurrentDisplay));
+        RaisePropertyChanged(nameof(SessionStatus));
+    }
     public IReadOnlyList<DirectorActionEntry> ActionHistory { get; private set; } = [];
     public NINA.Astrometry.Interfaces.IDeepSkyObject? SkyTarget { get; private set; }
     public NINA.Astrometry.NighttimeData? SkyNighttime { get; private set; }
@@ -168,6 +189,8 @@ public sealed class DirectorSessionContainer : SequentialContainer
     {
         lock (displayLock)
         {
+            if (triggerActivity is not null) return (CurrentDisplay, triggerActivity, triggerStartedMs,
+                (ulong)System.Diagnostics.Stopwatch.GetElapsedTime(triggerStarted).TotalMilliseconds);
             if (activeActions.Count == 0) return (Display, null, null, null);
             var active = activeActions[^1];
             return (Display, active.Entry.Action, active.Entry.Time.ToUnixTimeMilliseconds(),
@@ -178,8 +201,9 @@ public sealed class DirectorSessionContainer : SequentialContainer
     {
         get
         {
+            if (IsTriggerRunning) return $"Running N.I.N.A. trigger: {CurrentDisplay.Operation}";
             if (Display.Phase != DirectorSessionDisplay.Empty.Phase) return Display.Phase;
-            if (!Options.EnableAcquisition) return "Acquisition is off. Turn on Enable acquisition in the Session tab to allow imaging.";
+            if (!Options.EnableAcquisition) return "Acquisition is off. Turn on Enable acquisition in Settings to allow imaging.";
             if (Status == SequenceEntityStatus.RUNNING) return "Director Session is starting.";
             var waiting = ItemUtility.GetRootContainer(Parent)?.Status == SequenceEntityStatus.RUNNING
                 ? "N.I.N.A. is running the sequence. Director Session is waiting for its turn."
@@ -226,9 +250,10 @@ public sealed class DirectorSessionContainer : SequentialContainer
         {
             Display = update(Display) ?? throw new InvalidOperationException("Missing Director status.");
             if (Display.Operation.Length == 0) activeActions.Clear();
-            DisplayChanged?.Invoke(Display);
+            DisplayChanged?.Invoke(CurrentDisplay);
         }
         RaisePropertyChanged(nameof(Display));
+        RaisePropertyChanged(nameof(CurrentDisplay));
         RaisePropertyChanged(nameof(SessionStatus));
     }
 

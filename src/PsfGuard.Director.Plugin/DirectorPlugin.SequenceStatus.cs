@@ -14,8 +14,28 @@ public sealed partial class DirectorPlugin
     private readonly ISequenceMediator? sequence;
     private CancellationTokenSource? sequenceReporting;
     private Task? sequenceReportingTask;
+    private DispatcherTimer? localStatusTimer;
     private static readonly TimeSpan SequenceHeartbeat = TimeSpan.FromSeconds(15);
     private const string SequenceActivityKey = "ReportSequenceActivity";
+    public DirectorSessionDisplay Overview { get; private set; } = DirectorSessionDisplay.Empty with
+    { Phase = "No sequence running", Operation = "Start a sequence containing Director Session to begin imaging." };
+
+    private void UpdateOverview(NinaSequenceActivity? activity)
+    {
+        var session = DirectorSessionObservation.Read(profiles.ActiveProfile.Id);
+        var next = session is not null && (session.Status == NINA.Core.Enum.SequenceEntityStatus.RUNNING || activity?.Running != true)
+            ? session.CurrentDisplay with { Phase = session.IsTriggerRunning ? session.CurrentDisplay.Phase : session.SessionStatus }
+            : DirectorSessionDisplay.Empty with
+            {
+                Phase = activity?.Running == true ? "N.I.N.A. sequence running" : "No sequence running",
+                Operation = activity?.Running == true ? activity.Operation ?? "Waiting for the next instruction"
+                    : "Start a sequence containing Director Session to begin imaging."
+            };
+        if (next == Overview) return;
+        Overview = next;
+        PropertyChanged?.Invoke(this, new(nameof(Overview)));
+        PropertyChanged?.Invoke(this, new(nameof(AcquisitionStatus)));
+    }
 
     public bool ReportSequenceActivity
     {
@@ -40,12 +60,27 @@ public sealed partial class DirectorPlugin
     private void StartSequenceReporting()
     {
         if (sequence is null) return;
+        // A slow server request must not freeze the local status page.
+        if (Application.Current?.Dispatcher is { } dispatcher)
+            localStatusTimer = dispatcher.Invoke(() =>
+            {
+                var timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromSeconds(1) };
+                timer.Tick += LocalStatusTick;
+                timer.Start();
+                LocalStatusTick(null, EventArgs.Empty);
+                return timer;
+            });
         sequenceReporting = new();
         sequenceReportingTask = ReportSequenceAsync(sequence, sequenceReporting.Token);
     }
 
     private async Task StopSequenceReportingAsync()
     {
+        if (localStatusTimer is { } timer)
+        {
+            timer.Dispatcher.Invoke(() => { timer.Stop(); timer.Tick -= LocalStatusTick; });
+            localStatusTimer = null;
+        }
         if (sequenceReporting is not { } cancellation) return;
         sequenceReporting = null;
         using (cancellation)
@@ -54,6 +89,12 @@ public sealed partial class DirectorPlugin
             if (sequenceReportingTask is not null) await sequenceReportingTask;
         }
         sequenceReportingTask = null;
+    }
+
+    private void LocalStatusTick(object? sender, EventArgs e)
+    {
+        if (!initialized || sequence is null) return;
+        UpdateOverview(NinaSequenceActivity.Read(sequence));
     }
 
     private async Task ReportSequenceAsync(ISequenceMediator mediator, CancellationToken token)
@@ -77,8 +118,11 @@ public sealed partial class DirectorPlugin
                     var observedAt = DateTimeOffset.UtcNow;
                     (SequenceDestination? Destination, NinaSequenceActivity? Activity) Capture()
                     {
+                        // Local status must work while Director owns acquisition,
+                        // when unpaired, and when server reporting is switched off.
+                        var activity = NinaSequenceActivity.Read(mediator);
                         var target = SequenceReportDestination();
-                        return (target, target is null ? null : NinaSequenceActivity.Read(mediator));
+                        return (target, activity);
                     }
                     var (current, activity) = dispatcher is null ? Capture()
                         : await dispatcher.InvokeAsync(Capture, DispatcherPriority.Background, token).Task.ConfigureAwait(false);

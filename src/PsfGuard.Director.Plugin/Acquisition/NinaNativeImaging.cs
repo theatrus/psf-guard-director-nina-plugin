@@ -41,6 +41,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
             Rotator = profiles.ActiveProfile.RotatorSettings.Id,
             options.SlewCenter,
             options.Focus,
+            options.AutofocusOnTargetStart,
+            options.AutofocusOnFilterChange,
             options.Guiding,
             options.ForceGuideCalibration,
             options.Dither,
@@ -74,7 +76,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     internal void ConfigureTargetSetup(NinaInstructionSlots slots)
     {
         var items = new List<ISequenceItem>();
-        if (options.Focus == DirectorOperationOwner.Director) items.Add(Recoverable(Item<RunAutofocus>(), RecoveryOperation.Focus, focuserId));
+        if (options.Focus == DirectorOperationOwner.Director && options.AutofocusOnTargetStart) items.Add(Recoverable(Item<RunAutofocus>(), RecoveryOperation.Focus, focuserId));
         if (options.Guiding == DirectorOperationOwner.Director) items.Add(Recoverable(GuideStart(), RecoveryOperation.Guide, guiderId));
         slots.AppendTargetDefaults(items);
     }
@@ -162,7 +164,7 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
         session = target;
         if (options.Focus == DirectorOperationOwner.Director)
         {
-            Add<AutofocusAfterFilterChange>();
+            if (options.AutofocusOnFilterChange) Add<AutofocusAfterFilterChange>();
             Add<AutofocusAfterTimeTrigger>();
             Add<AutofocusAfterTemperatureChangeTrigger>();
         }
