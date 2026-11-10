@@ -15,6 +15,7 @@ public sealed partial class DirectorPlugin
     private CancellationTokenSource? sequenceReporting;
     private Task? sequenceReportingTask;
     private DispatcherTimer? localStatusTimer;
+    private bool localStatusFailed;
     private static readonly TimeSpan SequenceHeartbeat = TimeSpan.FromSeconds(15);
     private const string SequenceActivityKey = "ReportSequenceActivity";
     public DirectorSessionDisplay Overview { get; private set; } = DirectorSessionDisplay.Empty with
@@ -94,7 +95,12 @@ public sealed partial class DirectorPlugin
     private void LocalStatusTick(object? sender, EventArgs e)
     {
         if (!initialized || sequence is null) return;
-        UpdateOverview(NinaSequenceActivity.Read(sequence));
+        try { UpdateOverview(NinaSequenceActivity.Read(sequence)); localStatusFailed = false; }
+        catch (Exception error)
+        {
+            if (!localStatusFailed) Logger.Warning($"Director could not read N.I.N.A. sequence status ({error.GetType().Name}).");
+            localStatusFailed = true;
+        }
     }
 
     private async Task ReportSequenceAsync(ISequenceMediator mediator, CancellationToken token)
@@ -118,11 +124,8 @@ public sealed partial class DirectorPlugin
                     var observedAt = DateTimeOffset.UtcNow;
                     (SequenceDestination? Destination, NinaSequenceActivity? Activity) Capture()
                     {
-                        // Local status must work while Director owns acquisition,
-                        // when unpaired, and when server reporting is switched off.
-                        var activity = NinaSequenceActivity.Read(mediator);
                         var target = SequenceReportDestination();
-                        return (target, activity);
+                        return (target, target is null ? null : NinaSequenceActivity.Read(mediator));
                     }
                     var (current, activity) = dispatcher is null ? Capture()
                         : await dispatcher.InvokeAsync(Capture, DispatcherPriority.Background, token).Task.ConfigureAwait(false);

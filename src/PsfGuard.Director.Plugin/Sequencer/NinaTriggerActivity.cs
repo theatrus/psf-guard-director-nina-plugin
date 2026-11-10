@@ -39,10 +39,17 @@ internal sealed class NinaTriggerActivity : IDisposable
     {
         var names = new List<string>();
         var visited = new HashSet<ISequenceContainer>();
+        ISequenceContainer root = session;
         // Include every ancestor: global triggers can run while Director is
         // waiting inside its next native exposure instruction.
         for (ISequenceContainer? block = session; block is not null && !visited.Contains(block); block = block.Parent)
-            Visit(block);
+        { root = block; Visit(block); }
+        // Issued target and cloned hook containers have a parent but are not
+        // members of the editor's Items collection. NINA tracks their running
+        // instructions through the root's public snapshot instead.
+        if (root is ISequenceRootContainer sequence)
+            foreach (var item in sequence.GetCurrentRunningItems().Where(i => i.Status == SequenceEntityStatus.RUNNING))
+                for (var block = item as ISequenceContainer ?? item.Parent; block is not null && !visited.Contains(block); block = block.Parent) Visit(block);
         return names.Count == 0 ? null : string.Join(" · ", names.Distinct().Take(4));
 
         void Visit(ISequenceContainer block)

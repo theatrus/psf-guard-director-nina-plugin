@@ -7,6 +7,8 @@
     xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
     xmlns:nina="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
     xmlns:seq="clr-namespace:NINA.Sequencer.SequenceItem;assembly=NINA.Sequencer"
+    xmlns:trigger="clr-namespace:NINA.Sequencer.Trigger;assembly=NINA.Sequencer"
+    xmlns:condition="clr-namespace:NINA.Sequencer.Conditions;assembly=NINA.Sequencer"
     xmlns:container="clr-namespace:NINA.Sequencer.Container;assembly=NINA.Sequencer">
     <DataTemplate x:Key="DirectorSectionHeader"><TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryBrush}" /></DataTemplate>
     <DataTemplate x:Key="DirectorHookEditor">
@@ -40,7 +42,7 @@
                                     <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
                                     <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Trigger.ISequenceTrigger" OnDropCommand="DropIntoTriggersCommand" />
                                 </i:Interaction.Behaviors>
-                                <ItemsControl.ItemTemplate><DataTemplate><nina:SequenceBlockView /></DataTemplate></ItemsControl.ItemTemplate>
+                                <ItemsControl.Resources><DataTemplate DataType="{x:Type trigger:SequenceTrigger}"><nina:SequenceBlockView /></DataTemplate></ItemsControl.Resources>
                             </ItemsControl>
                         </GroupBox>
                         <GroupBox Header="Conditions" Margin="0,4">
@@ -49,7 +51,7 @@
                                     <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
                                     <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Conditions.ISequenceCondition" OnDropCommand="DropIntoConditionsCommand" />
                                 </i:Interaction.Behaviors>
-                                <ItemsControl.ItemTemplate><DataTemplate><nina:SequenceBlockView /></DataTemplate></ItemsControl.ItemTemplate>
+                                <ItemsControl.Resources><DataTemplate DataType="{x:Type condition:SequenceCondition}"><nina:SequenceBlockView /></DataTemplate></ItemsControl.Resources>
                             </ItemsControl>
                         </GroupBox>
                     </StackPanel>
@@ -135,22 +137,22 @@
                                 <Grid Margin="8,0,8,10">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Enable acquisition" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding EnableAcquisition}" AutomationProperties.Name="Enable acquisition" VerticalAlignment="Center" Margin="0,5" />
+                                    <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding EnableAcquisition}" AutomationProperties.Name="Enable acquisition" VerticalAlignment="Center" Margin="0,5" />
                                 </Grid>
-                                <GroupBox Header="Autofocus" Margin="0,0,0,12">
+                                <Expander Header="Autofocus" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <StackPanel Margin="8">
                                         <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="IsEnabled" Value="True" /><Style.Triggers><DataTrigger Binding="{Binding Focus}" Value="{x:Static local:DirectorOperationOwner.Sequence}"><Setter Property="IsEnabled" Value="False" /></DataTrigger></Style.Triggers></Style></StackPanel.Style>
                                         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                             <TextBlock Text="Autofocus when starting a target" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                            <CheckBox Grid.Column="1" IsChecked="{Binding AutofocusOnTargetStart}" AutomationProperties.Name="Autofocus when starting a target" VerticalAlignment="Center" Margin="0,5" />
+                                            <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnTargetStart}" AutomationProperties.Name="Autofocus when starting a target" VerticalAlignment="Center" Margin="0,5" />
                                         </Grid>
                                         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                             <TextBlock Text="Autofocus after a filter change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                            <CheckBox Grid.Column="1" IsChecked="{Binding AutofocusOnFilterChange}" AutomationProperties.Name="Autofocus after a filter change" VerticalAlignment="Center" Margin="0,5" />
+                                            <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnFilterChange}" AutomationProperties.Name="Autofocus after a filter change" VerticalAlignment="Center" Margin="0,5" />
                                         </Grid>
-                                        <TextBlock Text="Runs on the selected target using N.I.N.A.'s autofocus settings. Time and temperature triggers use the N.I.N.A. profile defaults." TextWrapping="Wrap" Margin="0,8,0,0" />
+                                        <TextBlock Text="Runs on the selected target using N.I.N.A.'s autofocus settings. Director also adds N.I.N.A.'s default time and temperature triggers. For custom autofocus or Inject Autofocus, choose Sequence instructions / triggers under Operation ownership." TextWrapping="Wrap" Margin="0,8,0,0" />
                                     </StackPanel>
-                                </GroupBox>
+                                </Expander>
                                 <Expander Header="Duration and timeouts" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8" Grid.IsSharedSizeScope="True">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -180,7 +182,7 @@
                                         <TextBlock Grid.Row="5" Text="Avoid after meridian (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Avoid after meridian (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="6" Text="Park during waits" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="6" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="6" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="7" Text="Enclosure clearance" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.EnclosurePolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Enclosure}" AutomationProperties.Name="Enclosure clearance" HorizontalAlignment="Stretch" Margin="0,3"
                                             ToolTip="Open air requires no configured or connected dome. An enclosed setup requires a fresh fully-open shutter report; closure or loss of evidence stops acquisition and blocks parking." />
@@ -221,7 +223,7 @@
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                         <TextBlock Text="Retry focus and guide start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Column="1" IsChecked="{Binding RetryFocusAndGuiding}" AutomationProperties.Name="Retry focus and guide start" VerticalAlignment="Center" Margin="0,5"
+                                        <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding RetryFocusAndGuiding}" AutomationProperties.Name="Retry focus and guide start" VerticalAlignment="Center" Margin="0,5"
                                             ToolTip="Director-owned target setup only. Known-completed failures can retry; timeouts, exposures, slews and unsafe conditions cannot. Exhaustion uses On abort. The session budget and stop persist until the maximum-duration window ends." />
                                         <TextBlock Grid.Row="1" Text="Cooldown (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RetryCooldownSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Recovery cooldown (seconds)" MaxWidth="280" Margin="0,3" />
@@ -260,7 +262,7 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                             <TextBlock Text="Recalibrate before guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                            <CheckBox Grid.Column="1" IsChecked="{Binding ForceGuideCalibration}" AutomationProperties.Name="Recalibrate before guiding" Margin="0,5"
+                                            <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding ForceGuideCalibration}" AutomationProperties.Name="Recalibrate before guiding" Margin="0,5"
                                                 ToolTip="Resets calibration when Director starts guiding for each target, including a retry. N.I.N.A. controls guiding recovery after a meridian flip or lost guide star.">
                                                 <CheckBox.Style>
                                                     <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
@@ -281,17 +283,17 @@
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                                         <TextBlock Grid.Row="0" Text="Continue current targets while offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue current targets while offline" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue current targets while offline" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="1" Text="Send saved image records at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Send saved image records at session start" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Send saved image records at session start" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="2" Text="Send image records at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Send image records at session end" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Send image records at session end" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="3" Text="Send image records on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Send image records on target change" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Send image records on target change" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="4" Text="Image report interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image report interval (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="5" Text="Report live status" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                                        <CheckBox Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
+                                        <CheckBox HorizontalAlignment="Left" Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
                                         <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
                                         <TextBlock Grid.Row="7" Text="Image record delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
@@ -313,7 +315,7 @@
                                             <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
                                             <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Trigger.ISequenceTrigger" OnDropCommand="DropIntoTriggersCommand" />
                                         </i:Interaction.Behaviors>
-                                        <ItemsControl.ItemTemplate><DataTemplate><nina:SequenceBlockView /></DataTemplate></ItemsControl.ItemTemplate>
+                                        <ItemsControl.Resources><DataTemplate DataType="{x:Type trigger:SequenceTrigger}"><nina:SequenceBlockView /></DataTemplate></ItemsControl.Resources>
                                     </ItemsControl>
                                 </GroupBox>
                                 <GroupBox Header="Conditions">
@@ -322,7 +324,7 @@
                                             <behaviors:DragOverBehavior DragAboveSize="0" DragBelowSize="0" />
                                             <behaviors:DropIntoBehavior AllowedDragDropTypesString="NINA.Sequencer.Conditions.ISequenceCondition" OnDropCommand="DropIntoConditionsCommand" />
                                         </i:Interaction.Behaviors>
-                                        <ItemsControl.ItemTemplate><DataTemplate><nina:SequenceBlockView /></DataTemplate></ItemsControl.ItemTemplate>
+                                        <ItemsControl.Resources><DataTemplate DataType="{x:Type condition:SequenceCondition}"><nina:SequenceBlockView /></DataTemplate></ItemsControl.Resources>
                                     </ItemsControl>
                                 </GroupBox>
                             </StackPanel>

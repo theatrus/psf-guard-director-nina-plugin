@@ -91,6 +91,15 @@ internal static class SessionUiProbe
             }
             var beforeTarget = (NINA.Sequencer.Container.SequentialContainer)exportedType.GetProperty("BeforeNewTarget")!.GetValue(session)!;
             beforeTarget.Add(new WaitForTimeSpan { Time = 1 });
+            var profile = new Moq.Mock<NINA.Profile.Interfaces.IProfileService> { DefaultValue = Moq.DefaultValue.Mock };
+            var guider = Moq.Mock.Of<NINA.Equipment.Interfaces.Mediator.IGuiderMediator>(g => g.GetInfo() ==
+                new NINA.Equipment.Equipment.MyGuider.GuiderInfo { Connected = true });
+            var editorTrigger = new NINA.Sequencer.Trigger.Guider.DitherAfterExposures(guider,
+                Moq.Mock.Of<NINA.WPF.Base.Interfaces.ViewModel.IImageHistoryVM>(), profile.Object)
+            { Name = "Dither after exposures", AfterExposures = 3 };
+            ((SequentialContainer)session).Add(editorTrigger);
+            var editorCondition = new LoopCondition { Iterations = 5, Name = "Loop count" };
+            ((SequentialContainer)session).Add(editorCondition);
             var content = (FrameworkElement)template.LoadContent();
             content.DataContext = session;
             var host = new Border { Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
@@ -200,6 +209,19 @@ internal static class SessionUiProbe
                     throw new InvalidOperationException("Director did not render all seven native instruction editors.");
                 if (tab == 5 && Descendants(host).OfType<DataGrid>().Single().Columns.Any(column => column.ActualWidth < 65))
                     throw new InvalidOperationException("Activity columns collapsed below readable widths.");
+                if (Equals(((TabItem)tabs.SelectedItem).Header, "Triggers and conditions"))
+                {
+                    // The MiniSequencer templates only render progress. Verify
+                    // the native Advanced Sequencer fields are actually editable.
+                    var triggerInput = Descendants(tabs).OfType<TextBox>().FirstOrDefault(field =>
+                        ReferenceEquals(field.DataContext, editorTrigger) && BindingOperations.GetBinding(field, TextBox.TextProperty)?.Path.Path == "AfterExposures")
+                        ?? throw new InvalidOperationException("NINA's trigger-specific editor was replaced by a generic summary.");
+                    triggerInput.SetCurrentValue(TextBox.TextProperty, "4");
+                    triggerInput.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+                    if (editorTrigger.AfterExposures != 4) throw new InvalidOperationException("The trigger editor did not update its setting.");
+                    if (!Descendants(tabs).OfType<TextBox>().Any(field => ReferenceEquals(field.DataContext, editorCondition)))
+                        throw new InvalidOperationException("NINA's loop condition settings were not rendered.");
+                }
                 foreach (var field in controls.Where(c => c is TextBox or ComboBox or CheckBox))
                 {
                     var rect = field.TransformToAncestor(host).TransformBounds(new Rect(field.RenderSize));
@@ -207,7 +229,7 @@ internal static class SessionUiProbe
                 }
                 if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
                 {
-                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = Equals(section.Header, "Safety and visibility");
+                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = Equals(section.Header, "Safety and visibility") || Equals(section.Header, "Autofocus");
                     Layout();
                 }
                 var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
