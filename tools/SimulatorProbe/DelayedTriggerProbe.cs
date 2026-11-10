@@ -5,6 +5,7 @@ using NINA.Sequencer.Container;
 using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.Trigger;
 using PsfGuard.Director.Plugin.Acquisition;
+using PsfGuard.Director.Runtime;
 
 namespace PsfGuard.Director.SimulatorProbe;
 
@@ -14,6 +15,7 @@ internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
 {
     private readonly SequenceContainer parent;
     private int entered;
+    private NinaExposureItem? exposure;
     internal bool Completed { get; private set; }
 
     private DelayedTriggerProbe(SequenceContainer parent)
@@ -30,8 +32,12 @@ internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
     }
 
     public override object Clone() => throw new NotSupportedException("Test-only transient trigger.");
-    public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) =>
-        entered == 0 && nextItem is NinaExposureItem;
+    public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem)
+    {
+        if (entered != 0 || nextItem is not NinaExposureItem next) return false;
+        exposure = next;
+        return true;
+    }
     public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token)
     {
         if (Interlocked.Exchange(ref entered, 1) != 0) throw new InvalidDataException("Delayed trigger was replayed.");
@@ -43,6 +49,8 @@ internal sealed class DelayedTriggerProbe : SequenceTrigger, IAsyncDisposable
     internal void Verify()
     {
         if (!Completed) throw new InvalidDataException("The delayed global trigger did not finish before capture.");
+        if (exposure is not { ExecutionError: null, Evidence.Phase: CapturePhase.Saved })
+            throw new InvalidDataException("The original exposure after the delayed trigger did not save successfully.");
     }
 
     public async ValueTask DisposeAsync() => await Application.Current.Dispatcher.InvokeAsync(() => parent.Remove(this));
