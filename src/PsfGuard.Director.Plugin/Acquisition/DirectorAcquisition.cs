@@ -418,7 +418,7 @@ public sealed partial class DirectorAcquisition
         var recoveryRequired = options.AllowSettledRestart || weatherHolds || options.RetryFocusAndGuiding || options.Quality != DirectorQualityPolicy.Off || Directory.Exists(recoveryDirectory);
         if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
         await using var runtime = recoveryRequired
-            ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
+            ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory, TimeProvider.System)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
         runtime.StateChanged += (_, _) =>
         {

@@ -1613,6 +1613,15 @@ science-save event, execute the science after-exposure slot, reserve a science
 attempt or change goal progress. Probe mode keeps the prepared target tracking
 during its bounded hold; Stop for the night is the choice for parking instead.
 
+IPC 15 keeps the observing PC's recovery clock separate from coordinator
+planning time. Ledger requests include local `recovery_now_ms`; safety freshness
+and recovery deadlines use that clock, while assignment windows retain server
+time. The runtime translates remaining recovery duration without extending any
+planning deadline. After an inherited trigger, Director refreshes local recovery
+conditions before checking a normal operation or exposure. A valid recovery
+refusal leaves saved-record and shutdown requests available; malformed responses
+still revoke the connection.
+
 Equipment failures are independent of this checkbox. Slew failures and uncertain
 operations stop. Known-completed focus/guide retries remain off by default; when
 enabled, both retry and failure budgets cap them. Abort defaults to parking when

@@ -158,12 +158,12 @@ public sealed class NinaGeometryDispatchTests
         else Assert.Equal(f.Next.Command, (await f.Runtime.FindPreparationAsync("prep")).Value!.Record!.Pending);
     }
 
-    private sealed class DispatchClock : TimeProvider
+    private sealed class DispatchClock(long offset = 0) : TimeProvider
     {
         internal long Ticks;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => Ticks;
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Start + Ticks / TimeSpan.TicksPerMillisecond);
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Start + offset + Ticks / TimeSpan.TicksPerMillisecond);
     }
 
     [Theory]
@@ -188,6 +188,56 @@ public sealed class NinaGeometryDispatchTests
         if (capture)
             Assert.Null((await f.Runtime.RecordAsync("capture", new LedgerEvidence.Failed("not-dispatched"))).Error);
         await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+    }
+
+    [Theory]
+    [InlineData(false, -900000)]
+    [InlineData(true, -900000)]
+    [InlineData(false, -20)]
+    [InlineData(true, -20)]
+    [InlineData(false, 20)]
+    [InlineData(true, 20)]
+    [InlineData(false, 900000)]
+    [InlineData(true, 900000)]
+    public async Task RecoveryAndPlanningClocksCanDiffer(bool capture, long offset)
+    {
+        await using var f = await Fixture.CreateAsync(recovery: true, recoveryOffset: offset);
+        var check = capture ? f.Guard().Capture("prep", await f.ReserveAsync()) : f.Guard().Pending(f.Next);
+        var final = await check(default);
+        final();
+        Assert.Equal(Start, f.State.NowMs);
+        Assert.Equal(f.RecoveryClock.Now, (await f.Runtime.ReadRecoveryAsync()).Value!.Record!.Snapshot.LastEventMs);
+        Assert.Equal(RuntimeState.Ready, f.Runtime.Status.State);
+    }
+
+    [Theory]
+    [InlineData(-900000, "stale")]
+    [InlineData(900000, "stale")]
+    [InlineData(-900000, "night-ended")]
+    [InlineData(900000, "night-ended")]
+    [InlineData(-900000, "backwards")]
+    [InlineData(900000, "backwards")]
+    [InlineData(-900000, "assignment-ended")]
+    [InlineData(900000, "assignment-ended")]
+    public async Task SeparateClocksRetainBothSetsOfDeadlines(long offset, string condition)
+    {
+        await using var f = await Fixture.CreateAsync(recovery: true, recoveryOffset: offset);
+        var check = f.Guard().Capture("prep", await f.ReserveAsync());
+        f.State = f.State with { NowMs = Start + (condition == "assignment-ended" ? 60000UL : 1000UL) };
+        f.RecoveryClock.Now = checked((ulong)((long)f.RecoveryClock.Now + (condition switch
+        {
+            "stale" => 31000,
+            "night-ended" => 60000,
+            "backwards" => -1,
+            _ => 1000
+        })));
+        if (condition == "assignment-ended") await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+        else
+        {
+            var error = await Assert.ThrowsAsync<RecoveryBlockedException>(() => check(default));
+            Assert.Equal(condition == "backwards" ? RecoveryError.ClockReversed : RecoveryError.AcquisitionBlocked, error.Code);
+        }
+        Assert.Equal(RuntimeState.Ready, f.Runtime.Status.State);
     }
 
     [Theory]
@@ -237,32 +287,40 @@ public sealed class NinaGeometryDispatchTests
     }
 
     [Theory]
-    [InlineData("ready")]
-    [InlineData("stop")]
-    [InlineData("unsafe")]
-    [InlineData("expired")]
-    [InlineData("recipe")]
-    public async Task ProbeRequiresFreshDurableRecoveryAndIsNeverAScienceReservation(string change)
+    [InlineData("ready", 0)]
+    [InlineData("stop", 0)]
+    [InlineData("unsafe", 0)]
+    [InlineData("expired", 0)]
+    [InlineData("recipe", 0)]
+    [InlineData("ready", -900000)]
+    [InlineData("ready", 900000)]
+    [InlineData("stop", -900000)]
+    [InlineData("stop", 900000)]
+    [InlineData("expired", -900000)]
+    [InlineData("expired", 900000)]
+    public async Task ProbeRequiresFreshDurableRecoveryAndIsNeverAScienceReservation(string change, long offset)
     {
-        await using var f = await Fixture.CreateAsync(recovery: true);
+        await using var f = await Fixture.CreateAsync(recovery: true, recoveryOffset: offset == 0 ? null : offset);
         var reservation = await f.ReserveAsync();
         Assert.Null((await f.Runtime.RecordAsync("capture", new LedgerEvidence.Saved("capture", 1))).Error);
         var context = new RecoveryQualityContext("target", "filter-l", 1000, 1, 1, "reference", "nina-pixels", "analysis");
-        var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", Start, Start + 60000);
-        var poor = await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "poor", 1, Start,
+        var localStart = f.RecoveryClock.Now;
+        var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", localStart, localStart + 60000);
+        var poor = await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "poor", 1, localStart,
             new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.Quality(
-                new("rig-test", identity.ConfigurationId, "science", Start, context, RecoveryVerdict.CorroboratedPoor))));
+                new("rig-test", identity.ConfigurationId, "science", localStart, context, RecoveryVerdict.CorroboratedPoor))));
         f.State = f.State with { NowMs = Start + 1 };
-        var grant = (await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "probe", poor.Value!.Record.Revision, Start + 1,
+        f.RecoveryClock.Now = localStart + 1;
+        var grant = (await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "probe", poor.Value!.Record.Revision, localStart + 1,
             new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.BeginRecovery("probe-attempt")))).Value!;
-        var clock = new DispatchClock();
+        var clock = new DispatchClock(offset);
         var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock,
             _ => throw new InvalidOperationException("A quality probe must not refresh the acquiring phase."));
         var recipe = f.Program.Recipes[0];
         if (change == "recipe") recipe = recipe with { ExposureMs = 2000 };
         var check = guard.Probe("goal", recipe, grant, () => { });
         Assert.Throws<InvalidOperationException>(() => guard.Probe("goal", recipe, grant, () => { }));
-        if (change == "stop") await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "stop", grant.Record.Revision, Start + 1,
+        if (change == "stop") await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "stop", grant.Record.Revision, localStart + 1,
             new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.StopNight()));
         if (change == "unsafe") f.State = f.State with { Safety = PlannerSafety.Unsafe };
         if (change == "expired") clock.Ticks = TimeSpan.FromSeconds(11).Ticks;
@@ -412,11 +470,14 @@ public sealed class NinaGeometryDispatchTests
         internal DirectorConstraints Constraints;
         internal PlannerState State;
         internal PreparationNext.Run Next = null!;
+        internal readonly RecoveryClock RecoveryClock;
 
-        private Fixture(bool recovery)
+        private Fixture(bool recovery, long? recoveryOffset)
         {
+            RecoveryClock = new() { Now = checked((ulong)((long)Start + (recoveryOffset ?? 0))) };
             Runtime = recovery ? new(ProcessTests.BundleDirectory, directory.FullName,
-                Directory.CreateDirectory(Path.Combine(directory.FullName, "recovery")).FullName) : new(ProcessTests.BundleDirectory, directory.FullName);
+                Directory.CreateDirectory(Path.Combine(directory.FullName, "recovery")).FullName,
+                recoveryOffset is null ? null : RecoveryClock) : new(ProcessTests.BundleDirectory, directory.FullName);
             Equipment = new(Native.Profiles.Object, Native.CameraMediator.Object, Native.WheelMediator.Object);
             Native.CameraMediator.Setup(m => m.SetReadoutModeForNormalImages(1)).Callback(() => Native.Camera.ReadoutModeForNormalImages = 1);
             var configuration = Equipment.Read(Native.Binding);
@@ -435,18 +496,19 @@ public sealed class NinaGeometryDispatchTests
             State = baseline.State with { ConfigurationId = configuration.Id, NowMs = Start, ConditionsValidUntilMs = Start + 120000 };
         }
 
-        internal static async Task<Fixture> CreateAsync(CancellationToken token = default, bool recovery = false)
+        internal static async Task<Fixture> CreateAsync(CancellationToken token = default, bool recovery = false, long? recoveryOffset = null)
         {
-            var f = new Fixture(recovery);
+            var f = new Fixture(recovery, recoveryOffset);
             try
             {
                 await f.Runtime.StartAsync("rig-test", token);
                 if (recovery)
                 {
-                    var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", Start, Start + 60000);
-                    var policy = new RecoveryPolicy(1, RecoveryQualityMode.Pause, 1, 1, 1, 20000, 2, 10000, 30000, Start + 60000, 3, 3, true);
-                    Assert.Null((await f.Runtime.OpenRecoveryAsync(identity, policy, Start)).Error);
-                    Assert.Null((await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "tick", 0, Start,
+                    var recoveryStart = f.RecoveryClock.Now;
+                    var identity = new RecoveryIdentity("rig-test", f.Program.Configuration.Id, "night", recoveryStart, recoveryStart + 60000);
+                    var policy = new RecoveryPolicy(1, RecoveryQualityMode.Pause, 1, 1, 1, 20000, 2, 10000, 30000, recoveryStart + 60000, 3, 3, true);
+                    Assert.Null((await f.Runtime.OpenRecoveryAsync(identity, policy, recoveryStart)).Error);
+                    Assert.Null((await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "tick", 0, recoveryStart,
                         new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.Tick()))).Error);
                 }
                 Assert.Null((await f.Runtime.OpenGeometryAsync(f.Program, f.Constraints, f.State)).Error);
@@ -476,5 +538,11 @@ public sealed class NinaGeometryDispatchTests
             await Runtime.DisposeAsync();
             directory.Delete(true);
         }
+    }
+
+    private sealed class RecoveryClock : TimeProvider
+    {
+        internal ulong Now;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds((long)Now);
     }
 }
