@@ -57,11 +57,12 @@ public sealed class DirectorCheckInService
             await Credential(lifetime.Token);
             Logger.Info("Director saved-run check-in started.");
             var pluginDirectory = Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!;
-            var result = owner is null ? await CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
+            // Checking a large local history must not block the settings UI.
+            var result = await Task.Run(() => owner is null ? CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
                 pluginDirectory, endpoint, pairing.Binding, pairing.ClientId,
                 Credential, progress, connection.AllowInsecureHttp, lifetime.Token)
-                : await CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(owner, LocalStateRoot, pluginDirectory,
-                    endpoint, pairing.Binding, pairing.ClientId, Credential, progress, connection.AllowInsecureHttp, lifetime.Token);
+                : CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(owner, LocalStateRoot, pluginDirectory,
+                    endpoint, pairing.Binding, pairing.ClientId, Credential, progress, connection.AllowInsecureHttp, lifetime.Token), lifetime.Token);
             await Credential(lifetime.Token);
             Logger.Info($"Director saved-run check-in: {result.Runs} runs checked, {result.SkippedRuns} unchanged runs skipped, {result.DeliveredEvents} events, {result.ReleasedWorkloads} workload releases.");
             return result;
