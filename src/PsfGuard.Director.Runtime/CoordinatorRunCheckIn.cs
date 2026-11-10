@@ -1,7 +1,7 @@
 namespace PsfGuard.Director.Runtime;
 
 public sealed record CoordinatorRunCheckInProgress(int Runs, int DeliveredEvents, int ReleasedWorkloads,
-    string RunId, ulong AcknowledgedThrough, bool CaughtUp, ulong OperationsAcknowledgedThrough = 0);
+    string RunId, ulong AcknowledgedThrough, bool CaughtUp, ulong OperationsAcknowledgedThrough = 0, int SkippedRuns = 0);
 
 /// <summary>Reopens original ledgers to deliver evidence. No equipment or allocation-start operations.</summary>
 public static class CoordinatorRunCheckIn
@@ -42,6 +42,19 @@ public static class CoordinatorRunCheckIn
             {
                 RefuseLink(directory);
                 var archive = new CoordinatorRunArchive(directory, endpoint, binding, clientId, allowInsecureHttp);
+                var receipt = new CoordinatorRunDeliveryReceipt(directory, endpoint, binding, clientId, archive.StatePath, allowInsecureHttp);
+                if (await receipt.ReadCurrentAsync(token).ConfigureAwait(false) is { } reported)
+                {
+                    result = result with
+                    {
+                        SkippedRuns = result.SkippedRuns + 1,
+                        RunId = runId,
+                        AcknowledgedThrough = reported.Captures,
+                        OperationsAcknowledgedThrough = reported.Operations,
+                        CaughtUp = true
+                    };
+                    continue;
+                }
                 var run = archive.Read();
                 if (run is null) continue; // Other pairings and pre-archive runs are never guessed.
                 var ledgerRoot = Path.Combine(directory, "ledger");
@@ -96,6 +109,11 @@ public static class CoordinatorRunCheckIn
                     archive.MarkReleased();
                     result = result with { ReleasedWorkloads = result.ReleasedWorkloads + 1 };
                 }
+                // SQLite can checkpoint its WAL on close. Remember the closed
+                // files only after all reporting and release work succeeded.
+                await runtime.StopAsync().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                await receipt.StoreAsync(batch.AcknowledgedThrough, operationBatch.AcknowledgedThrough, token).ConfigureAwait(false);
                 result = result with { Runs = result.Runs + 1 };
                 progress?.Report(result);
             }
@@ -108,6 +126,7 @@ public static class CoordinatorRunCheckIn
                 progress?.Report(result);
             }
         }
+        progress?.Report(result);
         if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1) throw new AggregateException("Some saved Director runs could not be checked in; their evidence is retained.", failures);
         return result;

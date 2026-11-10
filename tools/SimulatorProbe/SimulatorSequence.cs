@@ -999,11 +999,24 @@ public sealed class SimulatorSequence : SequenceItem
                     Step("Completed offline workload released after reconnect; next request waits for quality without duplicating acquisition");
                 }
                 var repeat = await savedCheckIn.RunAsync(null, lifetime.Token);
-                if (repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
-                    throw new InvalidDataException("Saved-run check-in did not preserve its acknowledgement cursor.");
+                if (repeat.Runs != 0 || repeat.SkippedRuns != 1 || repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
+                    throw new InvalidDataException("Saved-run check-in reopened an unchanged reported run or lost its acknowledgement cursor.");
+                var cached = await CoordinatorRunCheckIn.DeliverAsync(service.LocalStateRoot, Path.Combine(run, "no-runtime-needed"),
+                    coordinator.Endpoint, coordinator.Binding, coordinator.ClientId,
+                    _ => throw new InvalidDataException("Reported runs must not use the network."), token: lifetime.Token);
+                if (cached.Runs != 0 || cached.SkippedRuns != 1) throw new InvalidDataException("Reported run still needed a runtime.");
+                await File.WriteAllTextAsync(Path.Combine(run, "saved-run-skip-verified.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        repeat.Runs,
+                        repeat.SkippedRuns,
+                        repeat.DeliveredEvents,
+                        repeat.AcknowledgedThrough,
+                        cached_without_runtime_or_network = true
+                    }), lifetime.Token);
                 await new DirectorCheckInItem(savedCheckIn).Execute(progress, lifetime.Token);
                 await coordinator.VerifyOperationReplayAsync(statusBeforeReplay, lifetime.Token);
-                Step("Saved-run batch check-in and sequencer action replayed no hardware or acknowledged events");
+                Step("Saved-run check-in and sequencer action skipped unchanged history without a runtime or network request");
                 await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
                 await reopened.StartAsync(rigId, lifetime.Token);
                 var eop = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
