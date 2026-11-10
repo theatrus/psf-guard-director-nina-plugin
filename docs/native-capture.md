@@ -170,6 +170,21 @@ status telemetry is independent and is never backfilled as a current rig state.
 **Send saved image records at session start** first delivers saved runs for the current pairing.
 The session duration limit includes this work. Session-end delivery drains the
 backlog in bounded pages; cancellation preserves the last acknowledged cursor.
+After a successful check, Director remembers which runs have no records left to
+send. Later checks skip those runs without starting a runtime or contacting PSF
+Guard. The first check after updating still processes existing history once.
+Empty failed runs are also skipped after their current records are delivered;
+this does not authorize restarting them or mark their equipment operations as
+successful. Failed deliveries and outstanding clean-completion releases remain
+eligible for retry. No images or run history are deleted.
+
+The local reporting receipt includes content fingerprints of the original run,
+SQLite database and journal files, and both delivery cursors. Changed or restored
+files, missing cursors, and missing or damaged receipts cause a normal check.
+Director writes a receipt only after delivery succeeds and the runtime closes
+its database. Fingerprints still require local file reads, but unchanged history
+no longer starts one runtime process per saved run.
+
 Automatic workloads always require terminal delivery before requesting another
 grant, regardless of the delivery mode or session-end checkbox.
 

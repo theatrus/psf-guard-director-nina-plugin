@@ -281,7 +281,7 @@ public sealed partial class DirectorAcquisition
         container.UpdateDisplay(d => d with { Phase = "Reporting previous captures to PSF Guard", Operation = "", Target = "-" });
         var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p => container.UpdateDisplay(d => d with
         {
-            Operation = $"Reporting previous captures: {p.Runs} runs checked; {p.DeliveredEvents} updates sent",
+            Operation = DirectorCheckInService.DescribeProgress(p),
             QueueDepth = p.CaughtUp ? "0" : "Pending"
         }));
         return new DirectorCheckInService(profiles) { LocalStateRoot = LocalStateRoot }.RunBeforeAcquisitionAsync(owner, updates, token);

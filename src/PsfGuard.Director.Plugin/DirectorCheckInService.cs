@@ -16,6 +16,15 @@ public sealed class DirectorCheckInService
     [ImportingConstructor]
     public DirectorCheckInService(IProfileService profiles) => this.profiles = profiles;
 
+    internal static string DescribeProgress(CoordinatorRunCheckInProgress progress) =>
+        $"Sending saved records: {progress.DeliveredEvents} updates sent; {progress.Runs} runs checked";
+
+    internal static string DescribeFinished(CoordinatorRunCheckInProgress result) =>
+        (result.DeliveredEvents == 0 && result.ReleasedWorkloads == 0
+            ? "All saved records are up to date."
+            : $"Sent {result.DeliveredEvents} saved updates; closed {result.ReleasedWorkloads} assignments.")
+        + (result.SkippedRuns > 0 ? $" Skipped {result.SkippedRuns} unchanged runs." : "");
+
     public Task<CoordinatorRunCheckInProgress> RunAsync(IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token) =>
         RunCoreAsync(progress, token, null);
 
@@ -48,13 +57,14 @@ public sealed class DirectorCheckInService
             await Credential(lifetime.Token);
             Logger.Info("Director saved-run check-in started.");
             var pluginDirectory = Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!;
-            var result = owner is null ? await CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
+            // Checking a large local history must not block the settings UI.
+            var result = await Task.Run(() => owner is null ? CoordinatorRunCheckIn.DeliverAsync(LocalStateRoot,
                 pluginDirectory, endpoint, pairing.Binding, pairing.ClientId,
                 Credential, progress, connection.AllowInsecureHttp, lifetime.Token)
-                : await CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(owner, LocalStateRoot, pluginDirectory,
-                    endpoint, pairing.Binding, pairing.ClientId, Credential, progress, connection.AllowInsecureHttp, lifetime.Token);
+                : CoordinatorRunCheckIn.DeliverBeforeAcquisitionAsync(owner, LocalStateRoot, pluginDirectory,
+                    endpoint, pairing.Binding, pairing.ClientId, Credential, progress, connection.AllowInsecureHttp, lifetime.Token), lifetime.Token);
             await Credential(lifetime.Token);
-            Logger.Info($"Director saved-run check-in: {result.Runs} runs, {result.DeliveredEvents} events, {result.ReleasedWorkloads} workload releases.");
+            Logger.Info($"Director saved-run check-in: {result.Runs} runs checked, {result.SkippedRuns} unchanged runs skipped, {result.DeliveredEvents} events, {result.ReleasedWorkloads} workload releases.");
             return result;
         }
         finally

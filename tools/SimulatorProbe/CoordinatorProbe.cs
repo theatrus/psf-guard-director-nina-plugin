@@ -56,6 +56,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool LocalTargetsVerified { get; private set; }
     internal bool AutomaticWorkloadVerified { get; private set; }
     internal Uri Endpoint => endpoint;
+    internal CoordinatorBinding Binding => pairing.Binding;
+    internal Guid ClientId => pairing.ClientId;
     internal bool LiveStatusVerified { get; private set; }
     internal bool SequenceActivity { get; private set; }
     internal string? ImageUploads { get; private set; }

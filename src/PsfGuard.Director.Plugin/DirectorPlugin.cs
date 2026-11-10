@@ -181,19 +181,19 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
     {
         using var cancellation = new CancellationTokenSource();
         checkInCancellation = cancellation;
-        checkInStatus = "Reading saved runs";
+        checkInStatus = "Checking for unsent records";
         Refresh();
         var updates = new InlineProgress<CoordinatorRunCheckInProgress>(p =>
         {
             if (!ReferenceEquals(checkInCancellation, cancellation)) return;
-            checkInStatus = $"{p.Runs} runs; {p.DeliveredEvents} events delivered; capture {p.AcknowledgedThrough}; operations {p.OperationsAcknowledgedThrough}";
+            checkInStatus = DirectorCheckInService.DescribeProgress(p);
             Refresh();
         });
         try
         {
             checkInTask = new DirectorCheckInService(profiles).RunAsync(updates, cancellation.Token);
             var result = await checkInTask;
-            checkInStatus = $"Checked in {result.Runs} runs; {result.DeliveredEvents} events; {result.ReleasedWorkloads} workloads released";
+            checkInStatus = DirectorCheckInService.DescribeFinished(result);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         { checkInStatus = "Check-in cancelled; acknowledged progress saved"; }

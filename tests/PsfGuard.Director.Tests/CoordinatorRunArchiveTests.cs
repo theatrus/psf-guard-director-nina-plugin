@@ -40,6 +40,131 @@ public sealed class CoordinatorRunArchiveTests
             Archive = new(RunRoot, Endpoint, Binding, Client);
         }
         public void Dispose() => Root.Delete(true);
+
+        internal async Task<CoordinatorSavedRun> StoreLedgerAsync(bool automatic = false)
+        {
+            var run = Run with { AutomaticWorkload = automatic };
+            await using (var runtime = new RuntimeController(ProcessTests.BundleDirectory, Directory.CreateDirectory(Path.Combine(RunRoot, "ledger")).FullName))
+            {
+                await runtime.StartAsync(Binding.RigId.ToString("D"));
+                run = run with { Ledger = (await runtime.OpenGeometryAsync(run.Allocation.Snapshot.Program, run.Constraints, run.InitialState)).Value! };
+                Assert.NotNull(run.Ledger);
+            }
+            Archive.Store(run);
+            return run;
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task UnchangedReportedRunsDoNotStartAnotherRuntime(bool automatic, bool completed)
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync(automatic);
+        if (completed)
+        {
+            f.Archive.MarkCompleted();
+            if (automatic) f.Archive.MarkReleased();
+        }
+        var first = await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No pending events or release; no network expected"));
+        Assert.Equal(1, first.Runs);
+        Assert.Equal(0, first.SkippedRuns);
+        var again = await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, "no runtime installed here",
+            Endpoint, Binding, f.Client, _ => throw new Exception("A reported run must not call the server"));
+        Assert.True(again.CaughtUp);
+        Assert.Equal(0, again.Runs);
+        Assert.Equal(1, again.SkippedRuns);
+        Assert.Equal(0, again.DeliveredEvents);
+        Assert.Equal(first.AcknowledgedThrough, again.AcknowledgedThrough);
+        Assert.True(File.Exists(Path.Combine(f.RunRoot, "ledger", "execution.sqlite")));
+    }
+
+    [Fact]
+    public async Task LaterCompletionRetriesOutstandingReleaseInsteadOfUsingAnOldReceipt()
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync(automatic: true);
+        await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("Empty failed run needs no network"));
+        f.Archive.MarkCompleted();
+        for (var retry = 0; retry < 2; retry++)
+        {
+            var requested = false;
+            await Assert.ThrowsAsync<CoordinatorIntakeException>(() => CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName,
+                ProcessTests.BundleDirectory, Endpoint, Binding, f.Client, _ => { requested = true; throw new Exception("Offline"); }));
+            Assert.True(requested);
+            Assert.False(f.Archive.Read()!.Released);
+        }
+    }
+
+    [Fact]
+    public async Task DamagedReceiptFallsBackToNormalDelivery()
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync();
+        await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No network expected"));
+        File.WriteAllText(Directory.GetFiles(f.RunRoot, "reported-run-*.json").Single(), "not JSON");
+        var retried = await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No network expected"));
+        Assert.Equal(1, retried.Runs);
+        Assert.Equal(0, retried.SkippedRuns);
+    }
+
+    [Fact]
+    public async Task BacklogRechecksOnlyTheRunThatChanged()
+    {
+        using var f = new Fixture();
+        var archives = new List<CoordinatorRunArchive>();
+        for (var i = 0; i < 8; i++)
+        {
+            var runRoot = Directory.CreateDirectory(Path.Combine(f.Root.FullName, Binding.ProfileId.ToString("N"), Guid.NewGuid().ToString("N"))).FullName;
+            var run = f.Run with { AutomaticWorkload = false };
+            await using (var runtime = new RuntimeController(ProcessTests.BundleDirectory, Directory.CreateDirectory(Path.Combine(runRoot, "ledger")).FullName))
+            {
+                await runtime.StartAsync(Binding.RigId.ToString("D"));
+                run = run with { Ledger = (await runtime.OpenGeometryAsync(run.Allocation.Snapshot.Program, run.Constraints, run.InitialState)).Value! };
+            }
+            var archive = new CoordinatorRunArchive(runRoot, Endpoint, Binding, f.Client);
+            archive.Store(run);
+            archives.Add(archive);
+        }
+        Task<CoordinatorRunCheckInProgress> Check(string bundle) => CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName,
+            bundle, Endpoint, Binding, f.Client, _ => throw new Exception("Empty runs must not call the server"));
+        Assert.Equal(8, (await Check(ProcessTests.BundleDirectory)).Runs);
+        var repeat = await Check("no runtime installed here");
+        Assert.Equal(0, repeat.Runs);
+        Assert.Equal(8, repeat.SkippedRuns);
+        archives[3].MarkCompleted();
+        var changed = await Check(ProcessTests.BundleDirectory);
+        Assert.Equal(1, changed.Runs);
+        Assert.Equal(7, changed.SkippedRuns);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReportedReceiptCannotHideMissingOrTruncatedLedger(bool missing)
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync();
+        await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No network expected"));
+        var ledger = Path.Combine(f.RunRoot, "ledger", "execution.sqlite");
+        if (missing) File.Delete(ledger); else File.WriteAllBytes(ledger, []);
+        await Assert.ThrowsAsync<InvalidDataException>(() => CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName,
+            "unused", Endpoint, Binding, f.Client, _ => throw new Exception("No network expected")));
+    }
+
+    [Fact]
+    public void CheckInSummaryExplainsSkippedHistoryWithoutCursorJargon()
+    {
+        var result = new CoordinatorRunCheckInProgress(0, 0, 0, "", 6, true, 10, 200);
+        Assert.Equal("All saved records are up to date. Skipped 200 unchanged runs.", DirectorCheckInService.DescribeFinished(result));
     }
 
     [Fact]

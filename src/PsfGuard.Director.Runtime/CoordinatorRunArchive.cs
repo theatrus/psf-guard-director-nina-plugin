@@ -16,6 +16,7 @@ public sealed class CoordinatorRunArchive
     private readonly string origin;
     private readonly CoordinatorBinding binding;
     private readonly Guid clientId;
+    internal string StatePath => file.Path;
 
     public CoordinatorRunArchive(string root, Uri endpoint, CoordinatorBinding binding, Guid clientId, bool allowInsecureHttp = false)
     {
