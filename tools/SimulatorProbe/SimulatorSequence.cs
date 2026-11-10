@@ -1019,11 +1019,12 @@ public sealed class SimulatorSequence : SequenceItem
                 Step("Saved-run check-in and sequencer action skipped unchanged history without a runtime or network request");
                 await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
                 await reopened.StartAsync(rigId, lifetime.Token);
-                var eop = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
-                var g = new NinaGeometrySnapshot(constraintReader, equipmentReader).Read(constraintBinding, equipmentBinding,
-                    new(1, 89, eop.Orientation, assignment.Goals.Select(x => new DirectorGoalLimits(x.Id, 20, 89, 0)).ToImmutableArray()));
-                var state = new PlannerState(rigId, equipment.Id, NowMs(), assignment.ExpiresAtMs, PlannerSafety.Safe, true, false, new(0, 0));
-                if (Require(await reopened.OpenGeometryAsync(program, g.Constraints, state, lifetime.Token)) != ledger) throw new InvalidDataException("Public ledger identity changed.");
+                // Replay the original inputs, including a replacement issued
+                // during startup recovery, rather than the fixture's first grant.
+                var savedRun = new CoordinatorRunArchive(service.LastRunDirectory!, coordinator.Endpoint, coordinator.Binding, coordinator.ClientId).Read()
+                    ?? throw new InvalidDataException("Public saved-run archive is missing.");
+                if (Require(await reopened.OpenGeometryAsync(savedRun.Allocation.Snapshot.Program, savedRun.Constraints, savedRun.InitialState, lifetime.Token)) != ledger)
+                    throw new InvalidDataException("Public ledger identity changed.");
                 checkpoint = await coordinator.DeliverAsync(Path.Combine(run, "public-checkin"), reopened, ledger, lifetime.Token);
                 await reopened.StopAsync();
                 await coordinator.VerifyProgramAsync(Path.Combine(run, "program-preview"), equipment, true, lifetime.Token);
