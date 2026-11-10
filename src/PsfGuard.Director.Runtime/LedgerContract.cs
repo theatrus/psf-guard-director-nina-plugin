@@ -64,6 +64,11 @@ internal static class LedgerContract
         try
         {
             var status = response.GetProperty("status").GetString();
+            if (status == "recovery_blocked")
+            {
+                PipeProtocol.RequireFields(response, "status", "code");
+                throw new RecoveryBlockedException(PlannerContract.ParseEnum<RecoveryError>(response.GetProperty("code").GetString()));
+            }
             if (status == "error")
             {
                 PipeProtocol.RequireFields(response, "status", "code");
@@ -78,6 +83,7 @@ internal static class LedgerContract
             else PipeProtocol.RequireFields(response, "status", field);
             return new(read(response), null);
         }
+        catch (RecoveryBlockedException) { throw; }
         catch (Exception error) when (error is InvalidOperationException or KeyNotFoundException or FormatException or OverflowException or JsonException)
         { throw new InvalidDataException("Malformed ledger response.", error); }
     }

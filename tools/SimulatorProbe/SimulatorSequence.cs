@@ -453,6 +453,8 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.ResumeRecordedNight = true;
                 }
                 sessionContainer.AttachNewParent(Parent);
+                await using var delayedTrigger = coordinator.RecoveryScenario == "focus-once"
+                    ? await DelayedTriggerProbe.InstallAsync(Parent) : null;
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 if (nativeProbe?.Flip is { } flipProbe) sessionContainer.AfterEachExposure.Add(flipProbe.SaveMarker());
@@ -1056,6 +1058,13 @@ public sealed class SimulatorSequence : SequenceItem
                 Step(coordinator.RestartAdmission ? "Public acquisition saved three frames; explicit restart refused the terminal stopped night"
                     : "Public acquisition saved three frames; server refused a second launch");
                 coordinator.VerifyLocalTargets(captures, sessionHookEvents);
+                if (delayedTrigger is not null)
+                {
+                    delayedTrigger.Verify();
+                    await File.WriteAllTextAsync(Path.Combine(run, "delayed-trigger-verified.txt"),
+                        "A 35-second inherited trigger completed; the same session then saved three images with fresh dispatch checks.", lifetime.Token);
+                    Step("A 35-second inherited trigger completed and acquisition continued without restarting the session");
+                }
                 if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
                     || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")
                     || sessionContainer.GetTriggersSnapshot().Any()))

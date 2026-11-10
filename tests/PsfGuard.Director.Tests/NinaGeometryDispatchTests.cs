@@ -167,6 +167,76 @@ public sealed class NinaGeometryDispatchTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task NormalRecoveryRefusalKeepsSessionUsable(bool capture, bool stopped)
+    {
+        await using var f = await Fixture.CreateAsync(recovery: true);
+        var check = capture ? f.Guard().Capture("prep", await f.ReserveAsync()) : f.Guard().Pending(f.Next);
+        if (stopped)
+            await f.Runtime.ApplyRecoveryAsync(new("night", f.Program.Configuration.Id, "stop", 1, Start,
+                new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.StopNight()));
+        else f.State = f.State with { NowMs = Start + 31000 };
+
+        var refused = await Assert.ThrowsAsync<RecoveryBlockedException>(() => check(default));
+        Assert.Equal(RecoveryError.AcquisitionBlocked, refused.Code);
+        Assert.Equal(RuntimeState.Ready, f.Runtime.Status.State);
+        Assert.NotNull((await f.Runtime.ReadRecoveryAsync()).Value!.Record);
+        Assert.NotNull((await f.Runtime.FindPreparationAsync("prep")).Value!.Record);
+        if (capture)
+            Assert.Null((await f.Runtime.RecordAsync("capture", new LedgerEvidence.Failed("not-dispatched"))).Error);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+    }
+
+    [Theory]
+    [InlineData(false, "safe")]
+    [InlineData(true, "safe")]
+    [InlineData(false, "unsafe")]
+    [InlineData(true, "unsafe")]
+    [InlineData(false, "stopped")]
+    [InlineData(true, "stopped")]
+    [InlineData(false, "canceled")]
+    [InlineData(true, "canceled")]
+    public async Task DelayedTriggerRefreshesRecoveryBeforeDispatchWithoutRevivingStoppedWork(bool capture, string condition)
+    {
+        await using var f = await Fixture.CreateAsync(recovery: true);
+        var reservation = capture ? await f.ReserveAsync() : null;
+        using var cancellation = new CancellationTokenSource();
+        var refreshes = 0;
+        var clock = new DispatchClock();
+        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock, async ct =>
+        {
+            refreshes++;
+            var record = (await f.Runtime.ReadRecoveryAsync(ct)).Value!.Record!;
+            var result = (await f.Runtime.ApplyRecoveryAsync(new("night", f.Program.Configuration.Id, "fresh", record.Revision,
+                f.State.NowMs, new(f.State.Safety, RecoveryMotion.Permitted), new RecoveryEvent.Tick()), ct)).Value!;
+            if (condition == "canceled") cancellation.Cancel();
+            if (result.Record.Snapshot.Phase is not RecoveryPhase.Acquiring)
+                throw new InvalidOperationException("Imaging cannot continue.");
+        });
+        var check = capture ? guard.Capture("prep", reservation!) : guard.Pending(f.Next);
+        // Simulate the time spent in an inherited autofocus trigger, after issue.
+        f.State = f.State with { NowMs = Start + 31000, Safety = condition == "unsafe" ? PlannerSafety.Unsafe : PlannerSafety.Safe };
+        clock.Ticks = TimeSpan.FromSeconds(31).Ticks;
+        if (condition == "stopped")
+            await f.Runtime.ApplyRecoveryAsync(new("night", f.Program.Configuration.Id, "stop", 1, Start,
+                new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.StopNight()));
+        if (condition == "safe")
+        {
+            var final = await check(cancellation.Token);
+            final();
+        }
+        else if (condition == "canceled") await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check(cancellation.Token));
+        else await Assert.ThrowsAsync<InvalidOperationException>(() => check(cancellation.Token));
+        Assert.Equal(1, refreshes);
+        Assert.Equal(RuntimeState.Ready, f.Runtime.Status.State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => check(default));
+        if (capture) Assert.Equal(reservation!.Attempt, (await f.Runtime.FindAttemptAsync("capture")).Value!.Attempt);
+    }
+
+    [Theory]
     [InlineData("ready")]
     [InlineData("stop")]
     [InlineData("unsafe")]
@@ -186,7 +256,8 @@ public sealed class NinaGeometryDispatchTests
         var grant = (await f.Runtime.ApplyRecoveryAsync(new("night", identity.ConfigurationId, "probe", poor.Value!.Record.Revision, Start + 1,
             new(PlannerSafety.Safe, RecoveryMotion.Permitted), new RecoveryEvent.BeginRecovery("probe-attempt")))).Value!;
         var clock = new DispatchClock();
-        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock);
+        var guard = new NinaGeometryDispatch(f.Runtime, f.Snapshot, () => { }, clock,
+            _ => throw new InvalidOperationException("A quality probe must not refresh the acquiring phase."));
         var recipe = f.Program.Recipes[0];
         if (change == "recipe") recipe = recipe with { ExposureMs = 2000 };
         var check = guard.Probe("goal", recipe, grant, () => { });

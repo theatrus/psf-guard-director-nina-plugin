@@ -293,6 +293,9 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
                 deadline.Token.ThrowIfCancellationRequested();
                 return result;
             }
+            // A valid recovery refusal must leave readback/completion available.
+            // Malformed replies and interrupted exchanges still revoke the session.
+            catch (RecoveryBlockedException) { throw; }
             catch { Abort(); throw; }
         }
         finally { gate.Release(); }

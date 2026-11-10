@@ -102,6 +102,8 @@ compatible plugin actions. Under **Settings → Operation ownership**, choose
 instructions or triggers to run. N.I.N.A. also evaluates triggers from
 enclosing instruction sets. When acquisition is enabled, Director shows the
 location of any overlapping instruction or trigger before the session runs.
+After a long trigger such as autofocus, Director checks current safety and target
+conditions again before starting the next operation or exposure.
 
 Both the plugin page and the session open with current status. The plugin page
 also shows instructions running before or after Director Session, even with

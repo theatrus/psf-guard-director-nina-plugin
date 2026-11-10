@@ -313,6 +313,38 @@ public sealed class LedgerTests
     }
 
     [Theory]
+    [InlineData("acquisition_blocked")]
+    [InlineData("not_admitted")]
+    [InlineData("wrong_scope")]
+    [InlineData("clock_reversed")]
+    public async Task RecoveryRefusalsAreTypedAndKeepTheConnection(string code)
+    {
+        await using var peer = await TestPeer.CreateAsync("none", ledger: _ => new JsonObject
+        { ["status"] = "recovery_blocked", ["code"] = code });
+        var error = await Assert.ThrowsAsync<RecoveryBlockedException>(() => peer.Session.OpenLedgerAsync(PlannerTests.Request(), default));
+        Assert.Equal(PlannerContract.ParseEnum<RecoveryError>(code), error.Code);
+        Assert.True(peer.Session.IsReady);
+        await peer.Session.PingAsync(default);
+    }
+
+    [Theory]
+    [InlineData("unknown-code")]
+    [InlineData("numeric-code")]
+    [InlineData("missing-code")]
+    [InlineData("extra-field")]
+    public async Task MalformedRecoveryRefusalsStillRevokeTheConnection(string fault)
+    {
+        var reply = new JsonObject { ["status"] = "recovery_blocked", ["code"] = "acquisition_blocked" };
+        if (fault == "unknown-code") reply["code"] = "unknown";
+        if (fault == "numeric-code") reply["code"] = 1;
+        if (fault == "missing-code") reply.Remove("code");
+        if (fault == "extra-field") reply["permit"] = true;
+        await using var peer = await TestPeer.CreateAsync("none", ledger: _ => reply);
+        await Assert.ThrowsAsync<InvalidDataException>(() => peer.Session.OpenLedgerAsync(PlannerTests.Request(), default));
+        Assert.False(peer.Session.IsReady);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task AbruptSidecarExitPreservesAttemptAndNeverCreatesAReplacement(bool saved)
