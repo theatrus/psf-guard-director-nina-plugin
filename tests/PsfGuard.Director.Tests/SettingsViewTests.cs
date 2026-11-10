@@ -57,6 +57,10 @@ public sealed class SettingsViewTests
         {
             Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/CheckBox.xaml")
         });
+        resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("pack://application:,,,/NINA.WPF.Base;component/Resources/Styles/TextBlock.xaml")
+        });
         try
         {
             var dictionary = new Options();
@@ -87,7 +91,20 @@ public sealed class SettingsViewTests
                     Assert.False(advanced.IsExpanded);
                     Assert.Contains(Descendants(host).OfType<TextBlock>(), text => text.Text == model.EquipmentReportStatus);
                     var status = Assert.Single(Descendants(host).OfType<TextBlock>(), text => text.Text == model.Overview.Phase);
-                    Assert.True(status.FontSize >= 18);
+                    var inheritedFontSize = System.Windows.Documents.TextElement.GetFontSize(host);
+                    Assert.Equal(inheritedFontSize, status.FontSize);
+                    Assert.Same(resources["PrimaryBrush"], status.Foreground);
+                    System.Windows.Documents.TextElement.SetFontSize(host, 14);
+                    Assert.Equal(14, status.FontSize);
+                    System.Windows.Documents.TextElement.SetFontSize(host, inheritedFontSize);
+                    // A profile/palette change must also update an already-open status view.
+                    var alternateText = new SolidColorBrush(Colors.DarkRed);
+                    host.Resources["PrimaryBrush"] = alternateText;
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                    Assert.Same(alternateText, status.Foreground);
+                    host.Resources.Remove("PrimaryBrush");
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                    Assert.Same(resources["PrimaryBrush"], status.Foreground);
                     Assert.DoesNotContain(Descendants(host).OfType<TextBlock>(), text => text.Text == "Not armed");
                     var buttons = Descendants(host).OfType<Button>().ToArray();
                     Assert.Equal(4, buttons.Length);

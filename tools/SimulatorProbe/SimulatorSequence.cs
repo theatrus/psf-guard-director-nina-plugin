@@ -175,6 +175,7 @@ public sealed class SimulatorSequence : SequenceItem
         {
             Step("Rendering Director session editors in the native NINA host");
             await SessionUiProbe.RenderAsync(run);
+            await SessionUiProbe.RenderStatusExamplesAsync(run, profiles);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
             if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);

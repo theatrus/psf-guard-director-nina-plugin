@@ -15,7 +15,7 @@ using PsfGuard.Director.Plugin.Sequencer;
 
 namespace PsfGuard.Director.SimulatorProbe;
 
-internal static class SessionUiProbe
+internal static partial class SessionUiProbe
 {
     internal static async Task<IAsyncDisposable> ObserveLiveAsync(DirectorSessionContainer session, bool verifyLifecycle)
     {

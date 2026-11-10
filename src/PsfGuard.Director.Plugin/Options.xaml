@@ -6,6 +6,10 @@
               Loaded="SettingsLoaded" Unloaded="SettingsUnloaded" IsVisibleChanged="SettingsVisibilityChanged">
             <StackPanel.Resources>
                 <DataTemplate x:Key="DirectorSectionHeader"><TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryBrush}" /></DataTemplate>
+                <Style x:Key="DirectorStatusText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                    <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+                    <Setter Property="TextWrapping" Value="Wrap" />
+                </Style>
                 <!-- NINA's implicit CheckBox style draws only an ON/OFF switch. -->
                 <Style x:Key="LabeledOption" TargetType="CheckBox">
                     <Setter Property="ContentTemplate">
@@ -21,16 +25,16 @@
                     <Setter Property="Margin" Value="{Binding Padding, RelativeSource={RelativeSource AncestorType=Button}}" />
                 </Style>
             </StackPanel.Resources>
-            <Border Background="{DynamicResource SecondaryBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12" CornerRadius="3">
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,0,0,8">
                 <StackPanel>
-                    <TextBlock Text="Director · Beta" FontWeight="SemiBold" Margin="0,0,0,8" />
-                    <TextBlock Text="{Binding Overview.Phase}" FontSize="18" FontWeight="Bold" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding Overview.Operation}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                    <TextBlock Text="{Binding Overview.Target, StringFormat=Target: {0}}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                    <TextBlock Text="{Binding Overview.Safety, StringFormat=Safety: {0}}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding Overview.WaitReason}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <TextBlock Text="{Binding ProfileName, StringFormat=Profile: {0}}" TextWrapping="Wrap" Margin="0,12,0,0" />
-                    <TextBlock Text="{Binding Connection.PairingStatus}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Text="Director · Beta" Style="{StaticResource DirectorStatusText}" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding Overview.Phase}" Style="{StaticResource DirectorStatusText}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Overview.Operation}" Style="{StaticResource DirectorStatusText}" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding Overview.Target, StringFormat=Target: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding Overview.Safety, StringFormat=Safety: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding Overview.WaitReason}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding ProfileName, StringFormat=Profile: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding Connection.PairingStatus}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
                 </StackPanel>
             </Border>
             <StackPanel DataContext="{Binding Connection}" Margin="0,16,0,0">

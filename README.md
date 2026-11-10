@@ -112,6 +112,8 @@ The session header shows the current action and target. **Overview** adds only
 safety, image quality, and connection status. Technical identifiers, saved-record
 details, and the manual equipment-report action are under its collapsed
 **Diagnostics** section; equipment is reported automatically at session start.
+Status text inherits N.I.N.A.'s font and active palette, including the red night
+palette, without an oversized heading or a separate card background.
 
 Under **Settings → Autofocus**, choose **Autofocus when starting a target** and
 **Autofocus after a filter change** independently. Both stay enabled for existing
