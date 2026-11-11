@@ -8,7 +8,7 @@ through the plugin's automatic reporting. Calibration does not require a work
 assignment or a separate Target Scheduler installation.
 
 Director turns off a connected flat-panel light and opens its motorized cover
-before centering, autofocus, or light exposures. Open **Session → Flat panel
+before centering, autofocus, or light exposures. Open **Settings → Flat panel
 and calibration** to enable **Close the flat-panel cover when Director ends**.
 Without a connected panel, ordinary imaging works as before. A panel that
 disconnects after Director starts using it stops imaging until its state can
