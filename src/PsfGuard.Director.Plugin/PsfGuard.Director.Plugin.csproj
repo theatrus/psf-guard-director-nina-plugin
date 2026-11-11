@@ -5,7 +5,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <AssemblyName>PSF Guard Director</AssemblyName>
     <RootNamespace>PsfGuard.Director.Plugin</RootNamespace>
-    <Version>0.1.0.18</Version>
+    <Version>0.1.0.19</Version>
     <Title>PSF Guard Director</Title>
     <Description>Beta PSF Guard Director with local target scheduling and calibration.</Description>
     <Company>Yann Ramin (@theatrus)</Company>

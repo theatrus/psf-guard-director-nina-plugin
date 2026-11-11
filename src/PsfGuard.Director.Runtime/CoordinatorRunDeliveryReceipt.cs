@@ -29,9 +29,19 @@ internal sealed class CoordinatorRunDeliveryReceipt
         {
             RefuseLink(file.Path);
             var receipt = file.Read<Receipt>();
-            if (receipt is null || receipt.SchemaVersion != 1 || receipt.Captures > long.MaxValue || receipt.Operations > long.MaxValue
-                || receipt.Checksum != Checksum(receipt.Fingerprint, receipt.Captures, receipt.Operations)) return null;
-            return receipt.Fingerprint == await FingerprintAsync(token).ConfigureAwait(false) ? receipt : null;
+            if (receipt is null || receipt.Fingerprint is not { Length: 64 } || !receipt.Fingerprint.All(char.IsAsciiHexDigitLower)
+                || receipt.Captures > long.MaxValue || receipt.Operations > long.MaxValue
+                || !ValidChecksum(receipt)) return null;
+            if (receipt.Fingerprint != await FingerprintAsync(token).ConfigureAwait(false)) return null;
+            if (receipt.SchemaVersion == 1)
+            {
+                receipt = receipt with { SchemaVersion = 2, Checksum = Checksum(receipt.Fingerprint, receipt.Captures, receipt.Operations) };
+                // A valid old receipt remains useful even if its optional format
+                // upgrade cannot be written (for example, on a read-only backup).
+                try { token.ThrowIfCancellationRequested(); file.Write(receipt); }
+                catch (Exception error) when (CacheFailure(error)) { }
+            }
+            return receipt;
         }
         catch (Exception error) when (CacheFailure(error)) { return null; }
     }
@@ -46,7 +56,7 @@ internal sealed class CoordinatorRunDeliveryReceipt
             if (fingerprint is null) return;
             token.ThrowIfCancellationRequested();
             RefuseLink(file.Path);
-            file.Write(new Receipt(1, fingerprint, captures, operations, Checksum(fingerprint, captures, operations)));
+            file.Write(new Receipt(2, fingerprint, captures, operations, Checksum(fingerprint, captures, operations)));
         }
         catch (Exception error) when (CacheFailure(error)) { }
     }
@@ -82,12 +92,33 @@ internal sealed class CoordinatorRunDeliveryReceipt
         JsonSerializer.SerializeToUtf8Bytes(new
         {
             scope = Path.GetFileName(file.Path),
-            schemaVersion = 1,
-            RuntimeContract.ProtocolVersion,
-            RuntimeContract.EngineVersion,
+            schemaVersion = 2,
             fingerprint,
             captures,
             operations
+        })));
+
+    private bool ValidChecksum(Receipt receipt) => receipt.SchemaVersion switch
+    {
+        2 => receipt.Checksum == Checksum(receipt.Fingerprint, receipt.Captures, receipt.Operations),
+        // The first receipts shipped with IPC 14; 0.1.0.17/18 used IPC 15.
+        // IPC versions govern equipment decisions, not acknowledgement of
+        // unchanged historical files. Migrate these known formats without
+        // reopening ledgers or asking the server to accept their events again.
+        1 => receipt.Checksum == LegacyChecksum(receipt, 14) || receipt.Checksum == LegacyChecksum(receipt, 15),
+        _ => false
+    };
+
+    private string LegacyChecksum(Receipt receipt, int protocolVersion) => HashEncoding.Lower(SHA256.HashData(
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            scope = Path.GetFileName(file.Path),
+            schemaVersion = 1,
+            ProtocolVersion = protocolVersion,
+            EngineVersion = "0.3.0",
+            fingerprint = receipt.Fingerprint,
+            captures = receipt.Captures,
+            operations = receipt.Operations
         })));
 
     private static bool CacheFailure(Exception error) => error is IOException or InvalidDataException or UnauthorizedAccessException;

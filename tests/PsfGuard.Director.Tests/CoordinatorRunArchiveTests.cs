@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Collections.Immutable;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Moq;
 using NINA.Profile.Interfaces;
 using PsfGuard.Director.Plugin;
@@ -81,6 +82,71 @@ public sealed class CoordinatorRunArchiveTests
         Assert.Equal(0, again.DeliveredEvents);
         Assert.Equal(first.AcknowledgedThrough, again.AcknowledgedThrough);
         Assert.True(File.Exists(Path.Combine(f.RunRoot, "ledger", "execution.sqlite")));
+    }
+
+    [Theory]
+    [InlineData(14)]
+    [InlineData(15)]
+    public async Task RuntimeUpgradeDoesNotReopen120ReportedRuns(int previousProtocol)
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync();
+        await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No network expected"));
+        var receiptPath = Directory.GetFiles(f.RunRoot, "reported-run-*.json").Single();
+        var receipt = JsonNode.Parse(await File.ReadAllTextAsync(receiptPath))!;
+        var fingerprint = receipt["fingerprint"]!.GetValue<string>();
+        var captures = receipt["captures"]!.GetValue<ulong>();
+        var operations = receipt["operations"]!.GetValue<ulong>();
+        receipt["schema_version"] = 1;
+        receipt["checksum"] = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            scope = Path.GetFileName(receiptPath),
+            schemaVersion = 1,
+            ProtocolVersion = previousProtocol,
+            EngineVersion = "0.3.0",
+            fingerprint,
+            captures,
+            operations
+        }))).ToLowerInvariant();
+        await File.WriteAllTextAsync(receiptPath, receipt.ToJsonString());
+        for (var i = 1; i < 120; i++)
+        {
+            var copy = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(f.RunRoot)!, Guid.NewGuid().ToString("N"))).FullName;
+            foreach (var source in Directory.EnumerateFiles(f.RunRoot, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(copy, Path.GetRelativePath(f.RunRoot, source));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target);
+            }
+        }
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var result = await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, "no runtime installed here",
+                Endpoint, Binding, f.Client, _ => throw new Exception("Reported history must not contact the server"));
+            Assert.Equal(0, result.Runs);
+            Assert.Equal(120, result.SkippedRuns);
+            Assert.Equal(0, result.DeliveredEvents);
+        }
+        Assert.Equal(2, JsonNode.Parse(await File.ReadAllTextAsync(receiptPath))!["schema_version"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task ChangedLedgerInvalidatesReceiptEvenWhenItsFileDateIsRestored()
+    {
+        using var f = new Fixture();
+        await f.StoreLedgerAsync();
+        await CoordinatorRunCheckIn.DeliverAsync(f.Root.FullName, ProcessTests.BundleDirectory,
+            Endpoint, Binding, f.Client, _ => throw new Exception("No network expected"));
+        var receipt = new CoordinatorRunDeliveryReceipt(f.RunRoot, Endpoint, Binding, f.Client, f.Archive.StatePath, false);
+        Assert.NotNull(await receipt.ReadCurrentAsync(default));
+        var ledgerPath = Path.Combine(f.RunRoot, "ledger", "execution.sqlite");
+        var originalDate = File.GetLastWriteTimeUtc(ledgerPath);
+        var bytes = await File.ReadAllBytesAsync(ledgerPath);
+        bytes[^1] ^= 1;
+        await File.WriteAllBytesAsync(ledgerPath, bytes);
+        File.SetLastWriteTimeUtc(ledgerPath, originalDate);
+        Assert.Null(await receipt.ReadCurrentAsync(default));
     }
 
     [Fact]
@@ -164,7 +230,9 @@ public sealed class CoordinatorRunArchiveTests
     public void CheckInSummaryExplainsSkippedHistoryWithoutCursorJargon()
     {
         var result = new CoordinatorRunCheckInProgress(0, 0, 0, "", 6, true, 10, 200);
-        Assert.Equal("All saved records are up to date. Skipped 200 unchanged runs.", DirectorCheckInService.DescribeFinished(result));
+        Assert.Equal("All saved records are up to date.", DirectorCheckInService.DescribeFinished(result));
+        Assert.Equal("Checking for unsent image records", DirectorCheckInService.DescribeProgress(result));
+        Assert.Equal("Sending saved records: 6 updates sent", DirectorCheckInService.DescribeProgress(result with { DeliveredEvents = 6 }));
     }
 
     [Fact]

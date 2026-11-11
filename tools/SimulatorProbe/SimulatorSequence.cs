@@ -1042,13 +1042,15 @@ public sealed class SimulatorSequence : SequenceItem
                     await coordinator.VerifyAutomaticWorkloadAsync(Path.Combine(run, "public-state"), equipment, lifetime.Token);
                     Step("Completed offline workload released after reconnect; next request waits for quality without duplicating acquisition");
                 }
+                const int savedHistoryCount = 120;
+                await SavedHistoryUpgradeProbe.SeedAsync(service.LastRunDirectory!, savedHistoryCount, lifetime.Token);
                 var repeat = await savedCheckIn.RunAsync(null, lifetime.Token);
-                if (repeat.Runs != 0 || repeat.SkippedRuns != 1 || repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
+                if (repeat.Runs != 0 || repeat.SkippedRuns != savedHistoryCount || repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
                     throw new InvalidDataException("Saved-run check-in reopened an unchanged reported run or lost its acknowledgement cursor.");
                 var cached = await CoordinatorRunCheckIn.DeliverAsync(service.LocalStateRoot, Path.Combine(run, "no-runtime-needed"),
                     coordinator.Endpoint, coordinator.Binding, coordinator.ClientId,
                     _ => throw new InvalidDataException("Reported runs must not use the network."), token: lifetime.Token);
-                if (cached.Runs != 0 || cached.SkippedRuns != 1) throw new InvalidDataException("Reported run still needed a runtime.");
+                if (cached.Runs != 0 || cached.SkippedRuns != savedHistoryCount) throw new InvalidDataException("Reported run still needed a runtime.");
                 await File.WriteAllTextAsync(Path.Combine(run, "saved-run-skip-verified.json"),
                     JsonSerializer.Serialize(new
                     {
@@ -1060,7 +1062,7 @@ public sealed class SimulatorSequence : SequenceItem
                     }), lifetime.Token);
                 await new DirectorCheckInItem(savedCheckIn).Execute(progress, lifetime.Token);
                 await coordinator.VerifyOperationReplayAsync(statusBeforeReplay, lifetime.Token);
-                Step("Saved-run check-in and sequencer action skipped unchanged history without a runtime or network request");
+                Step("Saved-run check-in and sequencer action skipped 120 pre-upgrade reported runs without a runtime or network request");
                 await using var reopened = new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, Path.Combine(service.LastRunDirectory!, "ledger"));
                 await reopened.StartAsync(rigId, lifetime.Token);
                 // Replay the original inputs, including a replacement issued

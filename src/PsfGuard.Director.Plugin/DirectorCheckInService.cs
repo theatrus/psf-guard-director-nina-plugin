@@ -17,13 +17,13 @@ public sealed class DirectorCheckInService
     public DirectorCheckInService(IProfileService profiles) => this.profiles = profiles;
 
     internal static string DescribeProgress(CoordinatorRunCheckInProgress progress) =>
-        $"Sending saved records: {progress.DeliveredEvents} updates sent; {progress.Runs} runs checked";
+        progress.DeliveredEvents == 0 ? "Checking for unsent image records"
+            : $"Sending saved records: {progress.DeliveredEvents} updates sent";
 
     internal static string DescribeFinished(CoordinatorRunCheckInProgress result) =>
-        (result.DeliveredEvents == 0 && result.ReleasedWorkloads == 0
+        result.DeliveredEvents == 0 && result.ReleasedWorkloads == 0
             ? "All saved records are up to date."
-            : $"Sent {result.DeliveredEvents} saved updates; closed {result.ReleasedWorkloads} assignments.")
-        + (result.SkippedRuns > 0 ? $" Skipped {result.SkippedRuns} unchanged runs." : "");
+            : $"Sent {result.DeliveredEvents} saved updates; closed {result.ReleasedWorkloads} assignments.";
 
     public Task<CoordinatorRunCheckInProgress> RunAsync(IProgress<CoordinatorRunCheckInProgress>? progress, CancellationToken token) =>
         RunCoreAsync(progress, token, null);
