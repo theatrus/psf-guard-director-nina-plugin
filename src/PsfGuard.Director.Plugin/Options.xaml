@@ -2,9 +2,14 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <DataTemplate x:Key="PSF Guard Director_Options">
-        <Grid MaxWidth="640" HorizontalAlignment="Left" Margin="0,8"
+        <StackPanel MaxWidth="720" HorizontalAlignment="Stretch" Margin="0,8"
               Loaded="SettingsLoaded" Unloaded="SettingsUnloaded" IsVisibleChanged="SettingsVisibilityChanged">
-            <Grid.Resources>
+            <StackPanel.Resources>
+                <DataTemplate x:Key="DirectorSectionHeader"><TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{DynamicResource PrimaryBrush}" /></DataTemplate>
+                <Style x:Key="DirectorStatusText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                    <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
+                    <Setter Property="TextWrapping" Value="Wrap" />
+                </Style>
                 <!-- NINA's implicit CheckBox style draws only an ON/OFF switch. -->
                 <Style x:Key="LabeledOption" TargetType="CheckBox">
                     <Setter Property="ContentTemplate">
@@ -16,42 +21,24 @@
                     </Setter>
                 </Style>
                 <Style x:Key="ActionLabel" TargetType="TextBlock">
-                    <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundBrush}" /><Setter Property="TextWrapping" Value="Wrap" />
                     <Setter Property="Margin" Value="{Binding Padding, RelativeSource={RelativeSource AncestorType=Button}}" />
                 </Style>
-            </Grid.Resources>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="140" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Profile" Margin="0,4,16,8" />
-            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProfileName}" TextWrapping="Wrap" Margin="0,4,0,8" />
-            <TextBlock Grid.Row="1" Text="Planner version" Margin="0,4,16,8" />
-            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding EngineVersion}" Margin="0,4,0,8" />
-            <TextBlock Grid.Row="2" Text="Runtime" Margin="0,4,16,8" />
-            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RuntimeStatus}" TextWrapping="Wrap" Margin="0,4,0,8" />
-            <TextBlock Grid.Row="3" Text="Acquisition" Margin="0,4,16,8" />
-            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AcquisitionStatus}" TextWrapping="Wrap" Margin="0,4,0,8" />
-            <WrapPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                <Button Command="{Binding StartRuntimeCommand}" Style="{DynamicResource StandardButton}" MinWidth="112" Margin="0,0,8,8" Padding="12,6">
-                    <TextBlock Text="Start runtime" Style="{StaticResource ActionLabel}" />
-                </Button>
-                <Button Command="{Binding StopRuntimeCommand}" Style="{DynamicResource StandardButton}" MinWidth="112" Margin="0,0,0,8" Padding="12,6">
-                    <TextBlock Text="Stop runtime" Style="{StaticResource ActionLabel}" />
-                </Button>
-            </WrapPanel>
-            <StackPanel Grid.Row="5" Grid.ColumnSpan="2" DataContext="{Binding Connection}" Margin="0,16,0,0">
-                <TextBlock Text="Coordinator" FontWeight="Bold" Margin="0,0,0,8" />
+            </StackPanel.Resources>
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,0,0,8">
+                <StackPanel>
+                    <TextBlock Text="Director · Beta" Style="{StaticResource DirectorStatusText}" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding Overview.Phase}" Style="{StaticResource DirectorStatusText}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Overview.Operation}" Style="{StaticResource DirectorStatusText}" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding Overview.Target, StringFormat=Target: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding Overview.Safety, StringFormat=Safety: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding Overview.WaitReason}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
+                    <TextBlock Text="{Binding ProfileName, StringFormat=Profile: {0}}" Style="{StaticResource DirectorStatusText}" Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding Connection.PairingStatus}" Style="{StaticResource DirectorStatusText}" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+            <StackPanel DataContext="{Binding Connection}" Margin="0,16,0,0">
+                <TextBlock Text="Connection to PSF Guard" FontWeight="Bold" Margin="0,0,0,8" />
                 <TextBlock Text="Server URL" Margin="0,0,0,4" />
                 <TextBox Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsEditable}" MinWidth="160" />
                 <CheckBox Content="Allow unencrypted HTTP" Style="{StaticResource LabeledOption}" IsChecked="{Binding AllowInsecureHttp}" IsEnabled="{Binding IsEditable}" Margin="0,8,0,8" />
@@ -66,16 +53,17 @@
                     </Button>
                 </WrapPanel>
                 <TextBlock Text="{Binding PairingStatus}" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding DataContext.EquipmentReportStatus, RelativeSource={RelativeSource AncestorType=Grid}}"
+                <TextBlock Text="{Binding DataContext.EquipmentReportStatus, RelativeSource={RelativeSource AncestorType=StackPanel, AncestorLevel=2}}"
                            TextWrapping="Wrap" Margin="0,8,0,0" />
             </StackPanel>
-            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Margin="0,8,0,0">
+            <StackPanel Margin="0,16,0,0"><TextBlock Text="Images and reporting" FontWeight="Bold" Margin="0,0,0,8" />
                 <CheckBox Content="Send star-detection settings to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4" />
                 <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />
                 <CheckBox Content="Report sequence activity to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding ReportSequenceActivity}" Margin="0,8,0,4" />
-                <TextBlock Text="Show the active Advanced Sequencer instructions when a Director Session is not running." TextWrapping="Wrap" />
+                <TextBlock Text="Show other Advanced Sequencer instructions in PSF Guard before and after Director Session." TextWrapping="Wrap" />
                 <CheckBox Content="Upload captured frames to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding UploadCapturedFrames}" Margin="0,8,0,4" />
                 <TextBlock Text="Off by default. When on, upload the light frames saved by a Director Session. Also turn on Image uploads for the database in PSF Guard. Live image record delivery works with this switch off." TextWrapping="Wrap" />
+                <Expander Header="Upload queue and recovery" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,8,0,0"><StackPanel Margin="8">
                 <TextBlock Text="Turning this off pauses queued files and cancels the current transfer. Turning it back on resumes the queue for this profile and connection. Files saved while off are not added later; you can copy them another way." TextWrapping="Wrap" />
                 <TextBlock Text="{Binding UploadStatus}" TextWrapping="Wrap" Margin="0,4,0,0" />
                 <TextBlock Text="{Binding UploadQueueStatus}" TextWrapping="Wrap" Margin="0,4,0,0" />
@@ -89,18 +77,34 @@
                         <TextBlock Text="Forget held uploads" Style="{StaticResource ActionLabel}" />
                     </Button>
                 </WrapPanel>
+                </StackPanel></Expander>
             </StackPanel>
-            <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Margin="0,16,0,0">
-                <TextBlock Text="Saved runs" FontWeight="Bold" Margin="0,0,0,8" />
+            <StackPanel Margin="0,16,0,0">
+                <TextBlock Text="Saved image records" FontWeight="Bold" Margin="0,0,0,8" />
                 <WrapPanel>
                     <Button Command="{Binding CheckInCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6">
-                        <TextBlock Text="Check in" Style="{StaticResource ActionLabel}" />
+                        <TextBlock Text="Send saved records" Style="{StaticResource ActionLabel}" />
                     </Button>
                     <Button Command="{Binding CancelCheckInCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,0,8" Padding="12,6">
                         <TextBlock Text="Cancel" Style="{StaticResource ActionLabel}" />
                     </Button>
                 </WrapPanel>
                 <TextBlock Text="{Binding CheckInStatus}" TextWrapping="Wrap" />
+                <TextBlock Text="Director sends new records automatically. Previously sent records stay on disk and are skipped unless they change." TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+            <Expander Header="Advanced and diagnostics" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,16,0,0">
+                <StackPanel Margin="8">
+                    <TextBlock Text="The planner starts automatically with Director Session. These controls are for diagnostics." TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding EngineVersion, StringFormat=Planner version: {0}}" Margin="0,8,0,4" />
+                    <TextBlock Text="{Binding RuntimeStatus}" TextWrapping="Wrap" />
+            <WrapPanel Margin="0,8,0,0">
+                <Button Command="{Binding StartRuntimeCommand}" Style="{DynamicResource StandardButton}" MinWidth="112" Margin="0,0,8,8" Padding="12,6">
+                    <TextBlock Text="Start runtime" Style="{StaticResource ActionLabel}" />
+                </Button>
+                <Button Command="{Binding StopRuntimeCommand}" Style="{DynamicResource StandardButton}" MinWidth="112" Margin="0,0,0,8" Padding="12,6">
+                    <TextBlock Text="Stop runtime" Style="{StaticResource ActionLabel}" />
+                </Button>
+            </WrapPanel>
                 <Expander IsExpanded="False" HorizontalContentAlignment="Stretch"
                           DataContext="{Binding Collaboration}" Margin="0,16,0,0">
                     <Expander.Header>
@@ -126,8 +130,8 @@
                         </WrapPanel>
                         <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
                     </StackPanel>
-                </Expander>
-            </StackPanel>
-        </Grid>
+                </Expander>                </StackPanel>
+            </Expander>
+        </StackPanel>
     </DataTemplate>
 </ResourceDictionary>

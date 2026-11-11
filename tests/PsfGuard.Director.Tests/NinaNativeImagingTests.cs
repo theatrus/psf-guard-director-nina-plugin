@@ -11,6 +11,7 @@ using NINA.Sequencer.SequenceItem;
 using NINA.Sequencer.SequenceItem.Guider;
 using NINA.Sequencer.Trigger;
 using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using PsfGuard.Director.Plugin.Acquisition;
 using PsfGuard.Director.Plugin.Sequencer;
@@ -25,6 +26,45 @@ public sealed class DirectorEquipmentReportingCollection;
 [Collection("Director equipment reporting")]
 public sealed class NinaNativeImagingTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void AutofocusChoicesIndependentlyControlTargetSetupAndFilterTrigger(bool targetStart, bool filterChange)
+    {
+        var f = new Fixture();
+        f.Options.AutofocusOnTargetStart = targetStart;
+        f.Options.AutofocusOnFilterChange = filterChange;
+        f.Options.Guiding = f.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+        f.Factory.Setup(x => x.GetItem<NINA.Sequencer.SequenceItem.Autofocus.RunAutofocus>()).Returns(() =>
+            new NINA.Sequencer.SequenceItem.Autofocus.RunAutofocus(f.Profiles.Object, Mock.Of<IImageHistoryVM>(),
+                Mock.Of<ICameraMediator>(c => c.GetInfo() == new NINA.Equipment.Equipment.MyCamera.CameraInfo { Connected = true }),
+                Mock.Of<IFilterWheelMediator>(), f.Focuser.Object, Mock.Of<IAutoFocusVMFactory>()));
+        var filter = new Mock<ISequenceTrigger>().Object;
+        f.Factory.Setup(x => x.GetTrigger<NINA.Sequencer.Trigger.Autofocus.AutofocusAfterFilterChange>()).Returns(filter);
+        f.Factory.Setup(x => x.GetTrigger<NINA.Sequencer.Trigger.Autofocus.AutofocusAfterTimeTrigger>()).Returns(new Mock<ISequenceTrigger>().Object);
+        f.Factory.Setup(x => x.GetTrigger<NINA.Sequencer.Trigger.Autofocus.AutofocusAfterTemperatureChangeTrigger>()).Returns(new Mock<ISequenceTrigger>().Object);
+        using var native = f.Create();
+        var slots = new NinaInstructionSlots();
+        native.ConfigureTargetSetup(slots);
+        Assert.Equal(targetStart ? 2 : 0, slots.Clone().BeforeNewTarget.Items.Count);
+        var session = new DirectorSessionContainer();
+        native.Install(session);
+        Assert.Equal(filterChange, session.GetTriggersSnapshot().Contains(filter));
+        var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>(Newtonsoft.Json.JsonConvert.SerializeObject(f.Options))!.Clone();
+        Assert.Equal(targetStart, restored.AutofocusOnTargetStart);
+        Assert.Equal(filterChange, restored.AutofocusOnFilterChange);
+    }
+
+    [Fact]
+    public void OlderSequencesKeepTheirAutofocusDefaults()
+    {
+        var restored = Newtonsoft.Json.JsonConvert.DeserializeObject<DirectorSessionOptions>("{}")!;
+        Assert.True(restored.AutofocusOnTargetStart);
+        Assert.True(restored.AutofocusOnFilterChange);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -52,7 +52,7 @@ internal sealed class DirectorSessionProgress : IProgress<ApplicationStatus>, ID
             // Native NINA actions can reuse and clear their status object.
             // Drop the adapter's duplicate camera message, but keep native
             // triggers (such as a flip or autofocus before the next exposure).
-            native = value.Status == "Exposing and downloading" || string.IsNullOrWhiteSpace(value.Status) ? null : Copy(value);
+            native = display.Phase == "Running N.I.N.A. trigger" || value.Status == "Exposing and downloading" || string.IsNullOrWhiteSpace(value.Status) ? null : Copy(value);
             Publish();
         }
     }

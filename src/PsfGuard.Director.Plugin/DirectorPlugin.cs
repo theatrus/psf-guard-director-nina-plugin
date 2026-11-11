@@ -106,7 +106,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
     public string RuntimeStatus => commandError ?? runtime.Status.Message;
     public string ProfileName => profiles.ActiveProfile.Name;
     public string EngineVersion => RuntimeContract.EngineVersion;
-    public string AcquisitionStatus => "Not armed";
+    public string AcquisitionStatus => Overview.Phase;
 
     // Per profile, on by default, and separate from pairing and every other
     // option. Turning it back on sends the current settings once.

@@ -142,6 +142,8 @@ public sealed partial class DirectorAcquisition
 
     internal async Task ExecuteAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, bool attended, CancellationToken token)
     {
+        DirectorSessionObservation.Observe(profiles.ActiveProfile.Id, container);
+        using var triggerActivity = new NinaTriggerActivity(container);
         using var sessionProgress = new DirectorSessionProgress(container, progress);
         progress = sessionProgress;
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
@@ -1456,7 +1458,8 @@ public sealed partial class DirectorAcquisition
                 }
             }
             catch (Exception error) { Logger.Warning($"Director pointing unavailable: {error.GetType().Name}"); }
-            var phase = camera.GetInfo() is { Connected: true, IsExposing: true } ? "exposing" : display.Phase;
+            // Autofocus also uses the camera. Do not label its frames as a plan exposure.
+            var phase = display.Phase != "Running N.I.N.A. trigger" && camera.GetInfo() is { Connected: true, IsExposing: true } ? "exposing" : display.Phase;
             return new(phase, display.Target, interlock.Monitored ? interlock.Read().Safety.ToString() : PlannerSafety.Unknown.ToString(), snapshot.Operation,
                 snapshot.StartedMs, snapshot.ElapsedMs, display.Goal == "-" ? null : display.Goal,
                 display.WaitReason == "-" ? null : display.WaitReason, display.QueueDepth,
