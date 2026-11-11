@@ -127,7 +127,11 @@ internal sealed class NinaCalibrationSession
         if (!Panel.CanClose) { Notice("Calibration is waiting for a connected motorized flat-panel cover"); return false; }
         if (flat is not null && flatDevice!.GetInfo().SupportsOnOff != true)
         { Notice("Flats require a connected panel with a controllable light"); return false; }
-        checkContext(); CheckStopped();
+        // Capture completion and the monitoring loop can check concurrently.
+        // The caller may refresh NINA's horizon, which is deliberately non-reentrant.
+        var contextGate = new object();
+        void CheckContext() { lock (contextGate) checkContext(); }
+        CheckContext(); CheckStopped();
         if (!await stillWaiting(token)) return false;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
         stop.CancelAfter(TimeSpan.FromSeconds(options.HookTimeoutSeconds + options.SaveTimeoutSeconds
@@ -135,13 +139,13 @@ internal sealed class NinaCalibrationSession
         var interrupted = false;
         interruptible = false;
         Exception? primaryFailure = null;
-        var work = flat is not null ? FlatAsync(flat, checkContext, stop.Token) : DarkAsync(dark!, checkContext, stop.Token);
+        var work = flat is not null ? FlatAsync(flat, CheckContext, stop.Token) : DarkAsync(dark!, CheckContext, stop.Token);
         try
         {
             while (!work.IsCompleted)
             {
                 if (await Task.WhenAny(work, Task.Delay(500, token)) == work) break;
-                stop.Token.ThrowIfCancellationRequested(); checkContext(); CheckStopped();
+                stop.Token.ThrowIfCancellationRequested(); CheckContext(); CheckStopped();
                 if (camera.GetInfo().IsExposing)
                 {
                     if (flat is not null) Panel.RequireFlatReady();

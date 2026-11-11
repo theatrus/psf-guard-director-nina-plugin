@@ -225,6 +225,44 @@ public sealed class CalibrationTests
     }
 
     [Fact]
+    public async Task DarkCompletionAndMonitorSerializeConstraintRefresh()
+    {
+        var f = new Fixture();
+        f.Container.Options.DarksWhileIdle = true;
+        var exposing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var downloaded = new TaskCompletionSource<IExposureData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exposure = new Mock<IExposureData>();
+        exposure.Setup(e => e.ToImageData(Progress, It.IsAny<CancellationToken>())).ReturnsAsync(f.NewImage("DARK"));
+        f.Imaging.Setup(i => i.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), Progress, "Director calibration"))
+            .Returns(() => { exposing.TrySetResult(); return downloaded.Task; });
+        var active = 0;
+        var completedDuringCheck = 0;
+        var checksAfterExposure = 0;
+        void Check()
+        {
+            Assert.Equal(1, Interlocked.Increment(ref active));
+            try
+            {
+                if (!exposing.Task.IsCompleted) return;
+                Interlocked.Increment(ref checksAfterExposure);
+                if (Interlocked.Exchange(ref completedDuringCheck, 1) == 0)
+                {
+                    // Finish the image while the monitor is refreshing constraints.
+                    // Its continuation must wait before refreshing them again.
+                    downloaded.SetResult(exposure.Object);
+                    Thread.Sleep(150);
+                }
+            }
+            finally { Interlocked.Decrement(ref active); }
+        }
+        var session = f.Session();
+        session.UpdateRecipes(f.Program, f.Configuration);
+        Assert.True(await session.RunOneAsync(false, _ => Task.FromResult(true), Check, default));
+        Assert.True(checksAfterExposure >= 2);
+        Assert.True(f.Enqueued.Task.IsCompleted);
+    }
+
+    [Fact]
     public async Task WeatherDarksRequireExplicitOptionAndClosedCover()
     {
         var f = new Fixture();
