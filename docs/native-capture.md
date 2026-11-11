@@ -1,5 +1,93 @@
 # Native capture adapter
 
+## Use the flat panel and capture calibration frames
+
+Calibration requires a PSF Guard server with Director calibration support and
+the usual Director pairing. Keep camera and filter equipment reports up to date
+through the plugin's automatic reporting. Calibration does not require a work
+assignment or a separate Target Scheduler installation.
+
+Director turns off a connected flat-panel light and opens its motorized cover
+before centering, autofocus, or light exposures. Open **Settings → Flat panel
+and calibration** to enable **Close the flat-panel cover when Director ends**.
+Without a connected panel, ordinary imaging works as before. A panel that
+disconnects after Director starts using it stops imaging until its state can
+be checked.
+
+For panel flats, enable **Take scheduled panel flats**. Choose **Before
+astronomical dusk** or **After astronomical dusk** under **Flat time**, then
+enter **Minutes before or after dusk**. Director uses the active N.I.N.A.
+profile's site and night calculation. If the time has already passed, flats
+start at the next gap between light exposures. If the site has no astronomical
+dusk that night, Director cannot schedule this batch.
+
+Set **Flats per filter and camera setting**, **Panel brightness (%)**, and the
+minimum and maximum flat exposure. Director uses filters, binning, gain,
+offset, and readout mode from the active plans. N.I.N.A.'s automatic flat
+operation chooses an exposure near 50% of the camera's range. A connected
+motorized cover and controllable panel light are required.
+
+To take flats at a specific point in the sequence, add **PSF Guard Director →
+Director Flats** before or after **Director Session**. Set the flat count,
+brightness, and exposure limits in that instruction. It runs when reached and
+includes active plans whose light-frame goals are already complete. Tracking
+and guiding stop for flats. **Keep the cover closed when finished** is on by
+default; turn it off to open the cover with the light off after a successful run.
+After an error, Director turns off the light and attempts to close the cover.
+Check any reported panel failure before restarting.
+
+Both methods reuse the same flat history, including partial batches across
+restarts. Coverage applies to the observing date (local noon to noon), camera,
+filter wheel, focal length, filter, binning, gain, offset, readout mode, current
+camera angle, and requested count. Changing that setup starts a new batch.
+Director does not rotate the camera to take flats at other plan angles. Run
+**Director Flats** at each required camera angle, and request new flats if dust
+or the optical setup changes in a way Director cannot detect.
+
+To void a suspect batch, open the rig's **Calibration → Flat coverage** page
+in PSF Guard. Select the Director coverage and choose **Invalidate coverage**
+with a reason. Director checks before the flats instruction, then every 30
+seconds between calibration images while running. It marks the old batch as
+void locally, captures replacement flats when that setup is next eligible,
+and sends confirmation to PSF Guard. Original image files are kept. A stopped
+plugin receives the request the next time calibration runs. Failed syncs retry
+from saved history; reopening an old history backup cannot restore coverage
+the server has already voided.
+
+For darks, enable **Take darks while no target is ready**, **Take darks during
+weather holds**, or both. Weather darks run only with **Hold and resume**;
+**Stop for night** still stops the session. The mount and guider must stop,
+and the motorized cover must confirm it is closed with the panel light off.
+
+- Leave **Use exposure settings from active plans** on to generate darks from
+  their exposure lengths, binning, gain, offset, and readout modes. Filters
+  that use identical camera settings share one dark batch.
+- Enter **Additional dark lengths (seconds)**, such as `30, 60, 120`, to add
+  exposures. Turn off the active-plan option to use only these lengths.
+  Additional lengths use each camera mode in the active plans. With no plan,
+  Director uses the connected camera's current binning, default gain and
+  offset, and normal readout mode.
+- Enter **Dark temperatures (°C)**, such as `-10, -20`, to repeat the lengths
+  at each temperature. Leave this field blank to keep the current camera
+  temperature. Temperature steps require a controllable cooler; Director waits
+  until the camera is within 0.5 °C before exposing.
+- Set **Darks per exposure and temperature**. Dark counts apply to this Director
+  run and each distinct camera mode. Director does not inspect an existing
+  dark library or carry dark counts across restarts.
+
+Director checks for runnable plans during dark exposures and stops calibration
+when target work becomes available or a weather hold clears. Cover movement
+finishes before switching modes. Director restores the camera temperature and
+readout mode, then opens the cover before returning to light exposures.
+Scheduled flats take priority at their configured time.
+
+Calibration frames use N.I.N.A.'s normal save queue and the profile's DARK or
+FLAT file pattern. Only confirmed saves count toward these batches. Calibration
+frames do not count toward a target's light-image goal and do not use Director's
+science-image upload queue; your normal file-transfer or import process can
+collect them. A failed save or an operation that cannot be confirmed stops the
+session with the original error.
+
 ## Follow session progress
 
 N.I.N.A.'s bottom status bar shows Director's current action and elapsed time,

@@ -29,6 +29,7 @@ public sealed class SimulatorProbeTests
     [InlineData("filter")]
     [InlineData("focuser")]
     [InlineData("rotator")]
+    [InlineData("panel")]
     [InlineData("guider")]
     [InlineData("safety")]
     [InlineData("output")]
@@ -43,6 +44,7 @@ public sealed class SimulatorProbeTests
             case "mount": f.Profile.TelescopeSettings.Id = "ASCOM.Real.Telescope"; break;
             case "filter": f.Profile.FilterWheelSettings.Id = "ASCOM.Real.FilterWheel"; break;
             case "focuser": f.Profile.FocuserSettings.Id = "ASCOM.Real.Focuser"; break;
+            case "panel": f.Profile.FlatDeviceSettings.Id = "ASCOM.Real.Panel"; break;
             case "rotator": f.Profile.RotatorSettings.Id = "ASCOM.Real.Rotator"; break;
             case "guider": f.Profile.GuiderSettings.GuiderName = "PHD2"; break;
             case "safety": f.Profile.SafetyMonitorSettings.Id = "ASCOM.Real.SafetyMonitor"; break;

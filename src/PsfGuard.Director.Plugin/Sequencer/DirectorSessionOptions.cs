@@ -15,7 +15,7 @@ public enum DirectorQualityPolicy { Off, Monitor, ParkAndStop, HoldAndProbe }
 
 // Requested local policy, not an issued program or permission to operate equipment.
 [JsonObject(MemberSerialization.OptIn)]
-public sealed class DirectorSessionOptions : INotifyPropertyChanged
+public sealed partial class DirectorSessionOptions : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
     [JsonProperty] public int SchemaVersion { get; private set; } = 1;
@@ -99,7 +99,7 @@ public sealed class DirectorSessionOptions : INotifyPropertyChanged
 
     internal IReadOnlyList<string> ValidateSettings()
     {
-        var issues = new List<string>();
+        var issues = new List<string>(ValidateCalibration());
         if (SchemaVersion != 1) issues.Add("Unsupported Director session settings version.");
         if (AllowSettledRestart && !AutomaticWorkloads) issues.Add("Settled-night restart requires automatic workloads and fresh server admission.");
         Range(MaximumHours, 0.01, 24, "Session duration (hours)");

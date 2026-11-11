@@ -15,6 +15,27 @@
         <Setter Property="Foreground" Value="{DynamicResource PrimaryBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
+    <DataTemplate DataType="{x:Type local:DirectorFlatsItem}">
+        <StackPanel Margin="8" DataContext="{Binding Options}">
+            <TextBlock Text="Take panel flats for active PSF Guard plans, including completed light-frame goals. Saved batches are reused for this setup until local noon. Replacement requests in PSF Guard are checked before capture."
+                       TextWrapping="Wrap" Margin="0,0,0,10" />
+            <TextBlock Text="The connected cover closes for flats. Tracking and guiding stop. Flats use the current camera angle; Director does not rotate the camera for this instruction." TextWrapping="Wrap" Margin="0,0,0,10" />
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="Flats per filter and camera setting" TextWrapping="Wrap" Margin="0,5,12,5" />
+                <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding FlatsPerFilter, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Flats per filter and camera setting" Margin="0,3" />
+                <TextBlock Grid.Row="1" Text="Panel brightness (%)" TextWrapping="Wrap" Margin="0,5,12,5" />
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding FlatBrightness, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Panel brightness (%)" Margin="0,3" />
+                <TextBlock Grid.Row="2" Text="Minimum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" />
+                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding FlatMinimumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minimum flat exposure (seconds)" Margin="0,3" />
+                <TextBlock Grid.Row="3" Text="Maximum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" />
+                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding FlatMaximumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum flat exposure (seconds)" Margin="0,3" />
+                <TextBlock Grid.Row="4" Text="Keep the cover closed when finished" TextWrapping="Wrap" Margin="0,8,12,8" />
+                <CheckBox Grid.Row="4" Grid.Column="1" AutomationProperties.Name="Keep the cover closed when finished" IsChecked="{Binding ClosePanelAtEnd}" Margin="0,8" />
+            </Grid>
+        </StackPanel>
+    </DataTemplate>
     <DataTemplate x:Key="DirectorHookEditor">
         <Expander IsExpanded="{Binding IsExpanded}" HorizontalContentAlignment="Stretch" Margin="0,0,0,12">
             <Expander.Header>
@@ -228,6 +249,44 @@
                                         <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
                                         <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MaxWidth="280" Margin="0,3" />
                                     </Grid>
+                                </Expander>
+                                <Expander Header="Flat panel and calibration" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                                    <StackPanel Margin="8">
+                                        <TextBlock Text="Director turns off a connected panel light and opens its motorized cover before imaging the sky. Calibration is optional. Flats use active-plan filters and N.I.N.A. automatic exposure adjustment at 50% ADU. Darks require the cover closed and light off." TextWrapping="Wrap" Margin="0,0,0,8" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Text="Close the flat-panel cover when Director ends" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox IsChecked="{Binding ClosePanelAtEnd}" Grid.Row="0" Grid.Column="1" AutomationProperties.Name="Close the flat-panel cover when Director ends" Margin="0,3" />
+                                            <TextBlock Grid.Row="1" Text="Take scheduled panel flats" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox IsChecked="{Binding ScheduledFlats}" Grid.Row="1" Grid.Column="1" AutomationProperties.Name="Take scheduled panel flats" Margin="0,3" />
+                                            <TextBlock Grid.Row="2" Text="Flat time" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <ComboBox ItemsSource="{x:Static local:DirectorSessionChoices.DuskTimings}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding FlatsTiming}" MaxWidth="320" Grid.Row="2" Grid.Column="1" AutomationProperties.Name="Flat time" Margin="0,3" />
+                                            <TextBlock Grid.Row="3" Text="Minutes before or after dusk" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding FlatsDuskMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="3" Grid.Column="1" AutomationProperties.Name="Minutes before or after dusk" Margin="0,3" />
+                                            <TextBlock Grid.Row="4" Text="Flats per filter and camera setting" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding FlatsPerFilter, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="4" Grid.Column="1" AutomationProperties.Name="Flats per filter and camera setting" Margin="0,3" />
+                                            <TextBlock Grid.Row="5" Text="Panel brightness (%)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding FlatBrightness, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="5" Grid.Column="1" AutomationProperties.Name="Panel brightness (%)" Margin="0,3" />
+                                            <TextBlock Grid.Row="6" Text="Minimum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding FlatMinimumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="6" Grid.Column="1" AutomationProperties.Name="Minimum flat exposure (seconds)" Margin="0,3" />
+                                            <TextBlock Grid.Row="7" Text="Maximum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding FlatMaximumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="7" Grid.Column="1" AutomationProperties.Name="Maximum flat exposure (seconds)" Margin="0,3" />
+                                            <TextBlock Grid.Row="8" Text="Take darks while no target is ready" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox IsChecked="{Binding DarksWhileIdle}" Grid.Row="8" Grid.Column="1" AutomationProperties.Name="Take darks while no target is ready" Margin="0,3" />
+                                            <TextBlock Grid.Row="9" Text="Take darks during weather holds" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox IsChecked="{Binding DarksWhileWeatherHeld}" Grid.Row="9" Grid.Column="1" AutomationProperties.Name="Take darks during weather holds" Margin="0,3" />
+                                            <TextBlock Grid.Row="10" Text="Use exposure settings from active plans" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <CheckBox IsChecked="{Binding DarksFromPlans}" Grid.Row="10" Grid.Column="1" AutomationProperties.Name="Use exposure settings from active plans" Margin="0,3" />
+                                            <TextBlock Grid.Row="11" Text="Additional dark lengths (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding DarkExposureSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="11" Grid.Column="1" AutomationProperties.Name="Additional dark lengths (seconds)" Margin="0,3" />
+                                            <TextBlock Grid.Row="12" Text="Dark temperatures (°C)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding DarkTemperatures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="12" Grid.Column="1" AutomationProperties.Name="Dark temperatures (°C)" Margin="0,3" />
+                                            <TextBlock Grid.Row="13" Text="Darks per exposure and temperature" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                                            <TextBox Text="{Binding DarksPerSetting, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MaxWidth="280" Grid.Row="13" Grid.Column="1" AutomationProperties.Name="Darks per exposure and temperature" Margin="0,3" />
+                                        </Grid>
+                                        <TextBlock Text="Enter comma-separated dark lengths and temperatures, such as 30, 60, 120 seconds and -10, -20 °C. Extra lengths use the camera modes from active plans, or the current camera settings when no plan is available. Leave temperatures blank to keep the current camera temperature. Counts apply to this Director run. Director checks for new work during calibration and restores the imaging temperature before light frames." TextWrapping="Wrap" Margin="0,8,0,0" />
+                                    </StackPanel>
                                 </Expander>
                                 <Expander Header="Image quality" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
                                     <Grid Margin="8">

@@ -31,6 +31,7 @@ public sealed partial class DirectorAcquisition
     private readonly IGuiderMediator? guider;
     private readonly IFocuserMediator? focuser;
     private readonly IRotatorMediator? rotator;
+    private readonly IFlatDeviceMediator? flatDevice;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -46,11 +47,12 @@ public sealed partial class DirectorAcquisition
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging,
         IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome,
         INinaActionFactory? sequenceFactory = null, IGuiderMediator? guider = null,
-        IFocuserMediator? focuser = null, IRotatorMediator? rotator = null)
+        IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
+        [Import(AllowDefault = true)] IFlatDeviceMediator? flatDevice = null)
     {
         this.profiles = profiles; this.camera = camera; this.telescope = telescope; this.filters = filters;
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
-        this.dome = dome;
+        this.dome = dome; this.flatDevice = flatDevice;
         this.sequenceFactory = sequenceFactory; this.guider = guider; this.focuser = focuser; this.rotator = rotator;
     }
 
@@ -146,6 +148,33 @@ public sealed partial class DirectorAcquisition
         using var triggerActivity = new NinaTriggerActivity(container);
         using var sessionProgress = new DirectorSessionProgress(container, progress);
         progress = sessionProgress;
+        var settingsIssues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
+        if (settingsIssues.Length != 0) throw new InvalidOperationException(string.Join(" ", settingsIssues));
+        var calibration = new NinaCalibrationSession(profiles, camera, telescope, filters, imaging, saves, history, flatDevice, nighttime, container, progress);
+        Exception? failure = null;
+        try { await ExecuteSessionAsync(container, progress, attended, calibration, token); }
+        catch (Exception error) { failure = error; throw; }
+        finally
+        {
+            if (calibration.CameraChanged || calibration.ClosePanelAtEnd)
+            {
+                try
+                {
+                    using var cleanup = new CancellationTokenSource(calibration.CleanupTimeout);
+                    using var endingOwner = new AcquisitionLease(LocalStateRoot);
+                    await calibration.RestoreCameraAsync(endingOwner.CheckClock, cleanup.Token);
+                    if (calibration.ClosePanelAtEnd)
+                        await calibration.Panel.CloseAsync(endingOwner.CheckClock, progress, cleanup.Token);
+                }
+                catch (Exception error) when (failure is not null)
+                { Logger.Error(error); container.RecordAction("", "Calibration", $"Could not finish calibration cleanup: {error.Message}"); }
+            }
+        }
+    }
+
+    private async Task ExecuteSessionAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, bool attended,
+        NinaCalibrationSession calibration, CancellationToken token)
+    {
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
         var profileAtStart = profiles.ActiveProfile;
@@ -181,7 +210,7 @@ public sealed partial class DirectorAcquisition
                     // the old assignment. Only explicit resume needs the later replay.
                     firstAllocation = false;
                 }
-                var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, token);
+                var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, calibration, token);
                 firstAllocation = false;
                 reconcile = false;
                 if (!more) break;
@@ -332,7 +361,7 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, NinaCalibrationSession calibration, CancellationToken token)
     {
         var options = container.Options.Clone();
         if (attended != (options.Safety == DirectorSafetyPolicy.Attended))
@@ -451,6 +480,23 @@ public sealed partial class DirectorAcquisition
         using var workloads = new CoordinatorWorkloadClient(LocalStateRoot, endpoint, pairing.Binding, pairing.ClientId, configuration, Credential,
             connection.AllowInsecureHttp, options.LocalTargetScheduling, native is not null);
         using var previews = new CoordinatorProgramClient(endpoint, Credential, connection.AllowInsecureHttp);
+        var flatCoverage = new DirectorFlatCoverage(LocalStateRoot, endpoint, pairing.Binding, connection.AllowInsecureHttp);
+        calibration.AttachCoverage(flatCoverage, CalibrationRotation);
+        using var calibrationClient = new CoordinatorCalibrationClient(endpoint, pairing.Binding, flatCoverage, Credential, connection.AllowInsecureHttp);
+        DateTimeOffset nextCalibrationRefresh = DateTimeOffset.MinValue;
+        CoordinatorAllocation? calibrationFoundWork = null;
+        async Task RefreshCalibrationAsync(CancellationToken ct)
+        {
+            if (!calibration.Enabled || DateTimeOffset.UtcNow < nextCalibrationRefresh) return;
+            nextCalibrationRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+            try
+            {
+                var plan = await RefreshCalibrationPlanAsync(calibrationClient, configuration, ct);
+                calibration.SetRecipes(plan.Recipes, configuration);
+            }
+            catch (CoordinatorIntakeException error) when (error.Failure is CoordinatorIntakeFailure.NotReady || OfflineFailure(error.Failure))
+            { calibration.UpdateRecipes(null, configuration); }
+        }
         if (window.Ended) return await FinishIdleNightAsync();
         CoordinatorAllocation allocation;
         try
@@ -478,7 +524,9 @@ public sealed partial class DirectorAcquisition
                     try
                     {
                         Report("Requesting work from PSF Guard", "Online", "-");
-                        var result = await workloads.RequestAsync(operations.Token);
+                        var result = calibrationFoundWork is { } ready
+                            ? new CoordinatorWorkloadResult(ready, 0) : await workloads.RequestAsync(operations.Token);
+                        calibrationFoundWork = null;
                         if (result.Allocation is not null) { allocation = result.Allocation; break; }
                         Report("Waiting for PSF Guard to assign more images", "Online");
                         await WaitIdleAsync(TimeSpan.FromSeconds(result.RetryAfterSeconds));
@@ -568,10 +616,31 @@ public sealed partial class DirectorAcquisition
         async Task WaitIdleAsync(TimeSpan duration)
         {
             var end = DateTimeOffset.UtcNow + duration;
+            var pollAt = DateTimeOffset.UtcNow.AddSeconds(30);
             while (!window.Ended && DateTimeOffset.UtcNow < end)
             {
                 CheckIdleContext();
                 if (weatherHolds && !await AdmitIdleWeatherAsync()) return;
+                await RefreshCalibrationAsync(lifetime.Token);
+                if (calibration.Enabled)
+                {
+                    await StopIdleEquipmentAsync(lifetime.Token);
+                    if (await calibration.RunOneAsync(false, async ct =>
+                    {
+                        if (window.Ended || interlock.ReadCurrent().Safety != PlannerSafety.Safe || enclosure.ReadCurrent().Motion != RecoveryMotion.Permitted) return false;
+                        if (DateTimeOffset.UtcNow >= pollAt)
+                        {
+                            var fresh = await workloads.RequestAsync(ct);
+                            calibrationFoundWork = fresh.Allocation;
+                            pollAt = DateTimeOffset.UtcNow.AddSeconds(Math.Min(fresh.RetryAfterSeconds, 30));
+                        }
+                        return calibrationFoundWork is null;
+                    }, CheckIdleContext, lifetime.Token))
+                    {
+                        if (calibrationFoundWork is not null) return;
+                        continue;
+                    }
+                }
                 await window.WaitAsync(TimeSpan.FromMilliseconds(250), lifetime.Token);
             }
         }
@@ -633,6 +702,13 @@ public sealed partial class DirectorAcquisition
                     Report("Weather cleared; requesting fresh work", null);
                     return true;
                 }
+                await RefreshCalibrationAsync(lifetime.Token);
+                if (held.StableSinceMs is null && await calibration.RunOneAsync(true, async ct =>
+                {
+                    if (window.Ended) return false;
+                    await recovery.ObserveWeatherAsync(ct);
+                    return recovery.Record!.Snapshot.Phase is RecoveryPhase.WeatherHolding { StableSinceMs: null };
+                }, CheckIdleContext, lifetime.Token)) continue;
                 await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
             }
         }
@@ -677,6 +753,7 @@ public sealed partial class DirectorAcquisition
         }
 
         var program = allocation.Envelope.Snapshot.Program;
+        calibration.UpdateRecipes(program, configuration);
         if (program.Targets.IsEmpty || !options.LocalTargetScheduling && program.Targets.Length != 1
             || program.Targets.Any(t => t.PositionAngleMas is not null) && (native?.RotatorConnected != true || !program.Configuration.EnableSlewCenter)
             || options.Dither == DirectorOperationOwner.Sequence && program.Recipes.Any(r => r.DitherOverride is > 0))
@@ -783,6 +860,7 @@ public sealed partial class DirectorAcquisition
                         Report("Plans changed. Requesting updated work from PSF Guard", "Online");
                         break;
                     }
+                    await RefreshCalibrationAsync(operations.Token);
                     var current = Snapshot();
                     if (window.Ended) break;
                     var decision = Require(await runtime.EvaluateGeometryAsync(current.Constraints, current.State, lifetime.Token));
@@ -795,6 +873,12 @@ public sealed partial class DirectorAcquisition
                         break;
                     }
                     if (decision.Action == PlannerAction.Wait && decision.Reason == "pending_assessment") break;
+                    if (calibration.FlatsDue && decision.Action is PlannerAction.Acquire or PlannerAction.Wait)
+                    {
+                        await StopIdleEquipmentAsync(operations.Token);
+                        if (await calibration.RunOneAsync(false, ct => Task.FromResult(!window.Ended && !WeatherInterrupted()), Check, operations.Token))
+                        { previousPointing = null; continue; }
+                    }
                     if (decision.Action == PlannerAction.Wait)
                     {
                         if (DateTimeOffset.UtcNow >= nextCheckIn)
@@ -818,6 +902,23 @@ public sealed partial class DirectorAcquisition
                             await RefreshWorkAsync(operations.Token, waiting: true);
                             if (Volatile.Read(ref priorityRefresh) != 0) continue;
                         }
+                        await RefreshCalibrationAsync(operations.Token);
+                        if (calibration.Enabled)
+                        {
+                            await StopIdleEquipmentAsync(operations.Token);
+                            if (await calibration.RunOneAsync(false, async ct =>
+                            {
+                                if (window.Ended || WeatherInterrupted()) return false;
+                                if (lastWaitingRefresh is null || TimeProvider.System.GetElapsedTime(lastWaitingRefresh.Value) >= TimeSpan.FromSeconds(30))
+                                {
+                                    lastWaitingRefresh = TimeProvider.System.GetTimestamp();
+                                    await RefreshWorkAsync(ct, waiting: true);
+                                }
+                                var state = Snapshot();
+                                var next = Require(await runtime.EvaluateGeometryAsync(state.Constraints, state.State, ct));
+                                return next.Action == PlannerAction.Wait && Volatile.Read(ref priorityRefresh) == 0;
+                            }, Check, operations.Token)) { previousPointing = null; continue; }
+                        }
                         await hooks.WaitAsync(ct => window.WaitAsync(TimeSpan.FromSeconds(5), ct), progress, operations.Token);
                         // Waiting ends the target visit, so re-enter its setup on
                         // the next core selection even if the mount has not moved.
@@ -839,6 +940,9 @@ public sealed partial class DirectorAcquisition
                     var selectedContext = context;
                     container.ShowSky(context.Target.DeepSkyObject, context.NighttimeData);
                     var newTarget = previousPointing?.Target.Id != target.Id;
+                    // Centering and autofocus also take light exposures.
+                    await calibration.PrepareLightsAsync(Check, operations.Token);
+                    current = Snapshot();
                     var id = Guid.NewGuid().ToString("D");
                     var begin = await runtime.BeginGeometryPreparationAsync(id, decision.GoalId,
                         new(configuration, previousPointing, telescope.GetInfo().AtPark,
@@ -930,6 +1034,7 @@ public sealed partial class DirectorAcquisition
                     var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
                     {
                         captureBlock.ValidateContext(); Check(); CheckPointing();
+                        calibration.Panel.RequireLightsReady();
                         if (camera.GetInfo().IsExposing) throw new InvalidOperationException("Camera is already exposing.");
                         if (telescope.GetInfo().AtPark || telescope.GetInfo().Slewing || !telescope.GetInfo().TrackingEnabled)
                             throw new InvalidOperationException("Mount is not tracking and ready to expose.");
@@ -1133,6 +1238,13 @@ public sealed partial class DirectorAcquisition
                         Report("Weather cleared; selecting fresh work", null);
                         return;
                     }
+                    await RefreshCalibrationAsync(lifetime.Token);
+                    if (held.StableSinceMs is null && await calibration.RunOneAsync(true, async ct =>
+                    {
+                        if (window.Ended) return false;
+                        await recovery.ObserveWeatherAsync(ct);
+                        return recovery.Record!.Snapshot.Phase is RecoveryPhase.WeatherHolding { StableSinceMs: null };
+                    }, () => CheckContext(ignoreWeather: true), lifetime.Token)) continue;
                     await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
                 }
             }
@@ -1339,6 +1451,19 @@ public sealed partial class DirectorAcquisition
                 }
             }
             else { telemetry?.Dispose(); checkpoint?.Dispose(); operationCheckpoint?.Dispose(); }
+            if (calibration.Enabled)
+            {
+                try
+                {
+                    using var sync = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await calibrationClient.RefreshAsync(configuration, sync.Token);
+                }
+                catch (Exception error)
+                {
+                    Logger.Error(error);
+                    container.RecordAction("", "Flat coverage", "Flat records are saved locally; PSF Guard sync will retry during the next calibration session or Director Flats instruction.");
+                }
+            }
         }
         if (reportingError is not null) throw new InvalidOperationException($"Could not send image records to PSF Guard. {reportingError.Message}", reportingError);
         if (shutdownError is not null) throw new InvalidOperationException($"Could not stop guiding. {shutdownError.Message}", shutdownError);

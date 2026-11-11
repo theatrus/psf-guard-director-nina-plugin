@@ -59,6 +59,7 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly INinaActionFactory? factory;
     private readonly IFocuserMediator? focuser;
     private readonly IRotatorMediator? rotator;
+    private readonly IFlatDeviceMediator? flatDevice;
     private readonly NINA.Equipment.Interfaces.IDomeFollower? follower;
 
     [ImportingConstructor]
@@ -66,7 +67,7 @@ public sealed class SimulatorSequence : SequenceItem
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
         IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome,
         INinaActionFactory? factory = null, IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
-        NINA.Equipment.Interfaces.IDomeFollower? follower = null)
+        NINA.Equipment.Interfaces.IDomeFollower? follower = null, IFlatDeviceMediator? flatDevice = null)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -83,12 +84,12 @@ public sealed class SimulatorSequence : SequenceItem
         this.factory = factory;
         this.focuser = focuser;
         this.rotator = rotator;
-        this.follower = follower;
+        this.follower = follower; this.flatDevice = flatDevice;
     }
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower, flatDevice);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -126,6 +127,7 @@ public sealed class SimulatorSequence : SequenceItem
         var constraintChangeVerified = false;
         NativeImagingProbe? nativeProbe = null;
         QualityImagingProbe? qualityProbe = null;
+        CalibrationProbe? calibrationProbe = null;
         var acquisitionImaging = imaging;
         var phd2 = Phd2Fixture.Read(root);
         float? rotatorFinalPosition = null;
@@ -179,6 +181,15 @@ public sealed class SimulatorSequence : SequenceItem
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
             if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);
+            if (coordinator?.Calibration == true)
+            {
+                profiles.ActiveProfile.FlatDeviceSettings.Id = "ASCOM.OmniSim.CoverCalibrator";
+                if (flatDevice is null) throw new InvalidOperationException("Flat panel mediator missing.");
+                await flatDevice.Rescan(); CheckProfile();
+                if (!await flatDevice.Connect() || flatDevice.GetInfo().DeviceId != "ASCOM.OmniSim.CoverCalibrator")
+                    throw new IOException("Simulator cover connection failed.");
+                (acquisitionImaging, calibrationProbe) = CalibrationProbe.Wrap(imaging, flatDevice, saves);
+            }
             var rigId = coordinator?.RigId ?? "ascom-smoke";
             await runtime.StartAsync(rigId, lifetime.Token);
             if (runtime.Status.State != RuntimeState.Ready) throw new InvalidOperationException("Sidecar failed", runtime.Status.Error);
@@ -301,7 +312,7 @@ public sealed class SimulatorSequence : SequenceItem
             // waits through transit before issuing the ASCOM flip slew.
             if (coordinator?.ForceNativeFlip == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
-            if (coordinator?.WaitingPlanRefresh == true)
+            if (coordinator?.WaitingPlanRefresh == true || coordinator?.Calibration == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + 0.25) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
@@ -337,11 +348,12 @@ public sealed class SimulatorSequence : SequenceItem
                         Step("PSF Guard shows the active N.I.N.A. instruction before Director Session");
                     }
                     publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                        nativeProbe?.Factory ?? factory, guider, focuser, rotator)
+                        nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
                     ConfigureImaging(sessionContainer.Options);
+                    if (coordinator.Calibration) CalibrationProbe.Configure(sessionContainer.Options);
                     if (coordinator.Attended)
                     {
                         safetyCancellation.Dispose();
@@ -404,7 +416,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
                 var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                    nativeProbe?.Factory ?? factory, guider, focuser, rotator)
+                    nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer, coordinator.NativeImaging);
@@ -446,6 +458,7 @@ public sealed class SimulatorSequence : SequenceItem
                     sessionContainer.Options.RetryCooldownSeconds = 1;
                 }
                 ConfigureImaging(sessionContainer.Options);
+                if (coordinator.Calibration) CalibrationProbe.Configure(sessionContainer.Options);
                 if (coordinator.RestartAdmission)
                 {
                     sessionContainer.Options.AllowSettledRestart = true;
@@ -824,11 +837,17 @@ public sealed class SimulatorSequence : SequenceItem
                     else if (coordinator.AutomaticWorkloads && !coordinator.OfflineWorkloadRelease)
                     {
                         using var waitingDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(phd2 is not null ? 420 : coordinator.ForceNativeFlip ? 180 : 90));
+                        waitingDeadline.CancelAfter(TimeSpan.FromSeconds(phd2 is not null ? 420 : coordinator.Calibration || coordinator.ForceNativeFlip ? 180 : 90));
                         while (!executing.IsCompleted && sessionContainer.Display.Phase != "Waiting for PSF Guard to assign more images")
                             await Task.Delay(100, waitingDeadline.Token);
                         if (executing.IsCompleted) await executing;
                         if (!telescope.GetInfo().AtPark) throw new InvalidDataException("Automatic session did not park before waiting for more work.");
+                        if (calibrationProbe is not null)
+                        {
+                            while (!executing.IsCompleted && calibrationProbe.Saved.Count(s => s.Type == "DARK") < 2)
+                                await Task.Delay(100, waitingDeadline.Token);
+                            if (executing.IsCompleted) await executing;
+                        }
                         if (coordinator.WeatherHoldScenario == "safety-workload") await VerifyWeatherHold();
                         if (coordinator.NightEndScenario is not null) await VerifyNightEnd();
                         else
@@ -942,6 +961,28 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 if (startupAdmissionVerified && !Directory.GetFiles(Path.Combine(service.LocalStateRoot, "recovery-history", rigId), "recovery.sqlite", SearchOption.AllDirectories).Any())
                     throw new InvalidDataException("Automatic recovery did not preserve the interrupted night journal.");
+                if (calibrationProbe is not null)
+                {
+                    await calibrationProbe.VerifyAsync(run, imageFactory, lifetime.Token);
+                    var flats = await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => new DirectorFlatsItem(service));
+                    CalibrationProbe.Configure(flats.Options);
+                    var originals = calibrationProbe.Saved.Where(s => s.Type == "FLAT").Select(s => s.Path).ToArray();
+                    await SessionUiProbe.RenderFlatsAsync(run, flats);
+                    await flats.Execute(progress, lifetime.Token);
+                    if (calibrationProbe.Saved.Count(s => s.Type == "FLAT") != 2)
+                        throw new InvalidDataException("Director Flats did not reuse the session's completed flat batches.");
+                    var voided = await coordinator.VoidFirstFlatAsync(lifetime.Token);
+                    // A new item reproduces a sequence reload; coverage lives on disk.
+                    flats = await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => (DirectorFlatsItem)flats.Clone());
+                    await flats.Execute(progress, lifetime.Token);
+                    if (calibrationProbe.Saved.Count(s => s.Type == "FLAT") != 3 || originals.Any(path => !File.Exists(path)))
+                        throw new InvalidDataException("Expected exactly one replacement flat and all original files.");
+                    await flats.Execute(progress, lifetime.Token);
+                    if (calibrationProbe.Saved.Count(s => s.Type == "FLAT") != 3)
+                        throw new InvalidDataException("A repeated flats instruction duplicated completed replacement coverage.");
+                    await coordinator.VerifyReplacementFlatAsync(voided, lifetime.Token);
+                    await File.WriteAllTextAsync(Path.Combine(run, "flat-replacement-verified.txt"), "Native Director Flats reused coverage, replaced one voided batch, preserved files, and synced the acknowledgement.", lifetime.Token);
+                }
                 ledger = service.LastLedger ?? throw new InvalidDataException("Public session has no ledger.");
                 var journalRoots = coordinator.PriorityRefresh || coordinator.WaitingPlanRefresh
                     ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
@@ -1309,6 +1350,8 @@ public sealed class SimulatorSequence : SequenceItem
             interlock?.Dispose();
             sessionTarget?.AttachNewParent(null);
             sessionTarget?.NighttimeData.Ticker.Stop();
+            calibrationProbe?.Dispose();
+            if (flatDevice?.GetInfo() is { Connected: true, DeviceId: "ASCOM.OmniSim.CoverCalibrator" }) await flatDevice.Disconnect();
             sessionContainer?.AttachNewParent(null);
             // Cleanup uses verified connected identities, never the newly selected
             // profile, and continues after one cleanup operation fails.
@@ -1524,7 +1567,7 @@ public sealed class SimulatorSequence : SequenceItem
             || (profile.GuiderSettings.GuiderName is not ("No_Guider" or "Direct_Guider")
                 && Phd2Fixture.Read(root)?.Matches(profile.GuiderSettings) != true)
             || profile.DomeSettings.Id is not ("No_Device" or "ASCOM.OmniSim.Dome") || profile.SwitchSettings.Id != "No_Device"
-            || profile.FlatDeviceSettings.Id != "No_Device"
+            || profile.FlatDeviceSettings.Id is not ("No_Device" or "ASCOM.OmniSim.CoverCalibrator")
             || (profile.SafetyMonitorSettings.Id != SafetySimulatorId && !(allowNoSafetyMonitor && profile.SafetyMonitorSettings.Id == "No_Device"))
             || profile.WeatherDataSettings.Id != "No_Device")
             throw new InvalidOperationException("The probe requires its simulator-only test profile.");
