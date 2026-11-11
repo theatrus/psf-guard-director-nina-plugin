@@ -62,11 +62,13 @@ public sealed class FlatCoverageTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request);
     }
-    [Fact]
-    public async Task OlderServerExplainsRequiredUpdateWithoutAnEndlessRetry()
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.MethodNotAllowed)]
+    public async Task OlderServerExplainsRequiredUpdateWithoutAnEndlessRetry(HttpStatusCode status)
     {
         using var client = new CoordinatorCalibrationClient(Endpoint, Binding, Store(), _ => ValueTask.FromResult<string?>("psfdrc_test"),
-            new Handler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+            new Handler(_ => Task.FromResult(new HttpResponseMessage(status))));
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             DirectorAcquisition.RefreshCalibrationPlanAsync(client, CoordinatorProgramTests.Configuration, default));
         Assert.Contains("Update PSF Guard", error.Message);

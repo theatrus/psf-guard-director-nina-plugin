@@ -71,6 +71,10 @@ public sealed class CoordinatorCalibrationClient : IDisposable
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.Timeout); }
+        // Older servers route an unknown POST through their static GET fallback,
+        // which returns 405 instead of 404. Both mean calibration is unavailable.
+        catch (CoordinatorIntakeException error) when (error.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+        { throw new CoordinatorIntakeException(CoordinatorIntakeFailure.NotFound, error.StatusCode); }
         catch (JsonException error) { throw new InvalidDataException("PSF Guard returned unreadable calibration data.", error); }
     }
     public void Dispose() => transport.Dispose();
