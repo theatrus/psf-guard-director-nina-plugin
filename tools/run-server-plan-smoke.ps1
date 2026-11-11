@@ -37,7 +37,7 @@ param(
     [string]$ArtifactDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts')
 )
 $ErrorActionPreference = 'Stop'
-if ($Calibration -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$NativeImaging -or $NativeImagingFailure -or $WeatherHoldScenario)) { throw 'Calibration requires normal native automatic acquisition.' }
+if ($Calibration -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$NativeImaging -or $NativeImagingFailure -or $WeatherHoldScenario -or $OfflineWorkloadRelease)) { throw 'Calibration requires native automatic acquisition with the coordinator online for idle darks and flat replacement checks.' }
 if ($WaitingPlanRefresh -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $PriorityRefresh -or $ProjectOrder -or $ObservingPreferences -or $MoonAvoidance -or $NightEndScenario -or $WeatherHoldScenario -or $NativeImaging -or $OfflineWorkloadRelease -or $Attended)) { throw 'WaitingPlanRefresh requires the normal public automatic workload fixture.' }
 if ($WaitForSafeAtStartup -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $Attended -or $WeatherHoldScenario -or $PublicUnsafe -or $EnclosureClosure)) { throw 'WaitForSafeAtStartup requires public local scheduling with a safety monitor.' }
 if ($StartUnparked -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or !$NativeImaging -or $WaitForSafeAtStartup -or $WeatherHoldScenario -or $PublicUnsafe -or $EnclosureClosure -or $RestartAdmission)) { throw 'StartUnparked requires native automatic workloads without a startup safety hold.' }
