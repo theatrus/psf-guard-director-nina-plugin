@@ -157,7 +157,7 @@ public sealed class NinaNativeImagingTests
         Assert.NotEqual(SequenceEntityStatus.DISABLED, slots.BeforeNewTarget.Status);
         Assert.Same(user, slots.BeforeNewTarget.Items[0]);
         Assert.Equal(SequenceEntityStatus.DISABLED, user.Status);
-        Assert.IsType<StartGuiding>(slots.BeforeNewTarget.Items[1]);
+        Assert.IsType<NinaEnsureGuiding>(slots.BeforeNewTarget.Items[1]);
         Assert.Equal(2, slots.Clone().BeforeNewTarget.Items.Count);
     }
 
@@ -175,10 +175,30 @@ public sealed class NinaNativeImagingTests
         using var native = f.Create();
         native.Install(session);
         trigger.Status = status;
-        Assert.Contains("RestoreGuiding", Assert.Throws<InvalidOperationException>(native.CheckTriggers).Message);
+        Assert.Contains("Check guiding", Assert.Throws<InvalidOperationException>(native.CheckTriggers).Message);
         native.Dispose();
         Assert.Empty(session.GetTriggersSnapshot());
         native.Dispose();
+    }
+
+    [Fact]
+    public async Task PerExposureTriggerChecksGuidingWithoutForcingTargetCalibration()
+    {
+        var f = new Fixture();
+        f.Options.Focus = f.Options.MeridianFlip = DirectorOperationOwner.Sequence;
+        f.Options.ForceGuideCalibration = true;
+        f.GuiderInfo.CanClearCalibration = true;
+        f.Guider.Setup(g => g.StartGuiding(false, It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var trigger = NinaCompatibility.Create<NINA.Sequencer.Trigger.Guider.RestoreGuiding>(Mock.Of<ISafetyMonitorMediator>(), f.Guider.Object);
+        f.Factory.Setup(x => x.GetTrigger<NINA.Sequencer.Trigger.Guider.RestoreGuiding>()).Returns(trigger);
+        using var native = f.Create();
+        native.Install(new DirectorSessionContainer());
+        var cloned = (NINA.Sequencer.Trigger.Guider.RestoreGuiding)trigger.Clone();
+        var check = Assert.IsType<NinaEnsureGuiding>(Assert.Single(cloned.TriggerRunner.GetItemsSnapshot()));
+        await check.Execute(new Progress<ApplicationStatus>(), default);
+        f.Guider.Verify(g => g.StartGuiding(false, It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
+        f.Guider.Verify(g => g.StartGuiding(true, It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never);
+        f.Guider.Verify(g => g.StopGuiding(It.IsAny<CancellationToken>()), Times.Never);
     }
     private sealed class CustomDither(IGuiderMediator guider) : Dither(guider, Mock.Of<IProfileService>());
 
@@ -333,6 +353,10 @@ public sealed class NinaNativeImagingTests
             Profile.SetupGet(p => p.FocuserSettings.Id).Returns("focuser");
             Profile.SetupGet(p => p.RotatorSettings.Id).Returns("rotator");
             Guider.Setup(g => g.GetInfo()).Returns(GuiderInfo);
+            var device = new Mock<NINA.Equipment.Interfaces.IGuider>();
+            device.SetupGet(g => g.Connected).Returns(true);
+            device.SetupGet(g => g.Id).Returns("guider");
+            Guider.Setup(g => g.GetDevice()).Returns(device.Object);
             Focuser.Setup(g => g.GetInfo()).Returns(FocuserInfo);
             Rotator.Setup(g => g.GetInfo()).Returns(RotatorInfo);
         }

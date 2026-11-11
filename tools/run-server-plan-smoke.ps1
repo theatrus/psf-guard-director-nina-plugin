@@ -185,6 +185,10 @@ try {
         $null -eq $evidence.rotator_final_position -or [Math]::Abs($evidence.rotator_final_position - 30) -gt 1)) {
         throw 'PHD2 recovery, parsed recenter solution and requested rotation were not verified.'
     }
+    if ($Phd2Executable -and ($evidence.guiding_events.start_events -ne 2 -or
+        $evidence.guiding_events.checks_while_guiding -ne 2 -or $evidence.guiding_events.dithers -ne 1)) {
+        throw 'Guiding checks repeated start events or did not restart a stopped guider.'
+    }
     [pscustomobject]@{ Passed=$true; Evidence=$result.FullName; ServerArtifacts=$root; Nina=$evidence.nina; ProgramRevision=$evidence.program_revision }
 }
 finally {

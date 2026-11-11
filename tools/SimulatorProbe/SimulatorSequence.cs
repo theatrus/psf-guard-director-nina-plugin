@@ -130,6 +130,7 @@ public sealed class SimulatorSequence : SequenceItem
         CalibrationProbe? calibrationProbe = null;
         var acquisitionImaging = imaging;
         var phd2 = Phd2Fixture.Read(root);
+        GuidingProbe? guidingEvents = null;
         float? rotatorFinalPosition = null;
         var nativeFailureVerified = false;
         var startupAdmissionVerified = false;
@@ -243,6 +244,8 @@ public sealed class SimulatorSequence : SequenceItem
                 if (!await guider.Connect() || guider.GetInfo().DeviceId != (phd2 is null ? "Direct_Guider" : "PHD2_Single")) throw new IOException("Simulator guider connection failed.");
                 if (phd2 is not null)
                 {
+                    Step("Verifying guiding checks do not repeat native start events, including after dithering");
+                    guidingEvents = await GuidingProbe.VerifyAsync(phd2, profiles, factory, guider, focuser, rotator, progress, lifetime.Token);
                     profiles.ActiveProfile.RotatorSettings.Id = "ASCOM.OmniSim.Rotator";
                     await rotator.Rescan();
                     if (!await rotator.Connect() || rotator.GetInfo().DeviceId != "ASCOM.OmniSim.Rotator")
@@ -1406,6 +1409,7 @@ public sealed class SimulatorSequence : SequenceItem
                 nativeFailureVerified,
                 nativeOperations = nativeProbe?.Operations,
                 phd2Simulator = phd2 is not null,
+                guidingEvents,
                 rotatorFinalPosition,
                 nativeFlip = nativeProbe?.Flip is { } flipEvidence ? new
                 {
