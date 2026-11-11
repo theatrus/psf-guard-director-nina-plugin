@@ -100,6 +100,9 @@ public sealed class DirectorSessionContainer : SequentialContainer
     [ImportingConstructor]
     public DirectorSessionContainer(DirectorAcquisition acquisition) : this() => this.acquisition = acquisition;
 
+    internal static DirectorSessionContainer ForCalibration(DirectorSessionOptions options)
+        => new() { Options = options.Clone() };
+
     [JsonProperty(Required = Required.Always, ObjectCreationHandling = ObjectCreationHandling.Replace)]
     public DirectorSessionOptions Options
     {

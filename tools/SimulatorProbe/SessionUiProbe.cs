@@ -231,8 +231,8 @@ internal static partial class SessionUiProbe
                     .Where(control => !string.IsNullOrEmpty(System.Windows.Automation.AutomationProperties.GetName(control))).ToArray();
                 if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
                 {
-                    if (controls.OfType<ComboBox>().Count() != 14 || controls.OfType<TextBox>().Count() != 19
-                        || controls.OfType<CheckBox>().Count() != 11)
+                    if (controls.OfType<ComboBox>().Count() != 15 || controls.OfType<TextBox>().Count() != 27
+                        || controls.OfType<CheckBox>().Count() != 16)
                         throw new InvalidOperationException($"Director session settings did not render every editor: {controls.OfType<ComboBox>().Count()} policies, {controls.OfType<TextBox>().Count()} numbers, {controls.OfType<CheckBox>().Count()} toggles.");
                     foreach (var combo in controls.OfType<ComboBox>())
                         if (combo.SelectedItem is null) throw new InvalidOperationException("Director policy selection is empty.");
@@ -325,6 +325,37 @@ internal static partial class SessionUiProbe
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) => true;
         public override Task Execute(ISequenceContainer context, IProgress<NINA.Core.Model.ApplicationStatus> progress, CancellationToken token) => Complete.Task.WaitAsync(token);
     }
+
+    internal static Task RenderFlatsAsync(string directory, DirectorFlatsItem item) => Application.Current.Dispatcher.InvokeAsync(() =>
+    {
+        var template = Templates(Application.Current.Resources).Single(value =>
+            value.DataType is Type type && type.FullName == typeof(DirectorFlatsItem).FullName);
+        foreach (var width in new[] { 640, 1000 })
+        {
+            var content = (FrameworkElement)template.LoadContent();
+            // Supply the item through inheritance, as NINA's ContentPresenter
+            // does. Setting it on the root replaces its Options binding.
+            var host = new Border { DataContext = item, Width = width, Background = (Brush)Application.Current.FindResource("BackgroundBrush"), Child = content };
+            System.Windows.Documents.TextElement.SetForeground(host, (Brush)Application.Current.FindResource("PrimaryBrush"));
+            host.Measure(new Size(width, double.PositiveInfinity));
+            host.Arrange(new Rect(0, 0, width, host.DesiredSize.Height));
+            host.UpdateLayout();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+            host.UpdateLayout();
+            if (Descendants(host).OfType<TextBox>().Count() != 4 || Descendants(host).OfType<CheckBox>().Count() != 1)
+                throw new InvalidDataException("Director Flats did not render every setting.");
+            foreach (var field in Descendants(host).OfType<TextBox>())
+            {
+                var bounds = field.TransformToAncestor(host).TransformBounds(new Rect(field.RenderSize));
+                if (bounds.Left < 0 || bounds.Right > width + 1 || field.Text.Length == 0)
+                    throw new InvalidDataException("Director Flats has an empty or clipped setting.");
+            }
+            var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(host);
+            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using var file = File.Create(Path.Combine(directory, $"flats-{width}.png")); encoder.Save(file);
+        }
+    }).Task;
 
     private static IEnumerable<DataTemplate> Templates(ResourceDictionary dictionary)
     {

@@ -53,13 +53,13 @@ internal sealed class ProfileScopedImageData(IImageData image, FileSaveInfo sett
         if (Interlocked.Increment(ref failedWrites) == 3) failed?.Invoke(new(error));
     }
 
-    internal static FileSaveInfo Snapshot(IProfile profile)
+    internal static FileSaveInfo Snapshot(IProfile profile, string imageType = CaptureSequence.ImageTypes.LIGHT)
     {
         var value = profile.ImageFileSettings;
         var snapshot = new FileSaveInfo
         {
             FilePath = value.FilePath,
-            FilePattern = value.GetFilePattern(CaptureSequence.ImageTypes.LIGHT),
+            FilePattern = value.GetFilePattern(imageType),
             FileType = value.FileType,
             TIFFCompressionType = value.TIFFCompressionType,
             XISFCompressionType = value.XISFCompressionType,

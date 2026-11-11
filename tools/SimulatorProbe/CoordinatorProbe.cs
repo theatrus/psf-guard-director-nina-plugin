@@ -27,6 +27,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool PublicAcquisition { get; private init; }
     internal bool Attended { get; private set; }
     internal bool WaitForSafeAtStartup { get; private set; }
+    internal bool Calibration { get; private set; }
     internal bool StartUnparked { get; private set; }
     internal bool WaitingPlanRefresh { get; private set; }
     private Guid waitingProject;
@@ -213,6 +214,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
             probe.WaitForSafeAtStartup = fixtureJson.RootElement.TryGetProperty("WaitForSafeAtStartup", out var startupSafety) && startupSafety.GetBoolean();
             probe.StartUnparked = fixtureJson.RootElement.TryGetProperty("StartUnparked", out var startUnparked) && startUnparked.GetBoolean();
+            probe.Calibration = fixtureJson.RootElement.TryGetProperty("Calibration", out var calibration) && calibration.GetBoolean();
             probe.WaitingPlanRefresh = fixtureJson.RootElement.TryGetProperty("WaitingPlanRefresh", out var waitingRefresh) && waitingRefresh.GetBoolean();
             probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
             probe.ImageUploads = fixtureJson.RootElement.TryGetProperty("ImageUploads", out var uploads) ? uploads.GetString() : null;
@@ -798,6 +800,37 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         if (!response.IsSuccessStatusCode) throw new HttpRequestException($"{path}: {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(token)}");
         using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
         if (!body.RootElement.GetProperty("success").GetBoolean()) throw new InvalidDataException("Simulator operator setup failed.");
+        return body.RootElement.GetProperty("data").Clone();
+    }
+
+    internal async Task<string> VoidFirstFlatAsync(CancellationToken token)
+    {
+        var history = await FlatHistoryAsync(HttpMethod.Get, "?state=recorded", null, token);
+        var rows = history.GetProperty("records").EnumerateArray().ToArray();
+        if (rows.Length != 2 || rows.Any(r => r.GetProperty("source_name").GetString() != "Director"))
+            throw new InvalidDataException("Director did not send both completed flat batches.");
+        var id = rows[0].GetProperty("record_id").GetString()!;
+        await FlatHistoryAsync(HttpMethod.Post, "/invalidate", new { record_ids = new[] { id }, reason = "Isolated native test: replacement flat" }, token);
+        return id;
+    }
+
+    internal async Task VerifyReplacementFlatAsync(string id, CancellationToken token)
+    {
+        var history = await FlatHistoryAsync(HttpMethod.Get, "", null, token);
+        var rows = history.GetProperty("records").EnumerateArray().ToArray();
+        if (rows.Length != 3 || rows.Count(r => r.GetProperty("state").GetString() == "recorded") != 2
+            || rows.Single(r => r.GetProperty("record_id").GetString() == id).GetProperty("state").GetString() != "removed")
+            throw new InvalidDataException("Director replacement coverage was not acknowledged and synced.");
+    }
+
+    private async Task<JsonElement> FlatHistoryAsync(HttpMethod method, string suffix, object? value, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(method, "api/db/director-simulator/flat-history" + suffix)
+        { Content = value is null ? null : JsonBody(value) };
+        using var response = await operatorClient.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
+        if (!body.RootElement.GetProperty("success").GetBoolean()) throw new InvalidDataException("Simulator flat coverage exchange failed.");
         return body.RootElement.GetProperty("data").Clone();
     }
 
