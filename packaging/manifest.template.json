@@ -27,7 +27,7 @@
   },
   "Descriptions": {
     "FeaturedImageURL": "https://raw.githubusercontent.com/theatrus/psf-guard-director-nina-plugin/main/assets/psf-guard-director.png",
-    "ShortDescription": "Beta PSF Guard Director for automated imaging and calibration.",
+    "ShortDescription": "Beta PSF Guard Director with local target scheduling and calibration.",
     "LongDescription": "Experimental Director selects targets and filters from active PSF Guard plans. Reports equipment and requests work automatically, and recovers interrupted sessions using current image counts while preserving images and history. Shows sequence and trigger activity in NINA and PSF Guard. Supports native centering, rotation, autofocus, guiding, dithering and meridian flips, plus custom sequence instructions. Optional panel flats and darks use active-plan settings; flat replacement requests sync from PSF Guard without deleting original files. Requires a current PSF Guard server, plus acquisition, safety and enclosure settings. Image uploads are optional and off by default. Real-sky full-night acceptance remains open. Do not use for unattended imaging. Director is separate from PSF Guard Sync and does not replace or change Sync."
   }
 }
