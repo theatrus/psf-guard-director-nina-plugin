@@ -43,11 +43,12 @@ public sealed class ReleaseManifestTests
         Assert.Equal(metadata["ShortDescription"], assembly.GetCustomAttribute<AssemblyDescriptionAttribute>()!.Description);
         Assert.StartsWith("Beta ", metadata["ShortDescription"]);
         Assert.Contains("local target scheduling", metadata["ShortDescription"]);
+        Assert.Contains("calibration", metadata["ShortDescription"]);
         var description = template["Descriptions"]!["LongDescription"]!.GetValue<string>();
         Assert.Equal(metadata["LongDescription"], description);
-        Assert.Contains("native NINA centering", description);
-        Assert.Contains("Recovers interrupted assignments using current image counts", description);
-        Assert.Contains("server with automatic session recovery support", description);
+        Assert.Contains("Supports native centering", description);
+        Assert.Contains("recovers interrupted sessions using current image counts", description);
+        Assert.Contains("Requires a current PSF Guard server", description);
         Assert.Contains("Real-sky full-night acceptance remains open", description);
         Assert.DoesNotContain("Settled-night restart is opt-in", description);
         Assert.Contains("Do not use for unattended imaging", description);
