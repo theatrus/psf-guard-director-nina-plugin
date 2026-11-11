@@ -7,6 +7,7 @@ using NINA.Core.Enum;
 using NINA.Core.Model;
 using NINA.Core.Utility;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Plugin.Interfaces;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
 using NINA.WPF.Base.Interfaces.ViewModel;
@@ -32,6 +33,7 @@ public sealed partial class DirectorAcquisition
     private readonly IFocuserMediator? focuser;
     private readonly IRotatorMediator? rotator;
     private readonly IFlatDeviceMediator? flatDevice;
+    private readonly IMessageBroker? messageBroker;
     private readonly IImagingMediator imaging;
     private readonly IImageSaveMediator saves;
     private readonly IImageHistoryVM history;
@@ -48,11 +50,13 @@ public sealed partial class DirectorAcquisition
         IImageSaveMediator saves, IImageHistoryVM history, INighttimeCalculator nighttime, IDomeMediator dome,
         INinaActionFactory? sequenceFactory = null, IGuiderMediator? guider = null,
         IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
-        [Import(AllowDefault = true)] IFlatDeviceMediator? flatDevice = null)
+        [Import(AllowDefault = true)] IFlatDeviceMediator? flatDevice = null,
+        [Import(AllowDefault = true)] IMessageBroker? messageBroker = null)
     {
         this.profiles = profiles; this.camera = camera; this.telescope = telescope; this.filters = filters;
         this.safety = safety; this.imaging = imaging; this.saves = saves; this.history = history; this.nighttime = nighttime;
         this.dome = dome; this.flatDevice = flatDevice;
+        this.messageBroker = messageBroker;
         this.sequenceFactory = sequenceFactory; this.guider = guider; this.focuser = focuser; this.rotator = rotator;
     }
 
@@ -151,8 +155,12 @@ public sealed partial class DirectorAcquisition
         var settingsIssues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (settingsIssues.Length != 0) throw new InvalidOperationException(string.Join(" ", settingsIssues));
         var calibration = new NinaCalibrationSession(profiles, camera, telescope, filters, imaging, saves, history, flatDevice, nighttime, container, progress);
+        var eventProfile = profiles.ActiveProfile;
+        var eventSettings = new PluginOptionsAccessor(profiles, PluginId);
+        await using var schedulerEvents = new DirectorSchedulerEvents(messageBroker,
+            () => ReferenceEquals(profiles.ActiveProfile, eventProfile) && eventSettings.GetValueBoolean(DirectorSchedulerEvents.SettingKey, false));
         Exception? failure = null;
-        try { await ExecuteSessionAsync(container, progress, attended, calibration, token); }
+        try { await ExecuteSessionAsync(container, progress, attended, calibration, schedulerEvents, token); }
         catch (Exception error) { failure = error; throw; }
         finally
         {
@@ -173,7 +181,7 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task ExecuteSessionAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, bool attended,
-        NinaCalibrationSession calibration, CancellationToken token)
+        NinaCalibrationSession calibration, DirectorSchedulerEvents schedulerEvents, CancellationToken token)
     {
         var issues = container.Options.ValidateSettings().Concat(PolicyIssues(container.Options)).ToArray();
         if (issues.Length != 0) throw new InvalidOperationException(string.Join(" ", issues));
@@ -210,7 +218,7 @@ public sealed partial class DirectorAcquisition
                     // the old assignment. Only explicit resume needs the later replay.
                     firstAllocation = false;
                 }
-                var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, calibration, token);
+                var more = await ExecuteAllocationAsync(container, progress, owner, night, window, firstAllocation, restartedNight, attended, unmonitoredProfile, calibration, schedulerEvents, token);
                 firstAllocation = false;
                 reconcile = false;
                 if (!more) break;
@@ -227,6 +235,7 @@ public sealed partial class DirectorAcquisition
                 firstAllocation = true;
                 restartedNight = null;
                 night = Guid.NewGuid().ToString("D");
+                await schedulerEvents.WaitingAsync(reason, window.Remaining(TimeSpan.FromSeconds(10)));
                 await window.WaitAsync(TimeSpan.FromSeconds(10), token);
             }
         } while (container.Options.AutomaticWorkloads);
@@ -361,7 +370,8 @@ public sealed partial class DirectorAcquisition
     }
 
     private async Task<bool> ExecuteAllocationAsync(DirectorSessionContainer container, IProgress<ApplicationStatus> progress, AcquisitionLease owner,
-        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile, NinaCalibrationSession calibration, CancellationToken token)
+        string night, NinaNightWindow window, bool firstAllocation, RecoveryIdentity? restartedNight, bool attended, IProfile? unmonitoredProfile,
+        NinaCalibrationSession calibration, DirectorSchedulerEvents schedulerEvents, CancellationToken token)
     {
         var options = container.Options.Clone();
         if (attended != (options.Safety == DirectorSafetyPolicy.Attended))
@@ -420,6 +430,7 @@ public sealed partial class DirectorAcquisition
                 if (monitor.Safety == PlannerSafety.Safe && roof.Motion == RecoveryMotion.Permitted) break;
                 var message = DirectorSessionText.StartupWait(monitor, roof);
                 Report(message.Phase, null, message.Detail);
+                await schedulerEvents.WaitingAsync(message.Phase, window.Remaining(TimeSpan.FromSeconds(30)));
                 await window.WaitAsync(TimeSpan.FromSeconds(1), lifetime.Token);
             }
 
@@ -616,6 +627,7 @@ public sealed partial class DirectorAcquisition
         async Task WaitIdleAsync(TimeSpan duration)
         {
             var end = DateTimeOffset.UtcNow + duration;
+            await schedulerEvents.WaitingAsync(container.CurrentDisplay.Phase, window.Remaining(duration));
             var pollAt = DateTimeOffset.UtcNow.AddSeconds(30);
             while (!window.Ended && DateTimeOffset.UtcNow < end)
             {
@@ -692,6 +704,7 @@ public sealed partial class DirectorAcquisition
                     WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used"
                 });
                 Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open before workload" : $"Idle weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                await schedulerEvents.WaitingAsync("Waiting for safe weather and an open enclosure", window.Remaining(TimeSpan.FromSeconds(30)));
                 if (held.StableSinceMs is not null && remaining <= 0)
                 {
                     NinaCaptureAdapter.RequireQuiescent(profiles, camera, profile, equipmentBinding.CameraDeviceId);
@@ -881,6 +894,7 @@ public sealed partial class DirectorAcquisition
                     }
                     if (decision.Action == PlannerAction.Wait)
                     {
+                        await schedulerEvents.WaitingAsync(message.Phase, window.Remaining(TimeSpan.FromSeconds(30)));
                         if (DateTimeOffset.UtcNow >= nextCheckIn)
                         {
                             QueueCheckIn();
@@ -961,6 +975,16 @@ public sealed partial class DirectorAcquisition
                     }
                     var began = Require(begin);
                     if (!began.Created) throw new InvalidOperationException("Preparation is not new.");
+                    var recipe = program.Recipes.Single(r => r.Id == selected.RecipeId);
+                    var selectedGoal = assignment.Goals.Single(g => g.Id == decision.GoalId);
+                    var planningNow = Now();
+                    var eligibleEnd = selectedGoal.EligibleWindows.Where(w => w.StartMs <= planningNow && w.EndMs > planningNow)
+                        .Select(w => w.EndMs).DefaultIfEmpty(assignment.ExpiresAtMs).Min();
+                    var eventEnd = Math.Min(eligibleEnd, assignment.ExpiresAtMs);
+                    await schedulerEvents.TargetStartingAsync(target, recipe,
+                        allocation.Envelope.Snapshot.Links.Single(l => l.GoalId == decision.GoalId).ProjectName,
+                        equipmentBinding.Filters.Single(f => f.Id == recipe.FilterId).ExpectedName ?? "Light",
+                        DateTimeOffset.UtcNow + window.Remaining(TimeSpan.FromMilliseconds(eventEnd > planningNow ? eventEnd - planningNow : 0)));
                     var reselect = false;
                     while (true)
                     {
@@ -1102,6 +1126,9 @@ public sealed partial class DirectorAcquisition
                 {
                     Check(); CheckPointing();
                     Report("Quality hold; waiting for a bounded probe", null);
+                    var qualityNow = Now();
+                    await schedulerEvents.WaitingAsync("Waiting to check image quality again",
+                        window.Remaining(TimeSpan.FromMilliseconds(hold.Hold.RetryAtMs > qualityNow ? hold.Hold.RetryAtMs - qualityNow : 0)));
                     while (Now() < hold.Hold.RetryAtMs)
                     {
                         await window.WaitAsync(TimeSpan.FromMilliseconds(250), operations.Token);
@@ -1222,6 +1249,7 @@ public sealed partial class DirectorAcquisition
                         ? Math.Max(0, options.StableSafeSeconds - ((double)Now() - since) / 1000) : options.StableSafeSeconds;
                     container.UpdateDisplay(d => d with { Operation = "" });
                     Report(held.StableSinceMs is null ? "Weather/roof hold; waiting for Safe/Open" : $"Weather hold; stable Safe/Open in {Math.Ceiling(remaining)} s", null);
+                    await schedulerEvents.WaitingAsync("Waiting for safe weather and an open enclosure", window.Remaining(TimeSpan.FromSeconds(30)));
                     container.UpdateDisplay(d => d with { WaitReason = $"Weather hold {recovery.Record.Snapshot.WeatherInterruptions}/{options.MaximumWeatherInterruptions}; {Math.Ceiling(recovery.Record.Snapshot.WeatherHoldMs / 1000d)} s used" });
                     if (held.StableSinceMs is not null && remaining <= 0)
                     {

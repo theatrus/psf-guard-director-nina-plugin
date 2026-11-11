@@ -61,6 +61,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal Guid ClientId => pairing.ClientId;
     internal bool LiveStatusVerified { get; private set; }
     internal bool SequenceActivity { get; private set; }
+    internal bool SchedulerEvents { get; private set; }
     internal string? ImageUploads { get; private set; }
     internal string? UploadDirectory { get; private set; }
     internal DirectorUploadDestination UploadDestination => new(endpoint, pairing.Binding);
@@ -217,6 +218,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             probe.Calibration = fixtureJson.RootElement.TryGetProperty("Calibration", out var calibration) && calibration.GetBoolean();
             probe.WaitingPlanRefresh = fixtureJson.RootElement.TryGetProperty("WaitingPlanRefresh", out var waitingRefresh) && waitingRefresh.GetBoolean();
             probe.SequenceActivity = fixtureJson.RootElement.TryGetProperty("SequenceActivity", out var activity) && activity.GetBoolean();
+            probe.SchedulerEvents = fixtureJson.RootElement.TryGetProperty("SchedulerEvents", out var events) && events.GetBoolean();
             probe.ImageUploads = fixtureJson.RootElement.TryGetProperty("ImageUploads", out var uploads) ? uploads.GetString() : null;
             probe.UploadDirectory = fixtureJson.RootElement.TryGetProperty("UploadDirectory", out var receive) ? receive.GetString() : null;
             return probe;

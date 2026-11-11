@@ -20,5 +20,6 @@
 - Director must run without TS installed. Keep planning/feedback policy in
   Rust and reuse supported N.I.N.A. operations rather than TS internals.
 - Preserve Chatstronomy's existing TS integration. Publish explicit Director
-  state and command context, not spoofed TS events or private TS container types.
+  state and command context. Optional TS public-message compatibility must retain
+  Director's sender identity; never use private TS container types or require TS.
 - Use the existing authenticated `gh` CLI for repository and PR operations.

@@ -60,6 +60,7 @@ public sealed class SimulatorSequence : SequenceItem
     private readonly IFocuserMediator? focuser;
     private readonly IRotatorMediator? rotator;
     private readonly IFlatDeviceMediator? flatDevice;
+    private readonly IMessageBroker? messageBroker;
     private readonly NINA.Equipment.Interfaces.IDomeFollower? follower;
 
     [ImportingConstructor]
@@ -67,7 +68,8 @@ public sealed class SimulatorSequence : SequenceItem
         IFilterWheelMediator filters, ISafetyMonitorMediator safety, IImagingMediator imaging, IImageSaveMediator saves, IImageHistoryVM history,
         IImageDataFactory imageFactory, NINA.Astrometry.Interfaces.INighttimeCalculator nighttime, IGuiderMediator guider, IDomeMediator dome,
         INinaActionFactory? factory = null, IFocuserMediator? focuser = null, IRotatorMediator? rotator = null,
-        NINA.Equipment.Interfaces.IDomeFollower? follower = null, IFlatDeviceMediator? flatDevice = null)
+        NINA.Equipment.Interfaces.IDomeFollower? follower = null, IFlatDeviceMediator? flatDevice = null,
+        IMessageBroker? messageBroker = null)
     {
         this.profiles = profiles;
         this.camera = camera;
@@ -85,11 +87,12 @@ public sealed class SimulatorSequence : SequenceItem
         this.focuser = focuser;
         this.rotator = rotator;
         this.follower = follower; this.flatDevice = flatDevice;
+        this.messageBroker = messageBroker;
     }
 
     public override object Clone()
     {
-        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower, flatDevice);
+        var clone = new SimulatorSequence(profiles, camera, telescope, filters, safety, imaging, saves, history, imageFactory, nighttime, guider, dome, factory, focuser, rotator, follower, flatDevice, messageBroker);
         clone.CopyMetaData(this);
         return clone;
     }
@@ -103,6 +106,7 @@ public sealed class SimulatorSequence : SequenceItem
         await using var uploadProbe = new UploadProbe(profiles);
         var run = Path.Combine(root, "probe", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(run);
+        using var schedulerEventsProbe = messageBroker is null ? null : new SchedulerEventsProbe(messageBroker);
         var steps = new List<string>();
         var errors = new List<Exception>();
         var captures = new List<CaptureEvidence>();
@@ -339,6 +343,7 @@ public sealed class SimulatorSequence : SequenceItem
                 {
                     var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                     settings.SetValueBoolean("ReportSequenceActivity", coordinator.SequenceActivity);
+                    settings.SetValueBoolean(DirectorSchedulerEvents.SettingKey, coordinator.SchedulerEvents);
                     settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
                     if (coordinator.ImageUploads is not null)
                         await uploadProbe.ConfigureAsync(coordinator, lifetime.Token);
@@ -348,7 +353,7 @@ public sealed class SimulatorSequence : SequenceItem
                         Step("PSF Guard shows the active N.I.N.A. instruction before Director Session");
                     }
                     publicService = new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                        nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice)
+                        nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice, messageBroker)
                     { LocalStateRoot = Path.Combine(run, "public-state") };
                     sessionContainer = new DirectorSessionContainer(publicService);
                     sessionContainer.Options.MaximumAltitude = 89;
@@ -416,7 +421,7 @@ public sealed class SimulatorSequence : SequenceItem
                 var settings = new NINA.Profile.PluginOptionsAccessor(profiles, new Guid("03a1d13e-67eb-4e24-a407-82bce7e576a5"));
                 settings.SetValueString("CoordinatorUrl", coordinator.Endpoint.AbsoluteUri);
                 var service = publicService ?? new DirectorAcquisition(profiles, camera, telescope, filters, safety, acquisitionImaging, saves, history, nighttime, dome,
-                    nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice)
+                    nativeProbe?.Factory ?? factory, guider, focuser, rotator, flatDevice, messageBroker)
                 { LocalStateRoot = Path.Combine(run, "public-state") };
                 sessionContainer ??= new DirectorSessionContainer(service);
                 await using var liveView = await SessionUiProbe.ObserveLiveAsync(sessionContainer, coordinator.NativeImaging);
@@ -959,6 +964,8 @@ public sealed class SimulatorSequence : SequenceItem
                     assignment = program.Assignment;
                     programTarget = program.Targets.First();
                 }
+                if (schedulerEventsProbe is null) throw new InvalidDataException("NINA message broker was not imported.");
+                await schedulerEventsProbe.VerifyAsync(run, coordinator.SchedulerEvents, coordinator.WaitForSafeAtStartup, program);
                 if (startupAdmissionVerified && !Directory.GetFiles(Path.Combine(service.LocalStateRoot, "recovery-history", rigId), "recovery.sqlite", SearchOption.AllDirectories).Any())
                     throw new InvalidDataException("Automatic recovery did not preserve the interrupted night journal.");
                 if (calibrationProbe is not null)
