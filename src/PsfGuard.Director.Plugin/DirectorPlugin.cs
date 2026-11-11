@@ -304,6 +304,7 @@ public sealed partial class DirectorPlugin : PluginBase, INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CheckInStatus)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SendStarDetectionSettings)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReportSequenceActivity)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EmitTargetSchedulerEvents)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UploadCapturedFrames)));
         start.Refresh();
         stop.Refresh();

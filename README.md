@@ -128,6 +128,24 @@ The trigger editors use N.I.N.A.'s full Advanced Sequencer controls. Runtime
 start/stop controls are under **Advanced and diagnostics** on the plugin page;
 normal sequences start the planner automatically.
 
+Under **Other plugins** on the plugin settings page, **Send Target Scheduler
+compatible events** lets existing message-broker consumers follow Director.
+This per-profile option is off by default and does not require Target Scheduler.
+Director sends `TargetScheduler-NewTargetStart` once per target visit,
+`TargetScheduler-TargetStart` for each exposure plan (before preparation),
+`TargetScheduler-WaitStart` when waiting, and `TargetScheduler-ContainerStopped`
+when the session ends. The sender name and ID remain PSF Guard Director.
+Target messages use TS version 2 headers, including project, J2000 coordinates,
+rotation, filter, seconds, gain, offset, and binning. An unspecified rotation is
+NaN. Wait messages use a local `DateTime` body and expiry for the next check,
+with `WaitEndTimeIsEstimate=true` and a plain-language `Reason`. Unknown next
+targets have empty names and no coordinate or rotation headers. Repeated waits
+are refreshed at the stated check time, not on every internal safety poll.
+Director does not announce `TargetComplete` when an assignment ends: only PSF
+Guard can determine whether the entire project's image goal has been met.
+Subscriber failures or a two-second delivery timeout disable compatibility
+events for the current session and are logged without stopping imaging.
+
 ![Director's instruction slots in the Advanced Sequencer](docs/images/advanced-sequencer-instructions.png)
 
 ### Recovery is your choice
