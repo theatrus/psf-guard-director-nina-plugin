@@ -129,7 +129,8 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     private SequenceItem GuideStart()
     {
         var start = Item<StartGuiding>();
-        return options.ForceGuideCalibration ? new RecalibratingGuideStart(start, profiles, guider) : start;
+        return options.ForceGuideCalibration ? new RecalibratingGuideStart(start, profiles, guider)
+            : new NinaEnsureGuiding(start, profiles, guider);
     }
 
     // NINA skips Start Guiding entirely if PHD2 is already guiding, even with
@@ -175,6 +176,15 @@ internal sealed class NinaNativeImaging(INinaActionFactory factory, IProfileServ
     private void Add<T>() where T : ISequenceTrigger
     {
         var trigger = factory.GetTrigger<T>() ?? throw new InvalidOperationException($"NINA action {typeof(T).Name} is unavailable.");
+        if (trigger is NINA.Sequencer.Trigger.Guider.RestoreGuiding restore)
+        {
+            // Preserve NINA's light-frame and safety eligibility. Change only
+            // the runtime runner; user-authored/inherited triggers are untouched.
+            var start = restore.TriggerRunner.GetItemsSnapshot().OfType<StartGuiding>().Single();
+            restore.TriggerRunner.Remove(start);
+            restore.TriggerRunner.Add(new NinaEnsureGuiding(start, profiles, guider));
+            restore.Name = "Check guiding";
+        }
         if (string.IsNullOrWhiteSpace(trigger.Name))
             trigger.Name = typeof(T) == typeof(MeridianFlipTrigger) ? "Meridian flip" : typeof(T).Name;
         installed.Add(trigger);

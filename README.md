@@ -40,6 +40,12 @@ Target Scheduler is not required. Director is a separate plugin from
 catalog data and images; Director runs acquisition. Installing Director does not
 change Sync.
 
+With PHD2, Director checks that guiding is running before a light exposure. If
+it is already guiding, the check leaves it running without another start command
+or "guiding started" event. Dithering still follows your exposure interval.
+Recalibrate before guiding still stops and restarts guiding at target setup.
+Other guider drivers keep NINA's native start behavior.
+
 ## Get started
 
 Requires **Windows x64**, **NINA 3.2 or 3.3**, and a PSF Guard server
