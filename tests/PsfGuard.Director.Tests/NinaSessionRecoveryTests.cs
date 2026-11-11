@@ -295,7 +295,18 @@ public sealed class NinaSessionRecoveryTests
             await f.Recovery.AdmitAsync("rig-test", "config", "night", f.Start, f.End, default);
             return f;
         }
-        public async ValueTask DisposeAsync() { await Runtime.DisposeAsync(); Directory.Delete(root, true); }
+        public async ValueTask DisposeAsync()
+        {
+            await Runtime.DisposeAsync();
+            // Windows can briefly retain SQLite handles after the child exits.
+            // Keep permission errors and persistent sharing violations visible.
+            for (var attempt = 0; ; attempt++)
+            {
+                try { Directory.Delete(root, true); return; }
+                catch (IOException error) when (attempt < 20 && (error.HResult & 0xffff) is 32 or 33)
+                { await Task.Delay(50); }
+            }
+        }
     }
 
     private sealed class Clock : TimeProvider
