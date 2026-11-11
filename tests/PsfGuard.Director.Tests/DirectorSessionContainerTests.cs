@@ -493,10 +493,12 @@ public sealed class DirectorSessionContainerTests
     public async Task FailedNativeItemCannotBeMistakenForSuccessfulHook()
     {
         var session = new DirectorSessionContainer();
-        session.BeforeWait.Add(new Callback(() => throw new InvalidOperationException("failed")) { Attempts = 1 });
+        session.BeforeWait.Add(new Callback(() => throw new InvalidOperationException("failed")) { Name = "Stop guiding", Attempts = 1 });
         var hooks = new NinaSessionHooks(session, TimeProvider.System);
         var waited = false;
-        await Assert.ThrowsAnyAsync<Exception>(() => hooks.WaitAsync(_ => { waited = true; return Task.CompletedTask; }, Progress, default));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => hooks.WaitAsync(_ => { waited = true; return Task.CompletedTask; }, Progress, default));
+        Assert.Contains("Before Wait Instructions", error.Message);
+        Assert.Contains("Stop guiding failed", error.Message);
         Assert.False(waited);
         Assert.False(Assert.Single(hooks.Receipts).Completed);
         await Assert.ThrowsAsync<InvalidOperationException>(() => hooks.FinishAsync(Progress, default));
@@ -504,7 +506,7 @@ public sealed class DirectorSessionContainerTests
 
     private sealed class Callback(Action callback) : SequenceItem
     {
-        public override object Clone() => new Callback(callback);
+        public override object Clone() => new Callback(callback) { Name = Name };
         public override Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); callback(); return Task.CompletedTask;

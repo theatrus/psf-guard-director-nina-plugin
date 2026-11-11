@@ -418,7 +418,7 @@ public sealed partial class DirectorAcquisition
         var recoveryRequired = options.AllowSettledRestart || weatherHolds || options.RetryFocusAndGuiding || options.Quality != DirectorQualityPolicy.Off || Directory.Exists(recoveryDirectory);
         if (recoveryRequired) Directory.CreateDirectory(recoveryDirectory);
         await using var runtime = recoveryRequired
-            ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory)
+            ? new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory, recoveryDirectory, TimeProvider.System)
             : new RuntimeController(Path.GetDirectoryName(typeof(DirectorPlugin).Assembly.Location)!, ledgerDirectory);
         runtime.StateChanged += (_, _) =>
         {
@@ -763,7 +763,8 @@ public sealed partial class DirectorAcquisition
             var qualityStore = options.Quality == DirectorQualityPolicy.Off ? null : new QualityReferenceStore(Path.Combine(recoveryDirectory, "quality"), night, runtime);
             var capture = new NinaProgramCapture(equipmentReader, camera, filters, adapter);
             var preparation = new NinaPreparationItems(profiles, camera, filters, equipmentReader, allocation.PlanningClock, telescope);
-            var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check);
+            var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check,
+                refreshRecovery: recovery is null ? null : ct => recovery.RefreshAsync(ct));
             var interruptedSequenceTrigger = false;
             var nextCheckIn = DateTimeOffset.UtcNow;
             long? lastWaitingRefresh = null;

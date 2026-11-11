@@ -8,6 +8,7 @@ public sealed class RuntimeController : IAsyncDisposable
     private readonly string pluginDirectory;
     private readonly string? storageDirectory;
     private readonly string? recoveryDirectory;
+    private readonly TimeProvider? recoveryClock;
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly object cancellationLock = new();
     private readonly TimeSpan heartbeatInterval;
@@ -29,13 +30,17 @@ public sealed class RuntimeController : IAsyncDisposable
 
     public RuntimeController(string pluginDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5)) { }
     public RuntimeController(string pluginDirectory, string storageDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory) { }
-    public RuntimeController(string pluginDirectory, string storageDirectory, string recoveryDirectory) : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory, recoveryDirectory) { }
-    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null, string? recoveryDirectory = null)
+    /// <summary>Supply the recovery-event clock when planning uses a different clock.</summary>
+    public RuntimeController(string pluginDirectory, string storageDirectory, string recoveryDirectory, TimeProvider? recoveryClock = null)
+        : this(pluginDirectory, TimeSpan.FromSeconds(5), storageDirectory, recoveryDirectory, recoveryClock) { }
+    internal RuntimeController(string pluginDirectory, TimeSpan heartbeatInterval, string? storageDirectory = null,
+        string? recoveryDirectory = null, TimeProvider? recoveryClock = null)
     {
         this.pluginDirectory = pluginDirectory;
         this.heartbeatInterval = heartbeatInterval;
         this.storageDirectory = RuntimeSession.NormalizeStorageDirectory(storageDirectory);
         this.recoveryDirectory = RuntimeSession.NormalizeStorageDirectory(recoveryDirectory);
+        this.recoveryClock = recoveryClock;
     }
 
     public async Task StartAsync(string rigId, CancellationToken token = default)
@@ -55,7 +60,7 @@ public sealed class RuntimeController : IAsyncDisposable
             SetStatus(new(RuntimeState.Starting, "Starting runtime", rigId));
             try
             {
-                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token, storageDirectory, recoveryDirectory).ConfigureAwait(false);
+                var session = await RuntimeSession.StartAsync(pluginDirectory, rigId, cancellation.Token, storageDirectory, recoveryDirectory, recoveryClock).ConfigureAwait(false);
                 activeSession = session;
                 SetStatus(new(RuntimeState.Ready, "Ready", rigId));
                 run = SuperviseAsync(session, rigId, cancellation.Token);

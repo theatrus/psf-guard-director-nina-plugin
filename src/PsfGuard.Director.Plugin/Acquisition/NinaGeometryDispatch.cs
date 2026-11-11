@@ -15,12 +15,14 @@ internal sealed class NinaGeometryDispatch
     private readonly Func<NinaDispatchSnapshot> read;
     private readonly Action validateNative;
     private readonly TimeProvider clock;
+    private readonly Func<CancellationToken, Task>? refreshRecovery;
     private readonly object claimsLock = new();
     private readonly HashSet<(string PreparationId, uint Ordinal)> commands = [];
     private readonly HashSet<string> captures = [];
     private readonly HashSet<string> probes = [];
 
-    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative, TimeProvider? clock = null)
+    internal NinaGeometryDispatch(RuntimeController runtime, Func<NinaDispatchSnapshot> read, Action validateNative,
+        TimeProvider? clock = null, Func<CancellationToken, Task>? refreshRecovery = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(read);
@@ -29,6 +31,7 @@ internal sealed class NinaGeometryDispatch
         this.read = read;
         this.validateNative = validateNative;
         this.clock = clock ?? TimeProvider.System;
+        this.refreshRecovery = refreshRecovery;
         session = runtime.Status;
         CheckSession();
     }
@@ -74,11 +77,12 @@ internal sealed class NinaGeometryDispatch
                 if ((ulong)clock.GetUtcNow().ToUnixTimeMilliseconds() >= issued.DeadlineMs)
                     throw new TimeoutException("Quality probe expired.");
                 validateContext();
-            });
+            }, refresh: false);
     }
 
     private Func<CancellationToken, Task<Action>> Once(string goal,
-        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDispatchCheck>>> check, Action? validateContext)
+        Func<NinaDispatchSnapshot, CancellationToken, Task<LedgerResult<PlannerDispatchCheck>>> check, Action? validateContext,
+        bool refresh = true)
     {
         var entered = 0;
         return async token =>
@@ -89,6 +93,14 @@ internal sealed class NinaGeometryDispatch
             CheckSession();
             validateNative();
             validateContext?.Invoke();
+            // Inherited NINA triggers can take minutes after the planner selected
+            // this operation. Refresh real safety at the native dispatch boundary,
+            // then obtain a new feasibility check. Quality probes retain their
+            // separate Recovering phase and may not use the normal acquiring tick.
+            if (refresh && refreshRecovery is not null)
+                await refreshRecovery(token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            CheckSession();
             var started = clock.GetTimestamp();
             var before = read();
             CheckSession();

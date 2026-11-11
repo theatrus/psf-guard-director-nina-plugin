@@ -23,22 +23,26 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
     private string rigId = "";
     private readonly bool storageEnabled;
     private readonly bool recoveryEnabled;
+    private readonly TimeProvider? recoveryClock;
     private LedgerIdentity? ledgerIdentity;
     private PlannerAssignment? ledgerAssignment;
     internal bool IsReady => ready && Volatile.Read(ref disposed) == 0;
     internal int? ProcessId => process?.Id;
     internal int? ExitCode => process is { HasExited: true } ? process.ExitCode : null;
 
-    private RuntimeSession(Stream pipe, Process? process = null, RuntimeBundle? bundle = null, bool storageEnabled = false, bool recoveryEnabled = false)
+    private RuntimeSession(Stream pipe, Process? process = null, RuntimeBundle? bundle = null, bool storageEnabled = false,
+        bool recoveryEnabled = false, TimeProvider? recoveryClock = null)
     {
         this.pipe = pipe;
         this.process = process;
         this.bundle = bundle;
         this.storageEnabled = storageEnabled;
         this.recoveryEnabled = recoveryEnabled;
+        this.recoveryClock = recoveryClock;
     }
 
-    internal static async Task<RuntimeSession> StartAsync(string pluginDirectory, string rigId, CancellationToken token, string? storageDirectory = null, string? recoveryDirectory = null)
+    internal static async Task<RuntimeSession> StartAsync(string pluginDirectory, string rigId, CancellationToken token,
+        string? storageDirectory = null, string? recoveryDirectory = null, TimeProvider? recoveryClock = null)
     {
         storageDirectory = NormalizeStorageDirectory(storageDirectory);
         recoveryDirectory = NormalizeStorageDirectory(recoveryDirectory);
@@ -78,7 +82,7 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
             token.ThrowIfCancellationRequested();
             process = Process.Start(info) ?? throw new IOException("Director runtime did not start.");
             startupError = ReadBoundedErrorAsync(process.StandardError);
-            session = new RuntimeSession(pipe, process, bundle, storageDirectory is not null, recoveryDirectory is not null);
+            session = new RuntimeSession(pipe, process, bundle, storageDirectory is not null, recoveryDirectory is not null, recoveryClock);
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
             var connection = pipe.WaitForConnectionAsync(deadline.Token);
@@ -288,11 +292,19 @@ internal sealed partial class RuntimeSession : IAsyncDisposable
                 if (!IsReady) throw new IOException("Director runtime session is unavailable.");
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
                 deadline.CancelAfter(TimeSpan.FromSeconds(5));
-                var payload = await ExchangeAsync(checked(nextId++), new JsonObject { ["type"] = "ledger", ["operation"] = operation }, "ledger", deadline.Token).ConfigureAwait(false);
+                var request = new JsonObject { ["type"] = "ledger", ["operation"] = operation };
+                // Recovery records and local safety evidence use the PC clock;
+                // assignment windows and geometry use the coordinator clock.
+                if (recoveryEnabled && recoveryClock is not null)
+                    request["recovery_now_ms"] = checked((ulong)recoveryClock.GetUtcNow().ToUnixTimeMilliseconds());
+                var payload = await ExchangeAsync(checked(nextId++), request, "ledger", deadline.Token).ConfigureAwait(false);
                 var result = decode(payload.GetProperty("response"));
                 deadline.Token.ThrowIfCancellationRequested();
                 return result;
             }
+            // A valid recovery refusal must leave readback/completion available.
+            // Malformed replies and interrupted exchanges still revoke the session.
+            catch (RecoveryBlockedException) { throw; }
             catch { Abort(); throw; }
         }
         finally { gate.Release(); }
