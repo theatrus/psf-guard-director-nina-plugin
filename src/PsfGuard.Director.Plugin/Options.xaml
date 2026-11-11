@@ -56,6 +56,11 @@
                 <TextBlock Text="{Binding DataContext.EquipmentReportStatus, RelativeSource={RelativeSource AncestorType=StackPanel, AncestorLevel=2}}"
                            TextWrapping="Wrap" Margin="0,8,0,0" />
             </StackPanel>
+            <StackPanel Margin="0,16,0,0">
+                <TextBlock Text="Other plugins" FontWeight="Bold" Margin="0,0,0,8" />
+                <CheckBox Content="Send Target Scheduler compatible events" Style="{StaticResource LabeledOption}" IsChecked="{Binding EmitTargetSchedulerEvents}" Margin="0,0,0,4" />
+                <TextBlock Text="Let other plugins receive Director target and wait events using the Target Scheduler message format. Off by default; Target Scheduler does not need to be installed." TextWrapping="Wrap" />
+            </StackPanel>
             <StackPanel Margin="0,16,0,0"><TextBlock Text="Images and reporting" FontWeight="Bold" Margin="0,0,0,8" />
                 <CheckBox Content="Send star-detection settings to PSF Guard" Style="{StaticResource LabeledOption}" IsChecked="{Binding SendStarDetectionSettings}" Margin="0,0,0,4" />
                 <TextBlock Text="PSF Guard uses them to count stars and measure HFR as N.I.N.A. does." TextWrapping="Wrap" />

@@ -120,8 +120,14 @@ public sealed class SettingsViewTests
                         Assert.True(bounds.Right <= width && bounds.Left >= 0);
                     }
                     var options = Descendants(host).OfType<CheckBox>().ToArray();
-                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard", "Upload captured frames to PSF Guard" },
+                    Assert.Equal(new[] { "Allow unencrypted HTTP", "Send Target Scheduler compatible events", "Send star-detection settings to PSF Guard", "Report sequence activity to PSF Guard", "Upload captured frames to PSF Guard" },
                         options.Select(option => Assert.IsType<string>(option.Content)));
+                    var schedulerEvents = options.Single(option => (string)option.Content == "Send Target Scheduler compatible events");
+                    Assert.False(schedulerEvents.IsChecked);
+                    schedulerEvents.SetCurrentValue(CheckBox.IsCheckedProperty, true);
+                    Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                    Assert.True(model.EmitTargetSchedulerEvents);
+                    schedulerEvents.SetCurrentValue(CheckBox.IsCheckedProperty, false);
                     var uploads = options.Single(option => (string)option.Content == "Upload captured frames to PSF Guard");
                     Assert.False(uploads.IsChecked);
                     uploads.SetCurrentValue(CheckBox.IsCheckedProperty, true);
@@ -305,6 +311,7 @@ public sealed class SettingsViewTests
         public string CheckInStatus => "Checked in 128 runs; 16000 events; 4 workloads released";
         public bool SendStarDetectionSettings { get; set; } = true;
         public bool ReportSequenceActivity { get; set; } = true;
+        public bool EmitTargetSchedulerEvents { get; set; }
         public bool UploadCapturedFrames { get; set; }
         public string UploadStatus => "File uploads are off. Queued files wait; image record delivery is unchanged.";
         public string UploadQueueStatus => "2 frames are queued; PSF Guard refused 1 frame.";
