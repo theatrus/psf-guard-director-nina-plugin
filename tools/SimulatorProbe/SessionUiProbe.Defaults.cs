@@ -32,6 +32,14 @@ internal static partial class SessionUiProbe
         var defaults = Descendants(host).OfType<Expander>().Single(e => Equals(e.Header, "Defaults for new Director Sessions"));
         defaults.IsExpanded = true;
         Layout();
+        foreach (var section in Descendants(defaults).OfType<Expander>().ToArray()) section.IsExpanded = true;
+        Layout();
+        var policies = Descendants(defaults).OfType<ComboBox>().ToArray();
+        if (policies.Length != 15 || policies.Any(policy => policy.SelectedItem is null))
+            throw new InvalidOperationException("Profile default policy dropdowns are missing their selected values.");
+        foreach (var section in Descendants(defaults).OfType<Expander>().ToArray())
+            section.IsExpanded = section.Header is "Autofocus" or "Meridian avoidance" or "Safety and visibility";
+        Layout();
         var before = Descendants(defaults).OfType<TextBox>().Single(field => System.Windows.Automation.AutomationProperties.GetName(field) == "Minutes before transit");
         var after = Descendants(defaults).OfType<TextBox>().Single(field => System.Windows.Automation.AutomationProperties.GetName(field) == "Minutes after transit");
         before.Text = "60";
