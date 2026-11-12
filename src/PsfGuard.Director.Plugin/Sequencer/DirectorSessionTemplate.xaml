@@ -16,220 +16,220 @@
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
     <DataTemplate x:Key="DirectorSessionSettings">
-    <StackPanel>
-        <Expander Header="Autofocus" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <StackPanel Margin="8">
-                <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="IsEnabled" Value="True" /><Style.Triggers><DataTrigger Binding="{Binding Focus}" Value="{x:Static local:DirectorOperationOwner.Sequence}"><Setter Property="IsEnabled" Value="False" /></DataTrigger></Style.Triggers></Style></StackPanel.Style>
-                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="Autofocus when starting a target" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnTargetStart}" AutomationProperties.Name="Autofocus when starting a target" VerticalAlignment="Center" Margin="0,5" />
-                </Grid>
-                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="Autofocus after a filter change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnFilterChange}" AutomationProperties.Name="Autofocus after a filter change" VerticalAlignment="Center" Margin="0,5" />
-                </Grid>
-                <TextBlock Text="Runs on the selected target using N.I.N.A.'s autofocus settings. Director also adds N.I.N.A.'s default time and temperature triggers. For custom autofocus or Inject Autofocus, choose Sequence instructions / triggers under Operation ownership." TextWrapping="Wrap" Margin="0,8,0,0" />
-            </StackPanel>
-        </Expander>
-        <Expander Header="Guiding calibration" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <StackPanel Margin="8">
-                <Grid>
+        <StackPanel>
+            <Expander Header="Autofocus" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <StackPanel Margin="8">
+                    <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="IsEnabled" Value="True" /><Style.Triggers><DataTrigger Binding="{Binding Focus}" Value="{x:Static local:DirectorOperationOwner.Sequence}"><Setter Property="IsEnabled" Value="False" /></DataTrigger></Style.Triggers></Style></StackPanel.Style>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="Autofocus when starting a target" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnTargetStart}" AutomationProperties.Name="Autofocus when starting a target" VerticalAlignment="Center" Margin="0,5" />
+                    </Grid>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="Autofocus after a filter change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding AutofocusOnFilterChange}" AutomationProperties.Name="Autofocus after a filter change" VerticalAlignment="Center" Margin="0,5" />
+                    </Grid>
+                    <TextBlock Text="Runs on the selected target using N.I.N.A.'s autofocus settings. Director also adds N.I.N.A.'s default time and temperature triggers. For custom autofocus or Inject Autofocus, choose Sequence instructions / triggers under Operation ownership." TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+            </Expander>
+            <Expander Header="Guiding calibration" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <StackPanel Margin="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="Recalibrate before guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding ForceGuideCalibration}" AutomationProperties.Name="Recalibrate before guiding" Margin="0,5"
+                            ToolTip="Resets calibration when Director starts guiding for each target, including a retry. N.I.N.A. controls guiding recovery after a meridian flip or lost guide star.">
+                            <CheckBox.Style>
+                                <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Guiding}" Value="{x:Static local:DirectorOperationOwner.Sequence}">
+                                            <Setter Property="IsEnabled" Value="False" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </CheckBox.Style>
+                        </CheckBox>
+                    </Grid>
+                    <TextBlock Text="For a custom calibration sequence, set Guiding to Sequence instructions / triggers above. Add your calibration steps and Start Guiding to Instructions â†’ Before New Target. When Director controls Slew and center, it centers the target before running these steps." TextWrapping="Wrap" Margin="0,5" />
+                </StackPanel>
+            </Expander>
+            <Expander Header="Meridian avoidance" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <StackPanel Margin="8">
+                    <TextBlock Text="Skip a target near its highest point in the sky (meridian transit). Set each side independently; 0 turns off avoidance on that side." TextWrapping="Wrap" Margin="0,0,0,8" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <TextBlock Text="Minutes before transit" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding MeridianBeforeMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minutes before transit" Margin="0,3" />
+                        <TextBlock Grid.Row="1" Text="Minutes after transit" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minutes after transit" Margin="0,3" />
+                    </Grid>
+                    <TextBlock Text="{Binding MeridianSummary}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                    <TextBlock Text="For the TS fork's before-only behavior, use 60 before and 0 after. Director selects another eligible target or waits. Exposures must fit before the excluded time." TextWrapping="Wrap" Margin="0,8,0,0" />
+                    <TextBlock Text="This follows target transit, not a delayed flip time or physical pier side. Meridian flips still use your N.I.N.A. settings." TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+            </Expander>
+            <Expander Header="Safety and visibility" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8" Grid.IsSharedSizeScope="True">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="Recalibrate before guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding ForceGuideCalibration}" AutomationProperties.Name="Recalibrate before guiding" Margin="0,5"
-                        ToolTip="Resets calibration when Director starts guiding for each target, including a retry. N.I.N.A. controls guiding recovery after a meridian flip or lost guide star.">
-                        <CheckBox.Style>
-                            <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Guiding}" Value="{x:Static local:DirectorOperationOwner.Sequence}">
-                                        <Setter Property="IsEnabled" Value="False" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </CheckBox.Style>
-                    </CheckBox>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Safety policy" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.SafetyPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Safety}" AutomationProperties.Name="Safety policy" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="1" Text="Horizon" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.HorizonPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Horizon}" AutomationProperties.Name="Horizon" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Minimum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MinimumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minimum altitude (degrees)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="3" Text="Maximum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum altitude (degrees)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="4" Text="Park during waits" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="4" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="5" Text="Enclosure clearance" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.EnclosurePolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Enclosure}" AutomationProperties.Name="Enclosure clearance" HorizontalAlignment="Stretch" Margin="0,3"
+                        ToolTip="Open air requires no configured or connected dome. An enclosed setup requires a fresh fully-open shutter report; closure or loss of evidence stops acquisition and blocks parking." />
+                    <TextBlock Grid.Row="6" Text="On abort" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.AbortPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding OnAbort}" AutomationProperties.Name="On abort" HorizontalAlignment="Stretch" Margin="0,3"
+                        ToolTip="Applies to cancellation, unsafe conditions, session timeout and acquisition failure. Parking always requires enclosure clearance. Normal completion still parks the mount." />
                 </Grid>
-                <TextBlock Text="For a custom calibration sequence, set Guiding to Sequence instructions / triggers above. Add your calibration steps and Start Guiding to Instructions â†’ Before New Target. When Director controls Slew and center, it centers the target before running these steps." TextWrapping="Wrap" Margin="0,5" />
-            </StackPanel>
-        </Expander>
-        <Expander Header="Meridian avoidance" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <StackPanel Margin="8">
-                <TextBlock Text="Skip a target near its highest point in the sky (meridian transit). Set each side independently; 0 turns off avoidance on that side." TextWrapping="Wrap" Margin="0,0,0,8" />
-                <Grid>
+            </Expander>
+            <Expander Header="Weather and roof" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                    <TextBlock Text="Minutes before transit" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Grid.Column="1" Text="{Binding MeridianBeforeMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minutes before transit" Margin="0,3" />
-                    <TextBlock Grid.Row="1" Text="Minutes after transit" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minutes after transit" Margin="0,3" />
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Text="When unsafe or roof closes" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.WeatherPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Weather}" AutomationProperties.Name="Weather and roof policy" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="1" Text="Stable Safe/Open (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StableSafeSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Stable Safe/Open (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Total hold time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumWeatherMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather hold time (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
                 </Grid>
-                <TextBlock Text="{Binding MeridianSummary}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                <TextBlock Text="For the TS fork's before-only behavior, use 60 before and 0 after. Director selects another eligible target or waits. Exposures must fit before the excluded time." TextWrapping="Wrap" Margin="0,8,0,0" />
-                <TextBlock Text="This follows target transit, not a delayed flip time or physical pier side. Meridian flips still use your N.I.N.A. settings." TextWrapping="Wrap" Margin="0,8,0,0" />
-            </StackPanel>
-        </Expander>
-        <Expander Header="Safety and visibility" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="True" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8" Grid.IsSharedSizeScope="True">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Safety policy" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.SafetyPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Safety}" AutomationProperties.Name="Safety policy" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="1" Text="Horizon" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.HorizonPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Horizon}" AutomationProperties.Name="Horizon" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Minimum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MinimumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minimum altitude (degrees)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="3" Text="Maximum altitude (degrees)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumAltitude, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum altitude (degrees)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="4" Text="Park during waits" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="4" Grid.Column="1" IsChecked="{Binding ParkOnWait}" AutomationProperties.Name="Park during waits" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="5" Text="Enclosure clearance" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.EnclosurePolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Enclosure}" AutomationProperties.Name="Enclosure clearance" HorizontalAlignment="Stretch" Margin="0,3"
-                    ToolTip="Open air requires no configured or connected dome. An enclosed setup requires a fresh fully-open shutter report; closure or loss of evidence stops acquisition and blocks parking." />
-                <TextBlock Grid.Row="6" Text="On abort" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.AbortPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding OnAbort}" AutomationProperties.Name="On abort" HorizontalAlignment="Stretch" Margin="0,3"
-                    ToolTip="Applies to cancellation, unsafe conditions, session timeout and acquisition failure. Parking always requires enclosure clearance. Normal completion still parks the mount." />
-            </Grid>
-        </Expander>
-        <Expander Header="Weather and roof" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Text="When unsafe or roof closes" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.WeatherPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Weather}" AutomationProperties.Name="Weather and roof policy" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="1" Text="Stable Safe/Open (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding StableSafeSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Stable Safe/Open (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Total hold time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumWeatherMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather hold time (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="3" Text="Interruptions per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumWeatherInterruptions, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Weather interruptions per night" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-            </Grid>
-        </Expander>
-        <Expander Header="Flat panel and calibration" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <StackPanel Margin="8">
-                <TextBlock Text="Director turns off a connected panel light and opens its motorized cover before imaging the sky. Calibration is optional. Flats use active-plan filters and N.I.N.A. automatic exposure adjustment at 50% ADU. Darks require the cover closed and light off." TextWrapping="Wrap" Margin="0,0,0,8" />
-                <Grid>
+            </Expander>
+            <Expander Header="Flat panel and calibration" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <StackPanel Margin="8">
+                    <TextBlock Text="Director turns off a connected panel light and opens its motorized cover before imaging the sky. Calibration is optional. Flats use active-plan filters and N.I.N.A. automatic exposure adjustment at 50% ADU. Darks require the cover closed and light off." TextWrapping="Wrap" Margin="0,0,0,8" />
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Close the flat-panel cover when Director ends" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding ClosePanelAtEnd}" Grid.Row="0" Grid.Column="1" AutomationProperties.Name="Close the flat-panel cover when Director ends" Margin="0,3" />
+                        <TextBlock Grid.Row="1" Text="Take scheduled panel flats" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding ScheduledFlats}" Grid.Row="1" Grid.Column="1" AutomationProperties.Name="Take scheduled panel flats" Margin="0,3" />
+                        <TextBlock Grid.Row="2" Text="Flat time" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{x:Static local:DirectorSessionChoices.DuskTimings}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding FlatsTiming}" MaxWidth="320" Grid.Row="2" Grid.Column="1" AutomationProperties.Name="Flat time" Margin="0,3" />
+                        <TextBlock Grid.Row="3" Text="Minutes before or after dusk" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding FlatsDuskMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="3" Grid.Column="1" AutomationProperties.Name="Minutes before or after dusk" Margin="0,3" />
+                        <TextBlock Grid.Row="4" Text="Flats per filter and camera setting" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding FlatsPerFilter, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="4" Grid.Column="1" AutomationProperties.Name="Flats per filter and camera setting" Margin="0,3" />
+                        <TextBlock Grid.Row="5" Text="Panel brightness (%)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding FlatBrightness, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="5" Grid.Column="1" AutomationProperties.Name="Panel brightness (%)" Margin="0,3" />
+                        <TextBlock Grid.Row="6" Text="Minimum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding FlatMinimumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="6" Grid.Column="1" AutomationProperties.Name="Minimum flat exposure (seconds)" Margin="0,3" />
+                        <TextBlock Grid.Row="7" Text="Maximum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding FlatMaximumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="7" Grid.Column="1" AutomationProperties.Name="Maximum flat exposure (seconds)" Margin="0,3" />
+                        <TextBlock Grid.Row="8" Text="Take darks while no target is ready" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding DarksWhileIdle}" Grid.Row="8" Grid.Column="1" AutomationProperties.Name="Take darks while no target is ready" Margin="0,3" />
+                        <TextBlock Grid.Row="9" Text="Take darks during weather holds" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding DarksWhileWeatherHeld}" Grid.Row="9" Grid.Column="1" AutomationProperties.Name="Take darks during weather holds" Margin="0,3" />
+                        <TextBlock Grid.Row="10" Text="Use exposure settings from active plans" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding DarksFromPlans}" Grid.Row="10" Grid.Column="1" AutomationProperties.Name="Use exposure settings from active plans" Margin="0,3" />
+                        <TextBlock Grid.Row="11" Text="Additional dark lengths (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding DarkExposureSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="11" Grid.Column="1" AutomationProperties.Name="Additional dark lengths (seconds)" Margin="0,3" />
+                        <TextBlock Grid.Row="12" Text="Dark temperatures (°C)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding DarkTemperatures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="12" Grid.Column="1" AutomationProperties.Name="Dark temperatures (°C)" Margin="0,3" />
+                        <TextBlock Grid.Row="13" Text="Darks per exposure and temperature" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding DarksPerSetting, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="13" Grid.Column="1" AutomationProperties.Name="Darks per exposure and temperature" Margin="0,3" />
+                    </Grid>
+                    <TextBlock Text="Enter comma-separated dark lengths and temperatures, such as 30, 60, 120 seconds and -10, -20 °C. Extra lengths use the camera modes from active plans, or the current camera settings when no plan is available. Leave temperatures blank to keep the current camera temperature. Counts apply to this Director run. Director checks for new work during calibration and restores the imaging temperature before light frames." TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+            </Expander>
+            <Expander Header="Operation ownership" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8" Grid.IsSharedSizeScope="True">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Close the flat-panel cover when Director ends" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox IsChecked="{Binding ClosePanelAtEnd}" Grid.Row="0" Grid.Column="1" AutomationProperties.Name="Close the flat-panel cover when Director ends" Margin="0,3" />
-                    <TextBlock Grid.Row="1" Text="Take scheduled panel flats" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox IsChecked="{Binding ScheduledFlats}" Grid.Row="1" Grid.Column="1" AutomationProperties.Name="Take scheduled panel flats" Margin="0,3" />
-                    <TextBlock Grid.Row="2" Text="Flat time" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <ComboBox ItemsSource="{x:Static local:DirectorSessionChoices.DuskTimings}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding FlatsTiming}" MaxWidth="320" Grid.Row="2" Grid.Column="1" AutomationProperties.Name="Flat time" Margin="0,3" />
-                    <TextBlock Grid.Row="3" Text="Minutes before or after dusk" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding FlatsDuskMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="3" Grid.Column="1" AutomationProperties.Name="Minutes before or after dusk" Margin="0,3" />
-                    <TextBlock Grid.Row="4" Text="Flats per filter and camera setting" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding FlatsPerFilter, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="4" Grid.Column="1" AutomationProperties.Name="Flats per filter and camera setting" Margin="0,3" />
-                    <TextBlock Grid.Row="5" Text="Panel brightness (%)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding FlatBrightness, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="5" Grid.Column="1" AutomationProperties.Name="Panel brightness (%)" Margin="0,3" />
-                    <TextBlock Grid.Row="6" Text="Minimum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding FlatMinimumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="6" Grid.Column="1" AutomationProperties.Name="Minimum flat exposure (seconds)" Margin="0,3" />
-                    <TextBlock Grid.Row="7" Text="Maximum flat exposure (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding FlatMaximumSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="7" Grid.Column="1" AutomationProperties.Name="Maximum flat exposure (seconds)" Margin="0,3" />
-                    <TextBlock Grid.Row="8" Text="Take darks while no target is ready" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox IsChecked="{Binding DarksWhileIdle}" Grid.Row="8" Grid.Column="1" AutomationProperties.Name="Take darks while no target is ready" Margin="0,3" />
-                    <TextBlock Grid.Row="9" Text="Take darks during weather holds" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox IsChecked="{Binding DarksWhileWeatherHeld}" Grid.Row="9" Grid.Column="1" AutomationProperties.Name="Take darks during weather holds" Margin="0,3" />
-                    <TextBlock Grid.Row="10" Text="Use exposure settings from active plans" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <CheckBox IsChecked="{Binding DarksFromPlans}" Grid.Row="10" Grid.Column="1" AutomationProperties.Name="Use exposure settings from active plans" Margin="0,3" />
-                    <TextBlock Grid.Row="11" Text="Additional dark lengths (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding DarkExposureSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="11" Grid.Column="1" AutomationProperties.Name="Additional dark lengths (seconds)" Margin="0,3" />
-                    <TextBlock Grid.Row="12" Text="Dark temperatures (°C)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding DarkTemperatures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="12" Grid.Column="1" AutomationProperties.Name="Dark temperatures (°C)" Margin="0,3" />
-                    <TextBlock Grid.Row="13" Text="Darks per exposure and temperature" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding DarksPerSetting, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" MinWidth="70" HorizontalAlignment="Stretch" Grid.Row="13" Grid.Column="1" AutomationProperties.Name="Darks per exposure and temperature" Margin="0,3" />
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Unpark and track" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Startup}" AutomationProperties.Name="Unpark and track" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="1" Text="Slew and center" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding SlewCenter}" AutomationProperties.Name="Slew and center" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Autofocus" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Focus}" AutomationProperties.Name="Autofocus" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="3" Text="Guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Guiding}" AutomationProperties.Name="Guiding" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="4" Text="Dither" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Dither}" AutomationProperties.Name="Dither" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="5" Text="Dither every exposures" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding DitherEveryExposures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Dither every exposures" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="6" Text="Meridian flip" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding MeridianFlip}" AutomationProperties.Name="Meridian flip" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="7" Text="Park mount" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Shutdown}" AutomationProperties.Name="Park mount" HorizontalAlignment="Stretch" Margin="0,3" />
                 </Grid>
-                <TextBlock Text="Enter comma-separated dark lengths and temperatures, such as 30, 60, 120 seconds and -10, -20 °C. Extra lengths use the camera modes from active plans, or the current camera settings when no plan is available. Leave temperatures blank to keep the current camera temperature. Counts apply to this Director run. Director checks for new work during calibration and restores the imaging temperature before light frames." TextWrapping="Wrap" Margin="0,8,0,0" />
-            </StackPanel>
-        </Expander>
-        <Expander Header="Operation ownership" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8" Grid.IsSharedSizeScope="True">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Unpark and track" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Startup}" AutomationProperties.Name="Unpark and track" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="1" Text="Slew and center" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding SlewCenter}" AutomationProperties.Name="Slew and center" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Autofocus" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Focus}" AutomationProperties.Name="Autofocus" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="3" Text="Guiding" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Guiding}" AutomationProperties.Name="Guiding" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="4" Text="Dither" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Dither}" AutomationProperties.Name="Dither" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="5" Text="Dither every exposures" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding DitherEveryExposures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Dither every exposures" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="6" Text="Meridian flip" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding MeridianFlip}" AutomationProperties.Name="Meridian flip" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="7" Text="Park mount" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.OperationOwners}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Shutdown}" AutomationProperties.Name="Park mount" HorizontalAlignment="Stretch" Margin="0,3" />
-            </Grid>
-        </Expander>
-        <Expander Header="Duration and timeouts" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8" Grid.IsSharedSizeScope="True">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Maximum duration (hours)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding MaximumHours, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum duration (hours)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="1" Text="Instruction timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding HookTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Instruction timeout (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Image-save timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SaveTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image-save timeout (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-            </Grid>
-        </Expander>
-        <Expander Header="Image quality" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Text="Cloud screening" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.QualityPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Quality}" AutomationProperties.Name="Cloud screening" HorizontalAlignment="Stretch" Margin="0,3"
-                    ToolTip="Off by default. A stable initial reference can still be cloudy. Stop for night uses On abort; hold and probe is bounded by the recovery budget and night deadline. Equipment failures remain separate." />
-                <TextBlock Grid.Row="1" Text="Poor frames before hold/stop" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding PoorQualityFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Poor frames before hold or stop" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Good probes before resume" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding GoodQualityProbes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Good probes before resume" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-            </Grid>
-        </Expander>
-        <Expander Header="Failure recovery" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Text="Retry focus and guide start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding RetryFocusAndGuiding}" AutomationProperties.Name="Retry focus and guide start" VerticalAlignment="Center" Margin="0,5"
-                    ToolTip="Director-owned target setup only. Known-completed failures can retry; timeouts, exposures, slews and unsafe conditions cannot. Exhaustion uses On abort. The session budget and stop persist until the maximum-duration window ends." />
-                <TextBlock Grid.Row="1" Text="Cooldown (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RetryCooldownSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Recovery cooldown (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="2" Text="Retries per session" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumRecoveryAttempts, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Retries per session" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="3" Text="Total recovery time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumRecoveryMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Total recovery time (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="4" Text="Equipment failures per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding MaximumOperationFailures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Equipment failures per night" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-            </Grid>
-        </Expander>
-        <Expander Header="Image reports and status" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
-            <Grid Margin="8" Grid.IsSharedSizeScope="True">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Continue current targets while offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue current targets while offline" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="1" Text="Send saved image records at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Send saved image records at session start" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="2" Text="Send image records at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Send image records at session end" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="3" Text="Send image records on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Send image records on target change" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="4" Text="Image report interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image report interval (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="5" Text="Report live status" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <CheckBox HorizontalAlignment="Left" Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
-                <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
-                <TextBlock Grid.Row="7" Text="Image record delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
-                <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Image record delivery" HorizontalAlignment="Stretch" Margin="0,3"
-                    ToolTip="Sends image records, not image files. Use Sync or another transfer tool for the files. Deferred sends records at session end if enabled. Director always sends saved records before requesting more targets." />
-            </Grid>
-        </Expander>
-    </StackPanel>
+            </Expander>
+            <Expander Header="Duration and timeouts" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Maximum duration (hours)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding MaximumHours, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Maximum duration (hours)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="1" Text="Instruction timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding HookTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Instruction timeout (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Image-save timeout (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SaveTimeoutSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image-save timeout (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                </Grid>
+            </Expander>
+            <Expander Header="Image quality" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Text="Cloud screening" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.QualityPolicies}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Quality}" AutomationProperties.Name="Cloud screening" HorizontalAlignment="Stretch" Margin="0,3"
+                        ToolTip="Off by default. A stable initial reference can still be cloudy. Stop for night uses On abort; hold and probe is bounded by the recovery budget and night deadline. Equipment failures remain separate." />
+                    <TextBlock Grid.Row="1" Text="Poor frames before hold/stop" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding PoorQualityFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Poor frames before hold or stop" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Good probes before resume" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding GoodQualityProbes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Good probes before resume" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                </Grid>
+            </Expander>
+            <Expander Header="Failure recovery" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Text="Retry focus and guide start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Column="1" IsChecked="{Binding RetryFocusAndGuiding}" AutomationProperties.Name="Retry focus and guide start" VerticalAlignment="Center" Margin="0,5"
+                        ToolTip="Director-owned target setup only. Known-completed failures can retry; timeouts, exposures, slews and unsafe conditions cannot. Exhaustion uses On abort. The session budget and stop persist until the maximum-duration window ends." />
+                    <TextBlock Grid.Row="1" Text="Cooldown (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RetryCooldownSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Recovery cooldown (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="2" Text="Retries per session" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaximumRecoveryAttempts, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Retries per session" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="3" Text="Total recovery time (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaximumRecoveryMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Total recovery time (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="4" Text="Equipment failures per night" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding MaximumOperationFailures, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Equipment failures per night" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                </Grid>
+            </Expander>
+            <Expander Header="Image reports and status" HeaderTemplate="{StaticResource DirectorSectionHeader}" IsExpanded="False" HorizontalContentAlignment="Stretch" Margin="0,0,0,8">
+                <Grid Margin="8" Grid.IsSharedSizeScope="True">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Continue current targets while offline" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="0" Grid.Column="1" IsChecked="{Binding AllowOffline}" AutomationProperties.Name="Continue current targets while offline" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="1" Text="Send saved image records at session start" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="1" Grid.Column="1" IsChecked="{Binding CheckInAtStart}" AutomationProperties.Name="Send saved image records at session start" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="2" Text="Send image records at session end" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="2" Grid.Column="1" IsChecked="{Binding CheckInAtEnd}" AutomationProperties.Name="Send image records at session end" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="3" Text="Send image records on target change" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="3" Grid.Column="1" IsChecked="{Binding CheckInOnTarget}" AutomationProperties.Name="Send image records on target change" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="4" Text="Image report interval (minutes)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding CheckInMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Image report interval (minutes)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="5" Text="Report live status" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <CheckBox HorizontalAlignment="Left" Grid.Row="5" Grid.Column="1" IsChecked="{Binding LiveStatus}" AutomationProperties.Name="Report live status" VerticalAlignment="Center" Margin="0,5" />
+                    <TextBlock Grid.Row="6" Text="Live-status interval (seconds)" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding StatusSeconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Live-status interval (seconds)" MinWidth="70" HorizontalAlignment="Stretch" Margin="0,3" />
+                    <TextBlock Grid.Row="7" Text="Image record delivery" TextWrapping="Wrap" Margin="0,5,12,5" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{x:Static local:DirectorSessionChoices.CheckInModes}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding CheckInMode}" AutomationProperties.Name="Image record delivery" HorizontalAlignment="Stretch" Margin="0,3"
+                        ToolTip="Sends image records, not image files. Use Sync or another transfer tool for the files. Deferred sends records at session end if enabled. Director always sends saved records before requesting more targets." />
+                </Grid>
+            </Expander>
+        </StackPanel>
     </DataTemplate>
     <DataTemplate DataType="{x:Type local:DirectorFlatsItem}">
         <StackPanel Margin="8" DataContext="{Binding Options}">
@@ -403,8 +403,8 @@
                                     <StackPanel Margin="8">
                                         <TextBlock Text="{Binding DefaultsStatus}" TextWrapping="Wrap" Margin="0,0,0,8" />
                                         <WrapPanel>
-                                            <Button Command="{Binding SaveDefaultsCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Save as profile defaults" Foreground="{DynamicResource ButtonForegroundBrush}" /></Button>
-                                            <Button Command="{Binding LoadDefaultsCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,0,8" Padding="12,6"><TextBlock Text="Load profile defaults" Foreground="{DynamicResource ButtonForegroundBrush}" /></Button>
+                                            <Button Command="{Binding SaveDefaultsCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,8,8" Padding="12,6"><TextBlock Text="Save as profile defaults" Margin="{Binding Padding, RelativeSource={RelativeSource AncestorType=Button}}" Foreground="{DynamicResource ButtonForegroundBrush}" /></Button>
+                                            <Button Command="{Binding LoadDefaultsCommand}" Style="{DynamicResource StandardButton}" Margin="0,0,0,8" Padding="12,6"><TextBlock Text="Load profile defaults" Margin="{Binding Padding, RelativeSource={RelativeSource AncestorType=Button}}" Foreground="{DynamicResource ButtonForegroundBrush}" /></Button>
                                         </WrapPanel>
                                         <TextBlock Text="Loading replaces this session's settings. Instructions, triggers and Enable acquisition are kept. You can also edit defaults on the Director plugin page." TextWrapping="Wrap" />
                                     </StackPanel>
