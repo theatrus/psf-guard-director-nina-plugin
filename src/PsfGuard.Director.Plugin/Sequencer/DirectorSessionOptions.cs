@@ -149,5 +149,7 @@ public sealed partial class DirectorSessionOptions : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value)) return;
         field = value;
         PropertyChanged?.Invoke(this, new(name));
+        if (name is nameof(MeridianBeforeMinutes) or nameof(MeridianAfterMinutes))
+            PropertyChanged?.Invoke(this, new(nameof(MeridianSummary)));
     }
 }

@@ -43,6 +43,7 @@ public sealed partial class DirectorAcquisition
     internal string LocalStateRoot { get; init; } = StateRoot;
     internal string? LastRunDirectory { get; private set; }
     internal LedgerIdentity? LastLedger { get; private set; }
+    internal DirectorSessionDefaults SessionDefaults => new(profiles);
 
     [ImportingConstructor]
     public DirectorAcquisition(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
@@ -132,7 +133,7 @@ public sealed partial class DirectorAcquisition
         var constraints = new NinaConstraintBinding(profile,
             options.Horizon == DirectorHorizonPolicy.NinaProfile ? NinaHorizonMode.RequiredFile : NinaHorizonMode.FixedMinimum,
             horizon, options.MinimumAltitude,
-            new(checked((ulong)(options.MeridianBeforeMinutes * 60000)), checked((ulong)(options.MeridianAfterMinutes * 60000))));
+            options.MeridianExclusion());
         var native = constraintsReader.Refresh(constraints);
         var wheel = profiles.ActiveProfile.FilterWheelSettings.Id;
         var equipment = new NinaEquipmentBinding(profile, rig, native.Revision,

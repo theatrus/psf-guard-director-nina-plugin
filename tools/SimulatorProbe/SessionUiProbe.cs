@@ -74,6 +74,7 @@ internal static partial class SessionUiProbe
             value.DataType is Type type && type.FullName == typeof(DirectorSessionContainer).FullName)
             ?? throw new InvalidOperationException("NINA did not discover the exported Director session template.");
         var exportedType = (Type)template.DataType;
+        if (display is null) RenderProfileDefaults(directory, exportedType.Assembly);
         foreach (var width in new[] { 640, 1000 })
         {
             var session = Activator.CreateInstance(exportedType)!;
@@ -144,6 +145,18 @@ internal static partial class SessionUiProbe
                 calibration.IsChecked = true;
                 Layout();
                 var options = exportedType.GetProperty("Options")!.GetValue(session)!;
+                var beforeMeridian = Descendants(host).OfType<TextBox>().Single(field =>
+                    System.Windows.Automation.AutomationProperties.GetName(field) == "Minutes before transit");
+                var afterMeridian = Descendants(host).OfType<TextBox>().Single(field =>
+                    System.Windows.Automation.AutomationProperties.GetName(field) == "Minutes after transit");
+                beforeMeridian.Text = "60";
+                afterMeridian.Text = "0";
+                Layout();
+                if ((double)options.GetType().GetProperty("MeridianBeforeMinutes")!.GetValue(options)! != 60
+                    || (double)options.GetType().GetProperty("MeridianAfterMinutes")!.GetValue(options)! != 0
+                    || !Descendants(host).OfType<TextBlock>().Any(text => text.Text.Contains("eligible again at transit")))
+                    throw new InvalidOperationException("Asymmetric meridian controls did not update independent values and their explanation.");
+                beforeMeridian.Text = "0";
                 if (!(bool)options.GetType().GetProperty("ForceGuideCalibration")!.GetValue(options)! || !calibration.IsEnabled)
                     throw new InvalidOperationException("Guide calibration checkbox did not update the session settings.");
                 guiding.SelectedValue = Enum.Parse(originalGuiding.GetType(), "Sequence");
@@ -261,7 +274,7 @@ internal static partial class SessionUiProbe
                 }
                 if (Equals(((TabItem)tabs.SelectedItem).Header, "Settings"))
                 {
-                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = Equals(section.Header, "Safety and visibility") || Equals(section.Header, "Autofocus");
+                    foreach (var section in Descendants(tabs).OfType<Expander>().ToArray()) section.IsExpanded = section.Header is "Safety and visibility" or "Autofocus" or "Meridian avoidance" or "Reuse settings for this profile";
                     Layout();
                 }
                 var bitmap = new RenderTargetBitmap(width, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
