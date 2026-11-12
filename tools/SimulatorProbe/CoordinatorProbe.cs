@@ -694,6 +694,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
         request.Headers.Authorization = new("Bearer", pairing.Token);
         request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
+        request.Headers.Add("X-PSF-Guard-Plugin-Capabilities", "director_project_meridian_v1");
         request.Content = JsonBody(new
         {
             coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,
