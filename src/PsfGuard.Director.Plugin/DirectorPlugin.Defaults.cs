@@ -6,6 +6,7 @@ public sealed partial class DirectorPlugin
 {
     private DirectorDefaultsEditor? defaultsEditor;
     private Guid? defaultsProfile;
+    internal void RefreshSessionDefaults() => PropertyChanged?.Invoke(this, new(nameof(SessionDefaults)));
     public DirectorDefaultsEditor SessionDefaults
     {
         get

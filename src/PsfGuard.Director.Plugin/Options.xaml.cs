@@ -20,6 +20,9 @@ public partial class Options : ResourceDictionary
     private static void RefreshEquipmentVisibility(object sender)
     {
         if (sender is FrameworkElement { DataContext: DirectorPlugin plugin } root)
+        {
             plugin.SetEquipmentSettingsVisible(root.IsLoaded && root.IsVisible);
+            if (root.IsLoaded && root.IsVisible) plugin.RefreshSessionDefaults();
+        }
     }
 }
