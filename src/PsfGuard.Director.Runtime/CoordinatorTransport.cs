@@ -95,6 +95,7 @@ internal sealed class CoordinatorTransport : IDisposable
         try
         {
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Add("X-PSF-Guard-Plugin-Capabilities", "director_project_meridian_v1");
             request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
             if (profileId is { } profile) request.Headers.Add("X-PSF-Director-Profile", profile.ToString("D"));
             foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.Add(name, value);

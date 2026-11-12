@@ -56,6 +56,35 @@ public sealed class NinaLocalEvidenceTests
         Assert.Throws<ArgumentException>(() => NinaEarthOrientation.Bind(Samples(), start, start + 86400001));
     }
 
+    [Fact]
+    public void TransitMarginsRequireAndUseTheAdditionalDatedSample()
+    {
+        var start = (ulong)(Day - 23 * 3600) * 1000;
+        var end = start + 86400000;
+        var margins = new PlannerMeridianExclusion(3600000, 21600000);
+        Assert.Throws<InvalidDataException>(() => NinaEarthOrientation.Bind(Samples(), start, end, margins));
+        var rows = Samples();
+        var date = Day - 2 * 86400;
+        rows.Insert(0, rows[0] with { UnixSeconds = date, ModifiedJulianDate = 40587 + date / 86400.0 });
+        var evidence = NinaEarthOrientation.Bind(rows, start, end, margins);
+        Assert.Equal(start - margins.AfterMs, evidence.Orientation.ValidFromMs);
+        Assert.Equal(end + margins.BeforeMs + 1, evidence.Orientation.ValidUntilMs);
+        Assert.Equal(4, evidence.Samples.Count);
+        rows[0] = rows[0] with { Ut1MinusUtcSeconds = 0.2 };
+        Assert.Throws<InvalidDataException>(() => NinaEarthOrientation.Bind(rows, start, end, margins));
+    }
+
+    [Fact]
+    public void TransitDataCoverageIncludesAllProjectsAndIndependentInheritance()
+    {
+        var original = CoordinatorProgramTests.Envelope().Program.Assignment;
+        var goal = original.Goals[0];
+        var assignment = original with { Goals = [goal with { MeridianAvoidance = new(0, null) }, goal with { MeridianAvoidance = new(3600000, 0) }] };
+        Assert.Equal(new PlannerMeridianExclusion(3600000, 600000), NinaEarthOrientation.SearchMargins(assignment, new(7200000, 600000)));
+        assignment = assignment with { Goals = assignment.Goals.Add(goal) };
+        Assert.Equal(new PlannerMeridianExclusion(7200000, 600000), NinaEarthOrientation.SearchMargins(assignment, new(7200000, 600000)));
+    }
+
     [Theory]
     [InlineData("missing")]
     [InlineData("stale")]

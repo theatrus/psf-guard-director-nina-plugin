@@ -153,8 +153,14 @@ transit. Zero disables that side; 0/0 adds no exclusion. The shared Rust planner
 selects another eligible target or waits, and an exposure must fit before the
 excluded time. Horizon and other visibility limits still apply. This follows
 target transit, not physical pier side or a delayed meridian flip. N.I.N.A.'s flip
-settings continue to apply. These are profile/session settings; PSF Guard project
-overrides are not added by this change, and TS does not need to be installed.
+settings continue to apply. TS does not need to be installed.
+
+With the matching PSF Guard server update, each plan's **Scheduling limits for
+every rig** also has **Avoid before transit** and **Avoid after transit**. A blank
+side inherits the rig, site or global default, falling back to this Director
+session. Zero explicitly disables that side. These plan settings apply to fresh
+work; an already assigned program keeps its original settings. They do not alter
+Target Scheduler databases or N.I.N.A. meridian flip settings.
 
 Under **Other plugins** on the plugin settings page, **Send Target Scheduler
 compatible events** lets existing message-broker consumers follow Director.

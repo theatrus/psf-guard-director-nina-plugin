@@ -24,6 +24,7 @@ param(
     [switch]$MoonAvoidance,
     [switch]$ObservingPreferences,
     [switch]$ProjectOrder,
+    [switch]$ProjectMeridian,
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
     [switch]$RestartAdmission,
@@ -63,6 +64,7 @@ if ($NativeImagingFailure -eq 'meridian' -and !$ForceNativeFlip) { throw 'Meridi
 if ($Phd2Executable -and (!$ForceNativeFlip -or $NativeImagingFailure)) { throw 'PHD2 simulator requires the successful native flip scenario.' }
 if ($ConstraintChange -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $DeferredCheckIn -or $EnclosureClosure)) { throw 'ConstraintChange requires only PublicAcquisition.' }
 if ($ProjectOrder -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $ObservingPreferences -or $MoonAvoidance -or $PublicUnsafe)) { throw 'ProjectOrder requires safe public local scheduling without weights or Moon-only waits.' }
+if ($ProjectMeridian -and (!$NativeImaging -or !$AutomaticWorkloads -or $ProjectOrder -or $ObservingPreferences -or $ForceNativeFlip -or $NativeImagingFailure -or $RecoveryScenario)) { throw 'ProjectMeridian requires native automatic acquisition without other policy or fault scenarios.' }
 if ($PriorityRefresh -and (!$ProjectOrder -or !$AutomaticWorkloads -or $OfflineWorkloadRelease -or $DeferredCheckIn)) { throw 'PriorityRefresh requires live automatic ranked workloads.' }
 if ($ObservingPreferences -and (!$LocalTargetScheduling -or !$PublicAcquisition -or $MoonAvoidance -or $PublicUnsafe -or $EnclosureClosure)) { throw 'ObservingPreferences requires safe public local target scheduling.' }
 if ($EnclosureClosure -and (!$PublicAcquisition -or $PublicUnsafe -or $AutomaticWorkloads -or $LocalTargetScheduling -or $MoonAvoidance)) { throw 'EnclosureClosure requires only PublicAcquisition.' }
@@ -128,7 +130,7 @@ try {
     $fixture = "$root/fixture.json"
     @{ Endpoint=$endpoint; CoordinatorInstanceId=$status.data.instance_id; CatalogId=$catalog;
         RigId=$applied.data.binding.rig.id; ActivateSimulatorPlan=$true; ExerciseOutage=((!$AutomaticWorkloads -or $OfflineWorkloadRelease) -and !$DeferredCheckIn); PublicAcquisition=[bool]$PublicAcquisition; PublicUnsafe=[bool]$PublicUnsafe; AbortWithoutPark=[bool]$AbortWithoutPark; EnclosureClosure=[bool]$EnclosureClosure; AutomaticWorkloads=[bool]$AutomaticWorkloads; LocalTargetScheduling=[bool]$LocalTargetScheduling; MoonAvoidance=[bool]$MoonAvoidance; ObservingPreferences=[bool]$ObservingPreferences; DeferredCheckIn=[bool]$DeferredCheckIn; OfflineWorkloadRelease=[bool]$OfflineWorkloadRelease } |
-        ForEach-Object { $_.WeatherHoldScenario=$(if ($WeatherHoldScenario) { $WeatherHoldScenario } else { $null }); $_.NightEndScenario=$(if ($NightEndScenario) { $NightEndScenario } else { $null }); $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
+        ForEach-Object { $_.WeatherHoldScenario=$(if ($WeatherHoldScenario) { $WeatherHoldScenario } else { $null }); $_.NightEndScenario=$(if ($NightEndScenario) { $NightEndScenario } else { $null }); $_.RecoveryScenario=$(if ($RecoveryScenario) { $RecoveryScenario } else { $null }); $_.ProjectOrder=[bool]$ProjectOrder; $_.ProjectMeridian=[bool]$ProjectMeridian; $_.PriorityRefresh=[bool]$PriorityRefresh; $_.ConstraintChange=$(if ($ConstraintChange) { $ConstraintChange } else { $null }); $_.NativeImaging=[bool]$NativeImaging; $_.ForceNativeFlip=[bool]$ForceNativeFlip; $_.NativeImagingFailure=$(if ($NativeImagingFailure) { $NativeImagingFailure } else { $null }); $_ } |
         ForEach-Object { if ($Calibration) { $_.Calibration=$true }; if ($StartUnparked) { $_.StartUnparked=$true }; if ($WaitingPlanRefresh) { $_.WaitingPlanRefresh=$true }; if ($Attended) { $_.Attended=$true }; if ($SequenceActivity) { $_.SequenceActivity=$true }; if ($SchedulerEvents) { $_.SchedulerEvents=$true }; if ($WaitForSafeAtStartup) { $_.WaitForSafeAtStartup=$true }; if ($RestartAdmission) { $_.RestartAdmission=$true }; if ($QualityScenario) { $_.QualityScenario=$QualityScenario; $_.ExerciseOutage=$false }; if ($phd2) { $_.Phd2 = @{ Executable=$phd2.Executable; Instance=$phd2.Instance; Port=$phd2.Port } }; $_ } |
         ForEach-Object { if ($ImageUploads) { $_.ImageUploads=$ImageUploads; $_.UploadDirectory="$root/received" }; $_ } |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixture

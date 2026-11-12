@@ -777,7 +777,8 @@ public sealed partial class DirectorAcquisition
         var filterCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
         var assignment = program.Assignment;
         var planningNightEnd = window.EndOn(allocation.PlanningNowMs);
-        var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
+        var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token,
+            NinaEarthOrientation.SearchMargins(assignment, options.MeridianExclusion()));
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
             assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, options.MinimumAltitude, options.MaximumAltitude, 0)).ToImmutableArray());
         var geometry = new NinaGeometrySnapshot(constraintsReader, equipmentReader);

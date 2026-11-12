@@ -64,7 +64,7 @@
                         <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding MeridianAfterMinutes, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}" AutomationProperties.Name="Minutes after transit" Margin="0,3" />
                     </Grid>
                     <TextBlock Text="{Binding MeridianSummary}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                    <TextBlock Text="For the TS fork's before-only behavior, use 60 before and 0 after. Director selects another eligible target or waits. Exposures must fit before the excluded time." TextWrapping="Wrap" Margin="0,8,0,0" />
+                    <TextBlock Text="For a pause only before transit, use 60 before and 0 after. Director selects another eligible target or waits. Exposures must fit before the excluded time. PSF Guard plan settings can override either side." TextWrapping="Wrap" Margin="0,8,0,0" />
                     <TextBlock Text="This follows target transit, not a delayed flip time or physical pier side. Meridian flips still use your N.I.N.A. settings." TextWrapping="Wrap" Margin="0,8,0,0" />
                 </StackPanel>
             </Expander>

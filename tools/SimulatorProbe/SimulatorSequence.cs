@@ -144,6 +144,7 @@ public sealed class SimulatorSequence : SequenceItem
             options.SlewCenter = options.Focus = options.Guiding = options.Dither = options.MeridianFlip =
                 coordinator?.NativeImaging == true ? DirectorOperationOwner.Director : DirectorOperationOwner.Sequence;
             options.DitherEveryExposures = 1;
+            if (coordinator?.ProjectMeridian == true) options.MeridianBeforeMinutes = 60;
         }
         var enclosureCancellationVerified = false;
         var stateDirectory = Directory.CreateDirectory(Path.Combine(run, "state")).FullName;
@@ -319,7 +320,7 @@ public sealed class SimulatorSequence : SequenceItem
             // waits through transit before issuing the ASCOM flip slew.
             if (coordinator?.ForceNativeFlip == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + (phd2 is null ? 0.025 : 0.06)) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
-            if (coordinator?.WaitingPlanRefresh == true || coordinator?.Calibration == true)
+            if (coordinator?.WaitingPlanRefresh == true || coordinator?.Calibration == true || coordinator?.ProjectMeridian == true)
                 target = new Coordinates((telescope.GetInfo().SiderealTime + 0.25) % 24, 10, Epoch.JNOW, Coordinates.RAType.Hours);
             var catalogTarget = target.Transform(Epoch.J2000);
             using var adapter = new NinaCaptureAdapter(profiles, camera, imaging, saves, history,
