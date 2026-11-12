@@ -291,7 +291,7 @@ public sealed class SimulatorSequence : SequenceItem
             await File.WriteAllTextAsync(horizonPath, "[[10,0],[10,100],[80,100.0001],[10,100.0002],[10,360]]", lifetime.Token);
             profiles.ChangeHorizon(horizonPath);
             using var constraintReader = new NinaConstraintSnapshot(profiles);
-            var constraintBinding = new NinaConstraintBinding(profileId, NinaHorizonMode.RequiredFile, horizonPath, 20, new(0, 0));
+            var constraintBinding = new NinaConstraintBinding(profileId, NinaHorizonMode.RequiredFile, horizonPath, 20, nativeOptions.MeridianExclusion());
             constraints = constraintReader.Refresh(constraintBinding);
             Step("Reading native simulator equipment capabilities");
             var equipmentBinding = new NinaEquipmentBinding(profileId, rigId, constraints.Revision,
