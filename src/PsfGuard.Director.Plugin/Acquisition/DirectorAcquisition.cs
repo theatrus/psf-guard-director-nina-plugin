@@ -858,11 +858,14 @@ public sealed partial class DirectorAcquisition
             var dispatch = new NinaGeometryDispatch(runtime, Snapshot, Check,
                 refreshRecovery: recovery is null ? null : ct => recovery.RefreshAsync(ct));
             var interruptedSequenceTrigger = false;
+            var pointingRecovery = new NinaPointingRecovery();
             var nextCheckIn = DateTimeOffset.UtcNow;
             long? lastWaitingRefresh = null;
             if (options.CheckInMode == DirectorCheckInMode.Live) checkpointTask = CheckpointPumpAsync();
             while (true)
             {
+                var canRepairPointing = false;
+                string? pointingCaptureId = null;
                 try
                 {
                     if (WeatherInterrupted()) await HoldWeatherAsync();
@@ -1020,6 +1023,11 @@ public sealed partial class DirectorAcquisition
                         using var operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(operations.Token);
                         operationDeadline.CancelAfter(window.Remaining(TimeSpan.FromSeconds(options.HookTimeoutSeconds)));
                         try { await RunItem(block, issued.Item, operationDeadline.Token); }
+                        catch (Exception error) when (pointingRecovery.HasAttempted && !operations.Token.IsCancellationRequested
+                            && next is PreparationNext.Run { Command.Operation: PreparationOperation.Center })
+                        {
+                            throw PolicyStop($"Recentering the target failed. {DirectorSessionText.Failure(error)} Check the mount and plate solving before restarting.");
+                        }
                         finally
                         {
                             if (issued.Fence.Completion is { } completed)
@@ -1043,6 +1051,7 @@ public sealed partial class DirectorAcquisition
                         Require(await runtime.ClosePreparationAsync(id, lifetime.Token));
                         continue;
                     }
+                    canRepairPointing = true;
                     CheckPointing();
                     if (options.CheckInOnTarget && newTarget) QueueCheckIn();
                     if (recovery is not null) await recovery.RefreshAsync(lifetime.Token);
@@ -1055,6 +1064,7 @@ public sealed partial class DirectorAcquisition
                         continue;
                     }
                     if (reservation.Kind != ReservationKind.Created) throw new InvalidOperationException("Capture reservation is not newly authorized.");
+                    pointingCaptureId = captureId;
                     var binding = Require(await runtime.FindCaptureBindingAsync(captureId, lifetime.Token)).Binding ?? throw new InvalidDataException("Missing capture binding.");
                     var captureBlock = TargetBlock();
                     var exposure = new NinaExposureItem(capture, reservation, binding, equipmentBinding, dispatch.Capture(id, reservation, () =>
@@ -1086,9 +1096,11 @@ public sealed partial class DirectorAcquisition
                         container.RecordAction(target.Name, "Exposure", "Exposure failed or was interrupted. Saved images will be checked before retrying.");
                         throw;
                     }
+                    canRepairPointing = false;
                     var evidence = exposure.Evidence;
                     if (evidence?.Phase != CapturePhase.Saved) throw new InvalidOperationException("The image save could not be confirmed. Director must check saved images before retrying.");
                     Require(await runtime.RecordAsync(captureId, new LedgerEvidence.Saved(captureId, checked((ulong)Math.Ceiling(evidence.TotalMs!.Value))), lifetime.Token));
+                    pointingRecovery.ExposureSaved();
                     container.RecordAction(target.Name, "Exposure", "Saved; pending assessment", checked((ulong)Math.Ceiling(evidence.TotalMs!.Value)));
                     filterCounts[binding.Recipe.FilterId] = checked(filterCounts.GetValueOrDefault(binding.Recipe.FilterId) + 1);
                     await hooks.ExposureSavedAsync(captureId, progress, operations.Token);
@@ -1102,6 +1114,38 @@ public sealed partial class DirectorAcquisition
                 catch (Exception) when (WeatherInterrupted() && !lifetime.IsCancellationRequested)
                 {
                     await HoldWeatherAsync();
+                }
+                catch (Exception error) when (!operations.Token.IsCancellationRequested
+                    && NinaPointingRecovery.Find(error) is { } offset)
+                {
+                    Check();
+                    if (!canRepairPointing)
+                        throw PolicyStop($"{offset.Message} Pointing changed during an instruction. Director stopped; check target setup before restarting.");
+                    if (!pointingRecovery.TryBegin(native is not null && configuration.EnableSlewCenter))
+                        throw PolicyStop(configuration.EnableSlewCenter
+                            ? $"{offset.Message} Recentering did not resolve the pointing error. Check the mount and plate solving before restarting."
+                            : $"{offset.Message} Enable Director's slew and center option or correct the target setup instructions before restarting.");
+
+                    var unresolved = Require(await runtime.FindUnresolvedAttemptAsync(lifetime.Token)).Attempt;
+                    if (unresolved is not null || pointingCaptureId is not null)
+                    {
+                        var refused = pointingCaptureId is null ? null : await adapter.ReadPointingRefusalAsync(pointingCaptureId, lifetime.Token);
+                        if (unresolved is null || refused?.Intent.Program is null || unresolved.CaptureId != pointingCaptureId
+                            || refused.Intent.Program.LedgerId != LastLedger?.LedgerId || refused.Intent.GoalId != unresolved.GoalId
+                            || unresolved.Evidence is not LedgerEvidence.Reserved)
+                            throw; // Never discard an uncertain exposure or another attempt's evidence.
+                        Require(await runtime.RecordAsync(unresolved.CaptureId, new LedgerEvidence.Failed("pointing_refused_before_capture"), lifetime.Token));
+                        adapter.AcknowledgeInterrupted(unresolved.CaptureId);
+                        QueueCheckIn(refreshPriority: false);
+                    }
+                    var active = Require(await runtime.FindActivePreparationAsync(lifetime.Token)).Record;
+                    if (active is not null) Require(await runtime.ClosePreparationAsync(active.PreparationId, lifetime.Token));
+                    await EnsureSettledAsync(runtime, lifetime.Token);
+                    // Ask the shared planner to issue target preparation again;
+                    // do not reuse an old dispatch or move equipment here.
+                    previousPointing = null;
+                    container.RecordAction(target?.Name ?? "", "Pointing", $"{offset.Message} Recentering before another exposure.");
+                    Report("Recentering the target", null, offset.Message);
                 }
             }
             bool WeatherInterrupted() => weatherHolds && (interlock.Interrupted.IsCancellationRequested || enclosure.Interrupted.IsCancellationRequested);
@@ -1283,8 +1327,7 @@ public sealed partial class DirectorAcquisition
             if (!WeatherInterrupted()) await hooks.FinishAsync(progress, operations.Token);
             await EnsureSettledAsync(runtime, lifetime.Token);
             if (options.CheckInAtEnd && !window.Ended) await CheckIn(drain: true);
-            Report(Volatile.Read(ref priorityRefresh) != 0 ? "Reporting saved images before requesting updated work"
-                : "Finished the current targets; waiting for image grades or updated plans", null);
+            Report(DirectorSessionText.FinishedAllocation(window.Ended, Volatile.Read(ref priorityRefresh) != 0), null);
 
             void QueueCheckIn(bool refreshPriority = true)
             {
@@ -1527,8 +1570,10 @@ public sealed partial class DirectorAcquisition
                 throw new InvalidOperationException("Prepared telescope is unavailable or moving.");
             var p = telescope.GetCurrentPosition().Transform(Epoch.J2000);
             var expected = new Coordinates(target.IcrsRaMas / 3600000.0, target.IcrsDecMas / 3600000.0, Epoch.J2000, Coordinates.RAType.Degrees);
-            if (!double.IsFinite(p.RA) || !double.IsFinite(p.Dec) || (p - expected).Distance.Degree > 0.05)
-                throw new InvalidOperationException("Prepare the selected target using native slew/center instructions in Before New Target (pointing tolerance 3 arcmin).");
+            var separation = (p - expected).Distance.Degree;
+            if (!double.IsFinite(p.RA) || !double.IsFinite(p.Dec) || !double.IsFinite(separation))
+                throw new InvalidOperationException("The mount did not report valid pointing coordinates.");
+            if (separation > 0.05) throw new NinaPointingOffsetException(separation * 60);
         }
         NinaTargetContainer TargetBlock()
         {

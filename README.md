@@ -205,6 +205,17 @@ stops mount motion and guiding, delivers saved receipts, and retires the previou
 assignment. It keeps images and history, then requests fresh work using current
 image counts. Old observing-night records no longer require manual removal.
 Automatic retries keep the current Run's original maximum-duration deadline.
+If the mount reports a pointing offset over three arcminutes, Director can
+recenter once within the current assignment when it owns slew and center.
+It retains saved images and the original deadline. Another pointing refusal
+before a successful exposure stops with the measured offset instead of
+repeating the park/unpark cycle. Sequence-owned target setup remains yours to
+correct. A reserved exposure is settled locally only when the live adapter
+proves the camera was never called; uncertain images still use normal recovery.
+
+When no assigned exposure fits before the session deadline, Director waits
+and continues checking for newly activated plans. Reaching the deadline ends
+the session normally; it does not start another observing window.
 See [automatic session recovery](docs/native-capture.md#automatic-session-recovery).
 
 ## How it fits together

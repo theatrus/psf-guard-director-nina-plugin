@@ -28,7 +28,7 @@ param(
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
     [switch]$RestartAdmission,
-    [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
+    [ValidateSet('focus-once', 'focus-always', 'pointing-preparation', 'pointing-dispatch', 'pointing-always', 'pointing-recenter-fails')][string]$RecoveryScenario,
     [ValidateSet('stop', 'recover')][string]$QualityScenario,
     [ValidateSet('workload-wait', 'target-wait')][string]$NightEndScenario,
     [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'roof-startup-night-end', 'safety-workload')][string]$WeatherHoldScenario,
@@ -176,14 +176,16 @@ try {
     if ($QualityScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'quality-verified.txt'))) { throw 'Quality policy was not verified.' }
     if ($RestartAdmission -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'restart-verified.txt'))) { throw 'Restart admission was not verified.' }
     if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
-    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
+    $pointingFailure = $RecoveryScenario -in @('pointing-always', 'pointing-recenter-fails')
+    if ($RecoveryScenario -like 'pointing-*' -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'pointing-recovery-verified.txt'))) { throw 'Bounded pointing recovery was not verified.' }
+    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$pointingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
     if ($MoonAvoidance -and !$idleNightEnd -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
     if ($ObservingPreferences -and !$evidence.observing_preferences_verified) { throw 'Weighted observing preferences did not change native target order.' }
     if ($ProjectOrder -and !$evidence.project_order_verified) { throw 'Ranked project execution was not verified.' }
     if ($PriorityRefresh -and !$evidence.priority_refresh_verified) { throw 'Safe-boundary priority handoff was not verified.' }
     if ($ConstraintChange -and !$evidence.constraint_change_verified) { throw 'Constraint-change cancellation and no-restart were not verified.' }
-    if ($NativeImagingFailure -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
-    if ($NativeImaging -and !$NativeImagingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
+    if (($NativeImagingFailure -or $pointingFailure) -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
+    if ($NativeImaging -and !$NativeImagingFailure -and !$pointingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
     if ($ForceNativeFlip -and (!$evidence.native_flip -or $evidence.native_flip.attempts -ne 1)) { throw 'Forced native flip was not exercised.' }
     if ($Phd2Executable -and (!$evidence.phd2_simulator -or $evidence.native_flip.recenter_solutions -ne 1 -or
         $null -eq $evidence.rotator_final_position -or [Math]::Abs($evidence.rotator_final_position - 30) -gt 1)) {

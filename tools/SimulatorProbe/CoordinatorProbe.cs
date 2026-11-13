@@ -48,6 +48,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool NativeImaging { get; private init; }
     internal string? NativeImagingFailure { get; private init; }
     internal string? RecoveryScenario { get; private init; }
+    internal ulong ExpectedCaptureEvents => RecoveryScenario == "pointing-dispatch" ? 8UL : 6UL;
     internal string? QualityScenario { get; private init; }
     internal string? NightEndScenario { get; private init; }
     internal string? WeatherHoldScenario { get; private init; }
@@ -118,7 +119,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         var operations = after.GetProperty("recent_operations").EnumerateArray().ToArray();
         if (operations.Length == 0 || operations.Any(op => op.GetProperty("event").GetProperty("event").GetProperty("kind").GetString() != "completed"))
             throw new InvalidDataException("Completed preparation history was not replayed.");
-        if (after.GetProperty("checkins").EnumerateArray().Single().GetProperty("highest_contiguous").GetUInt64() != 6)
+        if (after.GetProperty("checkins").EnumerateArray().Single().GetProperty("highest_contiguous").GetUInt64() != ExpectedCaptureEvents)
             throw new InvalidDataException("Operation receipts changed the capture cursor.");
     }
     internal bool EquipmentReviewVerified { get; private set; }
@@ -707,8 +708,9 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
         var data = document.RootElement.GetProperty("data");
-        if (data.GetProperty("state").GetString() != "released" || data.GetProperty("workload").GetProperty("terminal_sequence").GetUInt64() != 6)
-            throw new InvalidDataException("Automatic session did not seal its six capture events.");
+        var expectedEvents = ExpectedCaptureEvents;
+        if (data.GetProperty("state").GetString() != "released" || data.GetProperty("workload").GetProperty("terminal_sequence").GetUInt64() != expectedEvents)
+            throw new InvalidDataException($"Automatic session did not seal its {expectedEvents} capture events.");
         AutomaticWorkloadVerified = true;
     }
 
@@ -874,18 +876,25 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         }
         using (var client = new CoordinatorCheckpointClient(root, endpoint, pairing.Binding, ledger, Credential))
         {
+            if (RecoveryScenario == "pointing-dispatch")
+            {
+                var page = await Events(0, 100, token);
+                if (page.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Failed { Reason: "pointing_refused_before_capture" }) != 1
+                    || page.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Saved) != 3)
+                    throw new InvalidDataException("Pointing recovery did not preserve one failed attempt and three saved images in the same ledger.");
+            }
             var result = await client.DeliverAsync(Events, programRevision: previewRevision, maxPages: 1, token: token);
-            if (result.DeliveredEvents != 6) throw new InvalidDataException("Expected three reservation/save receipt pairs.");
+            if (result.DeliveredEvents != (int)ExpectedCaptureEvents) throw new InvalidDataException("Expected all reservation/save/refusal receipts.");
         }
         using (var restarted = new CoordinatorCheckpointClient(root, endpoint, pairing.Binding, ledger, Credential))
         {
             var result = await restarted.DeliverAsync(Events, programRevision: previewRevision, token: token);
-            if (!result.CaughtUp || result.AcknowledgedThrough != 6 || result.DeliveredEvents != 0)
+            if (!result.CaughtUp || result.AcknowledgedThrough != ExpectedCaptureEvents || result.DeliveredEvents != 0)
                 throw new InvalidDataException("Checkpoint restart did not retain its cursor.");
         }
         using var replay = new CoordinatorCheckpointClient(Path.Combine(root, "replay"), endpoint, pairing.Binding, ledger, Credential);
         var duplicate = await replay.DeliverAsync(Events, programRevision: previewRevision, token: token);
-        if (!duplicate.CaughtUp || duplicate.AcknowledgedThrough != 6 || duplicate.DeliveredEvents != 6)
+        if (!duplicate.CaughtUp || duplicate.AcknowledgedThrough != ExpectedCaptureEvents || duplicate.DeliveredEvents != (int)ExpectedCaptureEvents)
             throw new InvalidDataException("Coordinator did not acknowledge idempotent replay.");
         return duplicate;
     }
