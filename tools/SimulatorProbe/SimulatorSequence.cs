@@ -186,6 +186,8 @@ public sealed class SimulatorSequence : SequenceItem
             await SessionUiProbe.RenderStatusExamplesAsync(run, profiles);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
+            if (coordinator is { NativeImaging: true, NightEndScenario: "workload-wait" })
+                lifetime.CancelAfter(TimeSpan.FromMinutes(9));
             if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);
             if (coordinator?.Calibration == true)
             {

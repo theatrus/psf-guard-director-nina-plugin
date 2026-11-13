@@ -139,7 +139,7 @@ try {
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
     if (!$started) { throw 'NINA launcher did not return an isolated process.' }
     $nina = Get-Process -Id $started.ProcessId
-    $deadline = [DateTime]::UtcNow.AddMinutes($(if ($phd2) { 10 } else { 6 }))
+    $deadline = [DateTime]::UtcNow.AddMinutes($(if ($phd2 -or ($NativeImaging -and $NightEndScenario)) { 10 } else { 6 }))
     $stopped = $false
     $resumed = $false
     $result = $null
