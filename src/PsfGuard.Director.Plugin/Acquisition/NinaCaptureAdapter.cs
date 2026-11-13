@@ -32,6 +32,27 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
     internal bool CollectQuality { get; set; }
     internal PsfGuard.Director.Runtime.QualityFrame? LastQuality { get; private set; }
 
+    private bool interruptedBeforeCapture;
+
+    // Only an in-process refusal before CaptureImage can authorize an immediate
+    // pointing retry. Saved/uncertain images still use normal recovery.
+    internal async Task<CaptureEvidence?> ReadPointingRefusalAsync(string captureId, CancellationToken token)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!await captureGate.WaitAsync(0, token).ConfigureAwait(false)) return null;
+        try
+        {
+            var evidence = interrupted?.Evidence;
+            if (!interruptedBeforeCapture || evidence?.Intent.CaptureId.ToString("D") != captureId
+                || evidence.Phase != CapturePhase.Failed) return null;
+            RequireQuiescent(profiles, camera, evidence.Intent.ProfileId, evidence.Intent.CameraDeviceId);
+            CheckLocalContext(evidence.Intent);
+            token.ThrowIfCancellationRequested();
+            return evidence;
+        }
+        finally { captureGate.Release(); }
+    }
+
     // Only the live owner can prove that its invocation ended before enqueue.
     // A journal recovered after a crash deliberately has no such authority.
     internal async Task<CaptureEvidence?> ReconcileInterruptedAsync(string captureId, CancellationToken token)
@@ -299,6 +320,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
                         TotalMs = clock.GetElapsedTime(started).TotalMilliseconds
                     });
                     interrupted = journal;
+                    interruptedBeforeCapture = !captureEntered && error is NinaPointingOffsetException;
                     interruptedStarted = started;
                     interruptedDownloaded = downloaded;
                 }
@@ -329,6 +351,7 @@ internal sealed class NinaCaptureAdapter(IProfileService profiles, ICameraMediat
         DetachSaveObservers();
         pendingSave = null;
         interrupted = null;
+        interruptedBeforeCapture = false;
     }
 
     // Called once N.I.N.A. has saved one of Director's own science lights.

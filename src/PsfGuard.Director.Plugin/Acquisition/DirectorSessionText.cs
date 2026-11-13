@@ -6,6 +6,11 @@ namespace PsfGuard.Director.Plugin.Acquisition;
 // show what Director is waiting for or doing next.
 internal static class DirectorSessionText
 {
+    internal static string FinishedAllocation(bool sessionEnded, bool plansChanged) => sessionEnded
+        ? "Session time ended; finishing up"
+        : plansChanged ? "Reporting saved images before requesting updated work"
+        : "Finished the current targets; waiting for image grades or updated plans";
+
     internal static string Failure(Exception error)
     {
         if (error is AggregateException aggregate) error = aggregate.Flatten().InnerExceptions[0];
@@ -40,8 +45,8 @@ internal static class DirectorSessionText
             "Director will check again when the observing window opens."),
         "moon_avoidance" => ("Waiting for the Moon to clear",
             "The assigned exposures need the Moon lower or farther from the target."),
-        "observing_night_window_too_short" => ("Waiting for the session to end",
-            "The remaining session time is too short for an assigned exposure."),
+        "observing_night_window_too_short" => ("No assigned exposure fits before the session ends",
+            "Director will keep checking for new plans until the session ends."),
         "pending_assessment" => ("Waiting for image grades",
             "PSF Guard is still grading the saved images."),
         "no_authorized_feasible_work" => ("No assigned exposure fits the observing limits",

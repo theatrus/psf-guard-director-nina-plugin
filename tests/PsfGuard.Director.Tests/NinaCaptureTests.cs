@@ -25,6 +25,30 @@ namespace PsfGuard.Director.Tests;
 public sealed partial class NinaCaptureTests
 {
     [Fact]
+    public async Task PointingRefusalBeforeCameraDispatchCanSettleOnlyItsOwnAttempt()
+    {
+        using var f = new Fixture();
+        await Assert.ThrowsAsync<NinaPointingOffsetException>(() => f.Run(_ => throw new NinaPointingOffsetException(15)));
+        Assert.Equal(CapturePhase.Failed, (await f.PointingRefusal())!.Phase);
+        Assert.Null(await f.PointingRefusal(Guid.NewGuid().ToString("D")));
+        Assert.False(f.Enqueued.Task.IsCompleted);
+        f.Imaging.Verify(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<string>()), Times.Never);
+        f.Acknowledge();
+        Assert.Null(await f.PointingRefusal());
+    }
+
+    [Fact]
+    public async Task CameraFailureCannotBeMisclassifiedAsAPreCapturePointingRefusal()
+    {
+        using var f = new Fixture();
+        f.Imaging.Setup(x => x.CaptureImage(It.IsAny<CaptureSequence>(), It.IsAny<CancellationToken>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<string>()))
+            .ThrowsAsync(new NinaPointingOffsetException(15));
+        await Assert.ThrowsAsync<NinaPointingOffsetException>(() => f.Run());
+        Assert.Equal(CapturePhase.CaptureUncertain, f.Read().Phase);
+        Assert.Null(await f.PointingRefusal());
+    }
+
+    [Fact]
     public async Task LegacyWriterFailureSettlesWithoutNativeFailureEvent()
     {
         using var f = new Fixture(failureEvent: false);
@@ -911,6 +935,7 @@ public sealed partial class NinaCaptureTests
                 NativeDispatchTest.After(null), Progress, CancellationToken.None);
         }
         public Task<CaptureEvidence?> Reconcile(string? id = null) => adapter.ReconcileInterruptedAsync(id ?? Intent.CaptureId.ToString("D"), CancellationToken.None);
+        public Task<CaptureEvidence?> PointingRefusal(string? id = null) => adapter.ReadPointingRefusalAsync(id ?? Intent.CaptureId.ToString("D"), CancellationToken.None);
         public void Acknowledge() => adapter.AcknowledgeInterrupted(Intent.CaptureId.ToString("D"));
         public void DisposeAdapter() => adapter.Dispose();
         public CaptureEvidence Read() => CaptureJournal.Read(Path.Combine(Root, Intent.ProfileId.ToString("N"), $"{Intent.CaptureId:N}.json"));
