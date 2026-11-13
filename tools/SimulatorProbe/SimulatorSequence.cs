@@ -450,7 +450,10 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 if (coordinator.NightEndScenario is not null)
                 {
-                    sessionContainer.Options.MaximumHours = coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end" ? 0.025 : 0.04;
+                    // Native preparation reserves centering/focus overhead before
+                    // dispatch; leave time for the three images, then an idle end.
+                    sessionContainer.Options.MaximumHours = coordinator.NativeImaging ? 0.1
+                        : coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end" ? 0.025 : 0.04;
                     sessionContainer.Options.RetryFocusAndGuiding = coordinator.NightEndScenario == "workload-wait";
                 }
                 if (coordinator.RecoveryScenario is not null)
@@ -923,7 +926,7 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 async Task VerifyNightEnd()
                 {
-                    await executing.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
+                    await executing.WaitAsync(TimeSpan.FromMinutes(coordinator.NativeImaging ? 7 : 3), lifetime.Token);
                     if (!followingStepRan || sessionContainer.Status != SequenceEntityStatus.FINISHED
                         || coordinator.WeatherHoldScenario != "roof-startup-night-end" && !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled
                         || camera.GetInfo().IsExposing || AcquisitionLease.IsActive || publicLifetime.IsCancellationRequested
