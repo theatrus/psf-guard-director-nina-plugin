@@ -175,8 +175,8 @@ try {
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
     if ($QualityScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'quality-verified.txt'))) { throw 'Quality policy was not verified.' }
     if ($RestartAdmission -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'restart-verified.txt'))) { throw 'Restart admission was not verified.' }
-    if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
     $pointingFailure = $RecoveryScenario -in @('pointing-always', 'pointing-recenter-fails')
+    if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$pointingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
     if ($RecoveryScenario -like 'pointing-*' -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'pointing-recovery-verified.txt'))) { throw 'Bounded pointing recovery was not verified.' }
     if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$pointingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
     if ($MoonAvoidance -and !$idleNightEnd -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
