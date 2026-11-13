@@ -878,7 +878,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         {
             if (RecoveryScenario == "pointing-dispatch")
             {
-                var page = await Events(0, 100, token);
+                var page = await Events(0, 64, token);
                 if (page.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Failed { Reason: "pointing_refused_before_capture" }) != 1
                     || page.Events.Count(e => e.Attempt.Evidence is LedgerEvidence.Saved) != 3)
                     throw new InvalidDataException("Pointing recovery did not preserve one failed attempt and three saved images in the same ledger.");
