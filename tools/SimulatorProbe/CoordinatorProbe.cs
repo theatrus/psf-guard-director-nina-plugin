@@ -14,7 +14,7 @@ namespace PsfGuard.Director.SimulatorProbe;
 internal sealed class CoordinatorProbe : IAsyncDisposable
 {
     private sealed record Fixture(string Endpoint, Guid CoordinatorInstanceId, Guid CatalogId, Guid RigId,
-        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null, bool ForceNativeFlip = false, string? RecoveryScenario = null, string? NightEndScenario = null, string? WeatherHoldScenario = null, string? QualityScenario = null);
+        bool ActivateSimulatorPlan = false, bool ExerciseOutage = false, bool PublicAcquisition = false, bool PublicUnsafe = false, bool AutomaticWorkloads = false, bool LocalTargetScheduling = false, bool MoonAvoidance = false, bool EnclosureClosure = false, bool AbortWithoutPark = false, bool DeferredCheckIn = false, bool OfflineWorkloadRelease = false, bool ObservingPreferences = false, bool ProjectOrder = false, bool ProjectMeridian = false, bool PriorityRefresh = false, string? ConstraintChange = null, bool NativeImaging = false, string? NativeImagingFailure = null, bool ForceNativeFlip = false, string? RecoveryScenario = null, string? NightEndScenario = null, string? WeatherHoldScenario = null, string? QualityScenario = null);
     private readonly HttpClient operatorClient;
     internal bool RestartAdmission { get; private set; }
     private RecoveryIdentity? restartIdentity;
@@ -42,6 +42,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
     internal bool MoonAvoidance { get; private init; }
     internal bool ObservingPreferences { get; private init; }
     internal bool ProjectOrder { get; private init; }
+    internal bool ProjectMeridian { get; private init; }
     internal bool PriorityRefresh { get; private init; }
     internal string? ConstraintChange { get; private init; }
     internal bool NativeImaging { get; private init; }
@@ -209,7 +210,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
                 throw new InvalidDataException("Coordinator fixture pairing changed identity.");
             DirectorCredentialStore.Store(endpoint, pairing);
             if (DirectorCredentialStore.Read(endpoint, profile)?.Binding != pairing.Binding) throw new InvalidDataException("Pairing vault readback failed.");
-            var probe = new CoordinatorProbe(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
+            var probe = new CoordinatorProbe(endpoint, http, pairing) { ActivateSimulatorPlan = fixture.ActivateSimulatorPlan, ExerciseOutage = fixture.ExerciseOutage, PublicAcquisition = fixture.PublicAcquisition, PublicUnsafe = fixture.PublicUnsafe, AutomaticWorkloads = fixture.AutomaticWorkloads, LocalTargetScheduling = fixture.LocalTargetScheduling, MoonAvoidance = fixture.MoonAvoidance, EnclosureClosure = fixture.EnclosureClosure, AbortWithoutPark = fixture.AbortWithoutPark, DeferredCheckIn = fixture.DeferredCheckIn, OfflineWorkloadRelease = fixture.OfflineWorkloadRelease, ObservingPreferences = fixture.ObservingPreferences, ProjectOrder = fixture.ProjectOrder, ProjectMeridian = fixture.ProjectMeridian, PriorityRefresh = fixture.PriorityRefresh, ConstraintChange = fixture.ConstraintChange, NativeImaging = fixture.NativeImaging, NativeImagingFailure = fixture.NativeImagingFailure, ForceNativeFlip = fixture.ForceNativeFlip, RecoveryScenario = fixture.RecoveryScenario, NightEndScenario = fixture.NightEndScenario, WeatherHoldScenario = fixture.WeatherHoldScenario, QualityScenario = fixture.QualityScenario };
             using var fixtureJson = JsonDocument.Parse(await File.ReadAllTextAsync(path, token));
             probe.RestartAdmission = fixtureJson.RootElement.TryGetProperty("RestartAdmission", out var restart) && restart.GetBoolean();
             probe.Attended = fixtureJson.RootElement.TryGetProperty("Attended", out var attended) && attended.GetBoolean();
@@ -343,6 +344,8 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         for (var targetIndex = 0; targetIndex < (WaitingPlanRefresh ? 3 : LocalTargetScheduling ? 2 : 1); targetIndex++)
         {
             var frame = targetIndex == 0 ? target : target with { Name = "Higher priority remote target", IcrsRaMas = (target.IcrsRaMas + 1080000) % 1296000000 };
+            if (ProjectMeridian && targetIndex == 1)
+                frame = frame with { IcrsRaMas = (target.IcrsRaMas + 54000000) % 1296000000 };
             if (WaitingPlanRefresh && targetIndex == 1)
                 frame = target with { Name = "Target that rises later", IcrsRaMas = (target.IcrsRaMas + 324000000) % 1296000000 };
             if (WaitingPlanRefresh && targetIndex == 2)
@@ -350,6 +353,17 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             var project = Guid.NewGuid();
             if (!WaitingPlanRefresh || targetIndex != 2) projectIds.Add(project);
             await OperatorAsync(HttpMethod.Post, "projects", new { id = project, name = "Director ASCOM server-plan fixture" }, token);
+            if (ProjectMeridian && targetIndex == 0)
+                await OperatorAsync(HttpMethod.Put, $"preferences/project/{project:D}", new
+                {
+                    scope = "project",
+                    scope_id = project,
+                    revision = 0,
+                    enabled = (bool?)null,
+                    site_id = (Guid?)null,
+                    overrides = new { weights = new { }, importance = (int?)null, minimum_dwell_ms = (ulong?)null, switch_margin = (int?)null },
+                    scheduling = new { meridian_avoidance_before_minutes = 0 }
+                }, token);
             if (ObservingPreferences)
                 await OperatorAsync(HttpMethod.Put, $"preferences/project/{project:D}", new
                 {
@@ -457,6 +471,15 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
             || second.Envelope.Program.Targets.Length != (LocalTargetScheduling ? 2 : 1))
             throw new InvalidDataException($"Server program does not match the bounded simulator fixture: same ETag={first.ETag == second.ETag}, same assignment={first.Envelope.Program.Assignment.Id == second.Envelope.Program.Assignment.Id}, omitted={second.Envelope.Omitted.Length}, goals={second.Envelope.Program.Assignment.Goals.Length}, targets={second.Envelope.Program.Targets.Length}.");
         previewRevision = second.Envelope.Revision;
+        if (ProjectMeridian)
+        {
+            var goals = second.Envelope.Program.Assignment.Goals;
+            if (goals.Count(g => g.MeridianAvoidance is { BeforeMs: 0, AfterMs: null }) != 1
+                || goals.Count(g => g.MeridianAvoidance is null) != 1)
+                throw new InvalidDataException("Server did not preserve project zero and inherited transit policies.");
+            await File.WriteAllBytesAsync(Path.Combine(root, "project-meridian-program.json"),
+                JsonSerializer.SerializeToUtf8Bytes(second.Envelope.Program, Wire), token);
+        }
         if (ObservingPreferences && second.Envelope.Program.ObservingPreferences?.Bindings.Count != 3)
             throw new InvalidDataException("Server omitted the observing preferences from its program.");
         if (ProjectOrder && (second.Envelope.Program.ObservingPreferences is not null
@@ -671,6 +694,7 @@ internal sealed class CoordinatorProbe : IAsyncDisposable
         using var request = new HttpRequestMessage(HttpMethod.Post, $"api/director/v1/rigs/{RigId}/workloads/request");
         request.Headers.Authorization = new("Bearer", pairing.Token);
         request.Headers.Add("X-PSF-Director-Profile", pairing.Binding.ProfileId.ToString("D"));
+        request.Headers.Add("X-PSF-Guard-Plugin-Capabilities", "director_project_meridian_v1");
         request.Content = JsonBody(new
         {
             coordinator_instance_id = pairing.Binding.CoordinatorInstanceId,

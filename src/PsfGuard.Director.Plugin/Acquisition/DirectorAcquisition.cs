@@ -43,6 +43,7 @@ public sealed partial class DirectorAcquisition
     internal string LocalStateRoot { get; init; } = StateRoot;
     internal string? LastRunDirectory { get; private set; }
     internal LedgerIdentity? LastLedger { get; private set; }
+    internal DirectorSessionDefaults SessionDefaults => new(profiles);
 
     [ImportingConstructor]
     public DirectorAcquisition(IProfileService profiles, ICameraMediator camera, ITelescopeMediator telescope,
@@ -132,7 +133,7 @@ public sealed partial class DirectorAcquisition
         var constraints = new NinaConstraintBinding(profile,
             options.Horizon == DirectorHorizonPolicy.NinaProfile ? NinaHorizonMode.RequiredFile : NinaHorizonMode.FixedMinimum,
             horizon, options.MinimumAltitude,
-            new(checked((ulong)(options.MeridianBeforeMinutes * 60000)), checked((ulong)(options.MeridianAfterMinutes * 60000))));
+            options.MeridianExclusion());
         var native = constraintsReader.Refresh(constraints);
         var wheel = profiles.ActiveProfile.FilterWheelSettings.Id;
         var equipment = new NinaEquipmentBinding(profile, rig, native.Revision,
@@ -776,7 +777,8 @@ public sealed partial class DirectorAcquisition
         var filterCounts = new Dictionary<string, uint>(StringComparer.Ordinal);
         var assignment = program.Assignment;
         var planningNightEnd = window.EndOn(allocation.PlanningNowMs);
-        var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token);
+        var orientation = NinaEarthOrientation.Read(NinaEarthOrientation.DatabasePath, assignment.ValidFromMs, assignment.ExpiresAtMs, lifetime.Token,
+            NinaEarthOrientation.SearchMargins(assignment, options.MeridianExclusion()));
         var inputs = new NinaGeometryInputs(1, options.MaximumAltitude, orientation.Orientation,
             assignment.Goals.Select(g => new DirectorGoalLimits(g.Id, options.MinimumAltitude, options.MaximumAltitude, 0)).ToImmutableArray());
         var geometry = new NinaGeometrySnapshot(constraintsReader, equipmentReader);

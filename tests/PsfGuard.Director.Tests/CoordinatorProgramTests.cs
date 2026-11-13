@@ -88,6 +88,7 @@ public sealed class CoordinatorProgramTests
             Assert.Contains($"catalog_id={Binding.CatalogId:D}", request.RequestUri.Query);
             Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
             Assert.Equal("secret-test-token", request.Headers.Authorization.Parameter);
+            Assert.Equal("director_project_meridian_v1", Assert.Single(request.Headers.GetValues("X-PSF-Guard-Plugin-Capabilities")));
             Assert.Empty(request.Headers.IfNoneMatch);
             return Task.FromResult(Response(body));
         });
@@ -132,6 +133,21 @@ public sealed class CoordinatorProgramTests
             Assert.Equal(50, read.Envelope.Program.ObservingPreferences!.Policies["policy"].Policy.Importance);
             Assert.Equal(body["data"]!.ToJsonString(), ProgramContract.Encode(read.Envelope).ToJsonString());
         }
+    }
+
+    [Theory]
+    [InlineData(0L, null)]
+    [InlineData(null, 0L)]
+    [InlineData(3600000L, 0L)]
+    public async Task ProjectTransitSidesKeepExplicitZeroAndInheritance(long? before, long? after)
+    {
+        var envelope = Envelope();
+        var policy = new PlannerMeridianOverride((ulong?)before, (ulong?)after);
+        var program = envelope.Program;
+        program = program with { Assignment = program.Assignment with { Goals = [program.Assignment.Goals[0] with { MeridianAvoidance = policy }] } };
+        using var client = Client((_, _) => Task.FromResult(Response(Body(envelope with { Program = program }))));
+        var result = await client.ReadPreviewAsync(Binding, Configuration);
+        Assert.Equal(policy, result.Envelope.Program.Assignment.Goals[0].MeridianAvoidance);
     }
 
     [Theory]

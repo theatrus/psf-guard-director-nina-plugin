@@ -14,7 +14,9 @@ public sealed record PlannerAssignment(string Id, ulong Revision, string RigId, 
     ulong ValidFromMs, ulong ExpiresAtMs, ImmutableArray<PlannerGoal> Goals);
 public sealed record PlannerGoal(string Id, uint Priority, uint Requested, uint Accepted, uint Pending,
     uint AttemptsRemaining, ulong ExposureMs, ulong OverheadMs,
-    ImmutableArray<PlannerInterval> EligibleWindows, PlannerTransits? Transits = null);
+    ImmutableArray<PlannerInterval> EligibleWindows, PlannerTransits? Transits = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PlannerMeridianOverride? MeridianAvoidance = null);
+public sealed record PlannerMeridianOverride(ulong? BeforeMs, ulong? AfterMs);
 public readonly record struct PlannerInterval(ulong StartMs, ulong EndMs);
 public readonly record struct PlannerMeridianExclusion(ulong BeforeMs, ulong AfterMs);
 public sealed record PlannerTransits(PlannerInterval Searched, ImmutableArray<ulong> TransitsMs);

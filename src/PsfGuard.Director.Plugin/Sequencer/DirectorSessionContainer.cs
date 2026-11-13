@@ -24,7 +24,7 @@ public sealed record DirectorActionEntry(DateTimeOffset Time, string Target, str
 [ExportMetadata("Icon", "TelescopeSVG")]
 [ExportMetadata("Category", "PSF Guard Director")]
 [JsonObject(MemberSerialization.OptIn)]
-public sealed class DirectorSessionContainer : SequentialContainer
+public sealed partial class DirectorSessionContainer : SequentialContainer
 {
     internal const string AcquisitionGate = "Enable acquisition to run this session.";
     private readonly DirectorAcquisition? acquisition;
@@ -94,11 +94,16 @@ public sealed class DirectorSessionContainer : SequentialContainer
             UpdateDisplay(display => display with { Phase = $"Equipment report failed. {detail}", Operation = "" });
         });
         options.PropertyChanged += SettingsChanged;
+        InitializeDefaultsCommands();
         AttachSlots();
     }
 
     [ImportingConstructor]
-    public DirectorSessionContainer(DirectorAcquisition acquisition) : this() => this.acquisition = acquisition;
+    public DirectorSessionContainer(DirectorAcquisition acquisition) : this(acquisition.SessionDefaults)
+    {
+        this.acquisition = acquisition;
+        isToolboxTemplate = true;
+    }
 
     internal static DirectorSessionContainer ForCalibration(DirectorSessionOptions options)
         => new() { Options = options.Clone() };
@@ -392,8 +397,12 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     public override object Clone()
     {
-        var clone = acquisition is null ? new DirectorSessionContainer() : new DirectorSessionContainer(acquisition);
-        clone.Options = Options.Clone();
+        var clone = acquisition is not null ? new DirectorSessionContainer(acquisition)
+            : defaults is not null ? new DirectorSessionContainer(defaults) : new DirectorSessionContainer();
+        // NINA clones its MEF toolbox prototype when adding a fresh item. Read
+        // current profile defaults there; duplicating a real session preserves it.
+        if (!isToolboxTemplate) clone.Options = Options.Clone();
+        clone.isToolboxTemplate = false;
         clone.Slots = Slots.Clone();
         clone.CopyMetaData(this);
         clone.Attempts = Attempts;
@@ -427,6 +436,7 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     public override void AfterParentChanged()
     {
+        if (Parent is not null) isToolboxTemplate = false;
         base.AfterParentChanged();
         if (sequenceRootNotifications is not null)
             PropertyChangedEventManager.RemoveHandler(sequenceRootNotifications, SequenceStatusChanged, nameof(Status));
@@ -437,11 +447,17 @@ public sealed class DirectorSessionContainer : SequentialContainer
         foreach (var block in InstructionBlocks) block.AfterParentChanged();
     }
 
-    private void SequenceStatusChanged(object? sender, PropertyChangedEventArgs args) => RaisePropertyChanged(nameof(SessionStatus));
+    private void SequenceStatusChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        RaisePropertyChanged(nameof(SessionStatus));
+        saveDefaultsCommand.Refresh();
+        loadDefaultsCommand.Refresh();
+    }
 
     [OnDeserialized]
     private void RestoreParents(StreamingContext _)
     {
+        isToolboxTemplate = false;
         ErrorBehavior = InstructionErrorBehavior.AbortOnError;
         AttachSlots();
     }
@@ -453,7 +469,10 @@ public sealed class DirectorSessionContainer : SequentialContainer
 
     private void SettingsChanged(object? sender, PropertyChangedEventArgs args)
     {
+        isToolboxTemplate = false;
         Validate();
         reportEquipmentCommand.Refresh();
+        saveDefaultsCommand.Refresh();
+        loadDefaultsCommand.Refresh();
     }
 }

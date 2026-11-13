@@ -134,6 +134,34 @@ The trigger editors use N.I.N.A.'s full Advanced Sequencer controls. Runtime
 start/stop controls are under **Advanced and diagnostics** on the plugin page;
 normal sequences start the planner automatically.
 
+On the plugin page, **Defaults for new Director Sessions** lets you configure
+autofocus, guiding, visibility, weather, calibration, and other session settings
+once for the active N.I.N.A. profile. Click **Save profile defaults**, then add a
+new Director Session. It copies those defaults with **Enable acquisition** off.
+Existing and saved sequences keep their own settings; duplicating a session
+copies that session's overrides. In **Settings → Reuse settings for this profile**,
+**Save as profile defaults** saves the current settings, and **Load profile defaults**
+explicitly replaces them. Loading keeps Enable acquisition, instructions, and
+triggers. Instructions and triggers are never part of the defaults. Loading and
+saving from a session are unavailable while its sequence is running.
+
+**Settings → Meridian avoidance** exposes the asymmetric transit exclusion used
+in our Target Scheduler fork. Set **Minutes before transit** and **Minutes after
+transit** independently (0–360 each). For example, **60 before / 0 after** excludes
+the hour leading up to target transit, then makes the target eligible again at
+transit. Zero disables that side; 0/0 adds no exclusion. The shared Rust planner
+selects another eligible target or waits, and an exposure must fit before the
+excluded time. Horizon and other visibility limits still apply. This follows
+target transit, not physical pier side or a delayed meridian flip. N.I.N.A.'s flip
+settings continue to apply. TS does not need to be installed.
+
+With the matching PSF Guard server update, each plan's **Scheduling limits for
+every rig** also has **Avoid before transit** and **Avoid after transit**. A blank
+side inherits the rig, site or global default, falling back to this Director
+session. Zero explicitly disables that side. These plan settings apply to fresh
+work; an already assigned program keeps its original settings. They do not alter
+Target Scheduler databases or N.I.N.A. meridian flip settings.
+
 Under **Other plugins** on the plugin settings page, **Send Target Scheduler
 compatible events** lets existing message-broker consumers follow Director.
 This per-profile option is off by default and does not require Target Scheduler.
