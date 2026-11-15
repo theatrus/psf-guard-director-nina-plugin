@@ -186,6 +186,8 @@ public sealed class SimulatorSequence : SequenceItem
             await SessionUiProbe.RenderStatusExamplesAsync(run, profiles);
             Step("Starting verified planning sidecar");
             coordinator = await CoordinatorProbe.PairAsync(root, profileId, lifetime.Token);
+            if (coordinator is { NativeImaging: true, NightEndScenario: "workload-wait" })
+                lifetime.CancelAfter(TimeSpan.FromMinutes(9));
             if (coordinator?.QualityScenario is not null) (acquisitionImaging, qualityProbe) = QualityImagingProbe.Wrap(imaging);
             if (coordinator?.Calibration == true)
             {
@@ -450,7 +452,10 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 if (coordinator.NightEndScenario is not null)
                 {
-                    sessionContainer.Options.MaximumHours = coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end" ? 0.025 : 0.04;
+                    // Native preparation reserves centering/focus overhead before
+                    // dispatch; leave time for the three images, then an idle end.
+                    sessionContainer.Options.MaximumHours = coordinator.NativeImaging ? 0.1
+                        : coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end" ? 0.025 : 0.04;
                     sessionContainer.Options.RetryFocusAndGuiding = coordinator.NightEndScenario == "workload-wait";
                 }
                 if (coordinator.RecoveryScenario is not null)
@@ -477,6 +482,8 @@ public sealed class SimulatorSequence : SequenceItem
                 sessionContainer.AttachNewParent(Parent);
                 await using var delayedTrigger = coordinator.RecoveryScenario == "focus-once"
                     ? await DelayedTriggerProbe.InstallAsync(Parent) : null;
+                await using var pointingProbe = coordinator.RecoveryScenario?.StartsWith("pointing-", StringComparison.Ordinal) == true
+                    ? await PointingRecoveryProbe.InstallAsync(Parent, sessionContainer, telescope, coordinator.RecoveryScenario) : null;
                 foreach (var slot in Enum.GetValues<NinaInstructionSlot>())
                     sessionContainer.Slots[slot].Add(new SessionHookMarker(slot.ToString(), sessionHookEvents));
                 if (nativeProbe?.Flip is { } flipProbe) sessionContainer.AfterEachExposure.Add(flipProbe.SaveMarker());
@@ -621,6 +628,24 @@ public sealed class SimulatorSequence : SequenceItem
                         Step($"Native {fault} failure prevented capture, parked and released local ownership without restarting");
                         using var reportFailure = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                         await coordinator.ReportStatusAsync(programTarget, "native_preparation_failed", reportFailure.Token);
+                        return;
+                    }
+                    if (coordinator.RecoveryScenario is "pointing-always" or "pointing-recenter-fails")
+                    {
+                        Exception? failure = null;
+                        try { await executing.WaitAsync(TimeSpan.FromSeconds(150)); }
+                        catch (Exception error) when (error is not TimeoutException) { failure = error; }
+                        pointingProbe!.Verify(sessionContainer, nativeProbe!.Operations.Count(x => x == "Center"), failed: true);
+                        var expectedFailure = coordinator.RecoveryScenario == "pointing-always" ? "pointing error" : "Recentering the target failed";
+                        if (failure is null || !failure.Message.Contains(expectedFailure, StringComparison.Ordinal)
+                            || !telescope.GetInfo().AtPark || camera.GetInfo().IsExposing || AcquisitionLease.IsActive
+                            || Directory.EnumerateFiles(Path.Combine(root, "images"), "*.fits", SearchOption.AllDirectories).Any())
+                            throw new InvalidDataException("Repeated pointing refusal did not stop before capture and park.", failure);
+                        nativeFailureVerified = true;
+                        await File.WriteAllTextAsync(Path.Combine(run, "pointing-recovery-verified.txt"), $"{coordinator.RecoveryScenario}: one recenter; no captures; no session restart.", lifetime.Token);
+                        Step("Failed pointing recovery stopped after one recenter without restarting the session");
+                        using var reportFailure = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await coordinator.ReportStatusAsync(programTarget, "pointing_retry_exhausted", reportFailure.Token);
                         return;
                     }
                     while (!executing.IsCompleted && (coordinator.ConstraintChange is not null
@@ -903,7 +928,7 @@ public sealed class SimulatorSequence : SequenceItem
                 }
                 async Task VerifyNightEnd()
                 {
-                    await executing.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
+                    await executing.WaitAsync(TimeSpan.FromMinutes(coordinator.NativeImaging ? 7 : 3), lifetime.Token);
                     if (!followingStepRan || sessionContainer.Status != SequenceEntityStatus.FINISHED
                         || coordinator.WeatherHoldScenario != "roof-startup-night-end" && !telescope.GetInfo().AtPark || telescope.GetInfo().TrackingEnabled
                         || camera.GetInfo().IsExposing || AcquisitionLease.IsActive || publicLifetime.IsCancellationRequested
@@ -911,6 +936,9 @@ public sealed class SimulatorSequence : SequenceItem
                         || sessionContainer.Display.Phase != (coordinator.WeatherHoldScenario is "roof-night-end" or "roof-startup-night-end"
                             ? "Night ended; tracking off; enclosure blocks parking" : "Night ended; parked"))
                         throw new InvalidDataException("Night end did not park, release ownership and execute the following native sequence step.");
+                    if (coordinator.NightEndScenario == "target-wait"
+                        && !sessionContainer.ActionHistory.Any(a => a.Outcome == "Session time ended; finishing up"))
+                        throw new InvalidDataException("An ended allocation did not report that the session time ended.");
                     await File.WriteAllTextAsync(Path.Combine(run, "night-end-verified.txt"), coordinator.NightEndScenario, lifetime.Token);
                     Step("Normal night end stopped equipment and ran the following native sequence step without cancellation");
                     // The later duplicate-launch test needs fresh admission
@@ -998,15 +1026,21 @@ public sealed class SimulatorSequence : SequenceItem
                 var journalRoots = coordinator.PriorityRefresh || coordinator.WaitingPlanRefresh
                     ? Directory.EnumerateDirectories(Path.Combine(service.LocalStateRoot, profiles.ActiveProfile.Id.ToString("N"))).Select(d => Path.Combine(d, "journal")).Where(Directory.Exists)
                     : [Path.Combine(service.LastRunDirectory!, "journal")];
+                var pointingRefusals = 0;
                 foreach (var file in journalRoots.SelectMany(d => Directory.GetFiles(d, "*.json", SearchOption.AllDirectories)))
                 {
                     var capture = CaptureJournal.Read(file);
+                    if (coordinator.RecoveryScenario == "pointing-dispatch" && capture.Phase == CapturePhase.Failed
+                        && capture.ErrorType == nameof(NinaPointingOffsetException) && capture.SavedPath is null)
+                    { pointingRefusals++; continue; }
                     if (capture.Phase != CapturePhase.Saved || !File.Exists(capture.SavedPath)) throw new InvalidDataException("Public capture lacks a saved file.");
                     var restored = await imageFactory.CreateFromFile(capture.SavedPath, 16, false, RawConverterEnum.FREEIMAGE, lifetime.Token);
                     if (!restored.MetaData.GenericHeaders.OfType<StringMetaDataHeader>().Any(h => h.Key == NinaCaptureAdapter.CaptureIdHeader
                         && h.Value.Trim() == capture.Intent.CaptureId.ToString("D"))) throw new InvalidDataException("Public FITS capture identity missing.");
                     captures.Add(capture);
                 }
+                if (pointingRefusals != (coordinator.RecoveryScenario == "pointing-dispatch" ? 1 : 0))
+                    throw new InvalidDataException("Pointing refusal was not preserved exactly once alongside the saved images.");
                 if (coordinator.ImageUploads is not null)
                     await uploadProbe.VerifyAsync(coordinator, captures, run, lifetime.Token);
                 if (coordinator.PriorityRefresh)
@@ -1045,8 +1079,8 @@ public sealed class SimulatorSequence : SequenceItem
                 var statusBeforeReplay = await coordinator.ReadRigStatusAsync(lifetime.Token);
                 var savedCheckIn = new DirectorCheckInService(profiles) { LocalStateRoot = service.LocalStateRoot };
                 var delivered = await savedCheckIn.RunAsync(null, lifetime.Token);
-                if (delivered.Runs != 1 || !delivered.CaughtUp || delivered.AcknowledgedThrough != 6)
-                    throw new InvalidDataException("Saved-run check-in did not deliver the original six ledger events.");
+                if (delivered.Runs != 1 || !delivered.CaughtUp || delivered.AcknowledgedThrough != coordinator.ExpectedCaptureEvents)
+                    throw new InvalidDataException("Saved-run check-in did not deliver all original ledger events.");
                 if (coordinator.OfflineWorkloadRelease)
                 {
                     if (delivered.ReleasedWorkloads != 1) throw new InvalidDataException("Completed offline workload was not released during check-in.");
@@ -1056,7 +1090,7 @@ public sealed class SimulatorSequence : SequenceItem
                 const int savedHistoryCount = 120;
                 await SavedHistoryUpgradeProbe.SeedAsync(service.LastRunDirectory!, savedHistoryCount, lifetime.Token);
                 var repeat = await savedCheckIn.RunAsync(null, lifetime.Token);
-                if (repeat.Runs != 0 || repeat.SkippedRuns != savedHistoryCount || repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != 6)
+                if (repeat.Runs != 0 || repeat.SkippedRuns != savedHistoryCount || repeat.DeliveredEvents != 0 || repeat.AcknowledgedThrough != coordinator.ExpectedCaptureEvents)
                     throw new InvalidDataException("Saved-run check-in reopened an unchanged reported run or lost its acknowledgement cursor.");
                 var cached = await CoordinatorRunCheckIn.DeliverAsync(service.LocalStateRoot, Path.Combine(run, "no-runtime-needed"),
                     coordinator.Endpoint, coordinator.Binding, coordinator.ClientId,
@@ -1119,7 +1153,13 @@ public sealed class SimulatorSequence : SequenceItem
                         "A 35-second inherited trigger completed; the same session then saved three images with fresh dispatch checks.", lifetime.Token);
                     Step("A 35-second inherited trigger completed and acquisition continued without restarting the session");
                 }
-                if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != 2 || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
+                if (pointingProbe is not null)
+                {
+                    pointingProbe.Verify(sessionContainer, nativeProbe!.Operations.Count(x => x == "Center"), failed: false);
+                    await File.WriteAllTextAsync(Path.Combine(run, "pointing-recovery-verified.txt"), "One pointing refusal; one recenter; three saved images; no session restart.", lifetime.Token);
+                    Step("Pointing offset recovered within the same session and saved all three images");
+                }
+                if (nativeProbe is not null && (nativeProbe.Operations.Count(x => x == "Center") != (pointingProbe is null ? 2 : 3) || nativeProbe.Operations.Count(x => x == "Autofocus") < 2
                     || !sessionContainer.ActionHistory.Any(x => x.Action == "Dither" && x.Outcome == "Succeeded")
                     || sessionContainer.GetTriggersSnapshot().Any()))
                     throw new InvalidDataException("Native target centering/autofocus did not run for both targets.");
@@ -1411,7 +1451,7 @@ public sealed class SimulatorSequence : SequenceItem
             }
             var result = new
             {
-                passed = errors.Count == 0 && (coordinator?.QualityScenario is not null ? File.Exists(Path.Combine(run, "quality-verified.txt")) : coordinator?.NativeImagingFailure is not null ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : coordinator?.WeatherHoldScenario == "roof-startup-night-end" ? File.Exists(Path.Combine(run, "weather-hold-verified.txt")) && File.Exists(Path.Combine(run, "night-end-verified.txt")) : captures.Count == 3),
+                passed = errors.Count == 0 && (coordinator?.QualityScenario is not null ? File.Exists(Path.Combine(run, "quality-verified.txt")) : coordinator?.NativeImagingFailure is not null || coordinator?.RecoveryScenario is "pointing-always" or "pointing-recenter-fails" ? nativeFailureVerified : coordinator?.ConstraintChange is not null ? constraintChangeVerified : coordinator?.EnclosureClosure == true ? enclosureCancellationVerified : coordinator?.PublicUnsafe == true ? unsafeCancellationVerified : coordinator?.WeatherHoldScenario == "roof-startup-night-end" ? File.Exists(Path.Combine(run, "weather-hold-verified.txt")) && File.Exists(Path.Combine(run, "night-end-verified.txt")) : captures.Count == 3),
                 enclosureCancellationVerified,
                 nativeImagingVerified = nativeProbe is not null && errors.Count == 0 && captures.Count == 3,
                 nativeFailureVerified,

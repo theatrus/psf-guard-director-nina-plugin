@@ -28,7 +28,7 @@ param(
     [switch]$PriorityRefresh,
     [switch]$NativeImaging,
     [switch]$RestartAdmission,
-    [ValidateSet('focus-once', 'focus-always')][string]$RecoveryScenario,
+    [ValidateSet('focus-once', 'focus-always', 'pointing-preparation', 'pointing-dispatch', 'pointing-always', 'pointing-recenter-fails')][string]$RecoveryScenario,
     [ValidateSet('stop', 'recover')][string]$QualityScenario,
     [ValidateSet('workload-wait', 'target-wait')][string]$NightEndScenario,
     [ValidateSet('safety-wait', 'roof-wait', 'roof-night-end', 'safety-exposure', 'roof-exposure', 'safety-startup', 'roof-startup', 'roof-startup-night-end', 'safety-workload')][string]$WeatherHoldScenario,
@@ -48,7 +48,8 @@ if ($SchedulerEvents -and (!$PublicAcquisition -or !$AutomaticWorkloads)) { thro
 if ($Attended -and (!$PublicAcquisition -or !$AutomaticWorkloads -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $EnclosureClosure -or $WeatherHoldScenario -or $RestartAdmission -or $NightEndScenario -or $QualityScenario -or $PriorityRefresh -or $OfflineWorkloadRelease)) { throw 'Attended requires the normal public automatic workload fixture.' }
 if ($RestartAdmission -and (!$NativeImaging -or !$AutomaticWorkloads -or !$PublicAcquisition -or !$LocalTargetScheduling -or $RecoveryScenario -or $QualityScenario -or $NativeImagingFailure -or $WeatherHoldScenario)) { throw 'RestartAdmission requires safe native automatic workloads.' }
 if ($QualityScenario -and (!$PublicAcquisition -or $AutomaticWorkloads -or $LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $EnclosureClosure -or $WeatherHoldScenario -or $RecoveryScenario)) { throw 'QualityScenario requires only PublicAcquisition.' }
-if ($NightEndScenario -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $NativeImaging -or $PublicUnsafe -or $RecoveryScenario -or $ConstraintChange -or $EnclosureClosure -or $PriorityRefresh -or $DeferredCheckIn -or $OfflineWorkloadRelease)) { throw 'NightEndScenario requires safe public local scheduling without other fault scenarios.' }
+if ($NightEndScenario -and (!$PublicAcquisition -or !$LocalTargetScheduling -or $PublicUnsafe -or $RecoveryScenario -or $ConstraintChange -or $EnclosureClosure -or $PriorityRefresh -or $DeferredCheckIn -or $OfflineWorkloadRelease)) { throw 'NightEndScenario requires safe public local scheduling without other fault scenarios.' }
+if ($NativeImaging -and $NightEndScenario -and $NightEndScenario -ne 'workload-wait') { throw 'Native night-end validation requires the automatic workload wait fixture.' }
 if ($NightEndScenario -eq 'workload-wait' -and (!$AutomaticWorkloads -or $MoonAvoidance)) { throw 'Workload night end requires automatic workloads without Moon avoidance.' }
 if ($NightEndScenario -eq 'target-wait' -and (!$MoonAvoidance -or $AutomaticWorkloads)) { throw 'Target-wait night end requires Moon avoidance without automatic workloads.' }
 if ($WeatherHoldScenario -eq 'safety-workload' -and $NightEndScenario -ne 'workload-wait') { throw 'Idle workload weather test requires workload-wait.' }
@@ -138,7 +139,7 @@ try {
     $started = $started | Where-Object { $_.PSObject.Properties.Name -contains 'ProcessId' } | Select-Object -Last 1
     if (!$started) { throw 'NINA launcher did not return an isolated process.' }
     $nina = Get-Process -Id $started.ProcessId
-    $deadline = [DateTime]::UtcNow.AddMinutes($(if ($phd2) { 10 } else { 6 }))
+    $deadline = [DateTime]::UtcNow.AddMinutes($(if ($phd2 -or ($NativeImaging -and $NightEndScenario)) { 10 } else { 6 }))
     $stopped = $false
     $resumed = $false
     $result = $null
@@ -175,15 +176,17 @@ try {
     if ($WeatherHoldScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'weather-hold-verified.txt'))) { throw 'Weather hold was not verified.' }
     if ($QualityScenario -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'quality-verified.txt'))) { throw 'Quality policy was not verified.' }
     if ($RestartAdmission -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'restart-verified.txt'))) { throw 'Restart admission was not verified.' }
-    if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
-    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
+    $pointingFailure = $RecoveryScenario -in @('pointing-always', 'pointing-recenter-fails')
+    if ($AutomaticWorkloads -and !$NativeImagingFailure -and !$pointingFailure -and !$evidence.automatic_workload_verified) { throw 'Automatic session did not verify terminal release and bounded pending-assessment wait.' }
+    if ($RecoveryScenario -like 'pointing-*' -and !(Test-Path -LiteralPath (Join-Path $result.DirectoryName 'pointing-recovery-verified.txt'))) { throw 'Bounded pointing recovery was not verified.' }
+    if ($LocalTargetScheduling -and !$NativeImagingFailure -and !$pointingFailure -and !$idleNightEnd -and !$evidence.local_targets_verified) { throw 'Local multi-target priority and native hooks were not verified.' }
     if ($MoonAvoidance -and !$idleNightEnd -and !$evidence.moon_avoidance_verified) { throw 'Moon-blocked high-priority work and parked wait were not verified.' }
     if ($ObservingPreferences -and !$evidence.observing_preferences_verified) { throw 'Weighted observing preferences did not change native target order.' }
     if ($ProjectOrder -and !$evidence.project_order_verified) { throw 'Ranked project execution was not verified.' }
     if ($PriorityRefresh -and !$evidence.priority_refresh_verified) { throw 'Safe-boundary priority handoff was not verified.' }
     if ($ConstraintChange -and !$evidence.constraint_change_verified) { throw 'Constraint-change cancellation and no-restart were not verified.' }
-    if ($NativeImagingFailure -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
-    if ($NativeImaging -and !$NativeImagingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
+    if (($NativeImagingFailure -or $pointingFailure) -and !$evidence.native_failure_verified) { throw 'Native failure did not prevent acquisition.' }
+    if ($NativeImaging -and !$NativeImagingFailure -and !$pointingFailure -and !$evidence.native_imaging_verified) { throw 'Native imaging flow was not verified.' }
     if ($ForceNativeFlip -and (!$evidence.native_flip -or $evidence.native_flip.attempts -ne 1)) { throw 'Forced native flip was not exercised.' }
     if ($Phd2Executable -and (!$evidence.phd2_simulator -or $evidence.native_flip.recenter_solutions -ne 1 -or
         $null -eq $evidence.rotator_final_position -or [Math]::Abs($evidence.rotator_final_position - 30) -gt 1)) {

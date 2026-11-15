@@ -17,6 +17,8 @@ using Xunit;
 
 namespace PsfGuard.Director.Tests;
 
+// The defaults commands inspect the process-wide acquisition lease.
+[Collection("Director equipment reporting")]
 public sealed class DirectorSessionDefaultsTests
 {
     [Fact]

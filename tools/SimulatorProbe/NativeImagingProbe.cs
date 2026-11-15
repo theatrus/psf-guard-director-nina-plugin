@@ -72,10 +72,11 @@ internal sealed class NativeImagingProbe
                 Operations.Add("Center");
                 if (!telescope.GetInfo().TrackingEnabled || telescope.GetInfo().TrackingRate.TrackingMode != TrackingMode.Sidereal)
                     throw new InvalidOperationException("Native centering began without sidereal tracking.");
-                if (failure == "center") FailureInjected = true;
+                var failed = failure == "center" || failure == "pointing-recenter-fails" && Operations.Count(o => o == "Center") >= 2;
+                if (failed) FailureInjected = true;
                 return new PlateSolveResult
                 {
-                    Success = failure != "center",
+                    Success = !failed,
                     Coordinates = telescope.GetCurrentPosition(),
                     PositionAngle = rotator is null ? 0 : ((IRotator)rotator.GetDevice()).Position
                 };
